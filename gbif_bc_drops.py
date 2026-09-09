@@ -155,9 +155,10 @@ def write_boundary_parquet(con: duckdb.DuckDBPyConnection, geometry, path: str):
     wkt = geometry.wkt
     print(f"Boundary WKT length: {len(wkt):,} characters")
     con.execute(
-        "COPY (SELECT ST_GeomFromText($wkt) AS geom) TO $path (FORMAT PARQUET)",
-        {"wkt": wkt, "path": path},
+        "COPY (SELECT ST_GeomFromText(?) AS geom) TO '" + path + "' (FORMAT PARQUET)",
+        [wkt],
     )
+
 
 
 # 3. Attribute the drops, one filter at a time, in a single scan

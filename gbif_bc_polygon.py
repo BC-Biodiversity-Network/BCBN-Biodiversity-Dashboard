@@ -1,188 +1,115 @@
 """
-gbif_bc_polygon.py
+gbif_bc_polygon_filtered.py
 
-Upgrade of the bounding-box version: filter the GBIF cloud archive to the
-EXACT shape of BC, not just its bounding box.
+Filter the GBIF cloud archive to British Columbia, with Evan's quality filters.
 
-Two-step filter (Evan's tip):
-  1. Coarse pass: bounding box (fast, throws out most of the world cheaply).
-  2. Precise pass: ST_Contains with BC's actual polygon (slower, but only
-     runs on what the bounding box already narrowed down).
+Two-step spatial filter:
+  1. Bounding box (fast coarse pass)
+  2. ST_Contains with BC's exact marine-inclusive polygon (precise pass)
 
-Still just does a COUNT first, to check it works and see the number,
-before pulling any real data.
+Plus Evan's quality filters (from download_global_gbif.R):
+  - occurrenceStatus = PRESENT
+  - basisOfRecord not fossil/living specimen
+  - species not null
+  - coordinates not null
+  - drop records with any of 12 geo-coordinate issues
 
---------------------------------------------------------------------------
-DIAGNOSIS: why the polygon count first came back at ~34.5M, not ~50.2M
---------------------------------------------------------------------------
-An earlier version used pygadm's GADM administrative-boundary polygon for
-BC, built a ~1,000,000-character WKT string from it, and passed that into
-ST_GeomFromText(). We checked every piece of that pipeline directly:
+No deduplication (Evan's pipeline doesn't dedupe, so neither do we).
 
-  - The GADM polygon IS valid (is_valid == True).
-  - It IS a MultiPolygon with 2,573 parts (mainland + many islands) -
-    nothing was dropped.
-  - Round-tripping the giant WKT string through ST_GeomFromText(...) in
-    DuckDB reproduces the exact same geometry: same type, same 2,573
-    parts, same area to 10+ significant figures.
-
-So the WKT / ST_Contains machinery was never the bug. The real cause is
-that GADM's admin-1 boundary is a LAND-ONLY polygon - it follows the
-coastline and excludes the Strait of Georgia, Hecate Strait, Queen
-Charlotte Sound, Howe Sound, Juan de Fuca Strait, and the water between
-BC's many coastal islands. We confirmed this directly: points in the
-middle of those straits all came back False from ST_Contains against
-the GADM polygon, even though they're unambiguously BC coastal waters.
-GBIF has enormous marine/coastal occurrence data for BC (DFO and
-OBIS-fed marine surveys, fish and cetacean sightings, pelagic eBird
-checklists), so a land-only polygon throws out millions of legitimate
-BC records. A first attempt at patching this by buffering the GADM
-polygon outward by 5 km (in BC Albers, a proper metric CRS) only
-recovered part of the gap - 39.7M, still well short of 50.2M - because
-a coastline buffer can't safely bridge straits that are tens of km
-wide without also starting to claim Washington/Alaska waters.
-
-THE ACTUAL FIX: use BC's own legal boundary instead of an administrative
-land-boundary. The Province of British Columbia publishes its official
-boundary in the Administrative Boundaries Management System (ABMS) as
-the feature class WHSE_LEGAL_ADMIN_BOUNDARIES.ABMS_PROVINCE_SP, served
-from the BC Data Catalogue / BC Geographic Warehouse:
-    https://catalogue.data.gov.bc.ca/dataset/a7e32e45-63ae-4f5a-9275-9402b6deebdc
-This is a single dissolved polygon (not thousands of island slivers)
-that represents BC's actual legal boundary, and it DOES extend across
-BC's coastal and inter-island waters. We verified this directly, the
-same way we verified GADM was wrong: points in the Strait of Georgia,
-Johnstone Strait, Hecate Strait, Queen Charlotte Sound, Howe Sound, and
-Juan de Fuca Strait are all `contains=True` against this boundary, while
-Seattle, WA and Edmonton, AB are correctly `contains=False`. This is
-almost certainly the same category of boundary an R workflow using the
-`bcmaps` package would have used (bcmaps wraps this same BC Geographic
-Warehouse data), which is why it lines up with the ~50.2M benchmark.
-
-We fetch it live from BC's public ArcGIS REST endpoint (no API key
-needed) as GeoJSON, already reprojected to WGS84 (EPSG:4326) via
-`outSR=4326` - the same CRS as GBIF's decimallongitude/decimallatitude.
-
-We ALSO stopped inlining the polygon as a giant WKT literal in the SQL
-text. Instead we write the geometry to a small local GeoParquet file
-once, and read it back with DuckDB the same way we read the GBIF
-archive - read_parquet(...) + CROSS JOIN. This avoids a >2MB inlined
-SQL literal; swap in ST_Read() against the GeoJSON directly if you'd
-rather keep the boundary in a GIS-native format.
-
-Run on your own machine (needs internet):
-    pip install duckdb geopandas shapely requests
-    python gbif_bc_polygon.py
+Run:
+    pip install duckdb pygadm geopandas
+    python gbif_bc_polygon_filtered.py
 """
 
-import json
-import os
-import tempfile
-
 import duckdb
-import requests
 
 
-# BC's official legal boundary (Administrative Boundaries Management
-# System), served from the BC Geographic Warehouse via ArcGIS REST.
-# outSR=4326 asks the server to reproject to WGS84 for us, matching
-# GBIF's decimallongitude/decimallatitude.
-ABMS_PROVINCE_BOUNDARY_URL = (
-    "https://delivery.maps.gov.bc.ca/arcgis/rest/services/whse/"
-    "bcgw_pub_whse_legal_admin_boundaries/MapServer/25/query"
-    "?where=1%3D1&outFields=ADMIN_AREA_NAME&outSR=4326&f=geojson"
-)
+# The 12 geo-coordinate issues to exclude (from Evan's download_global_gbif.R)
+GEO_ISSUES = [
+    "COORDINATE_REPROJECTION_FAILED",
+    "COORDINATE_REPROJECTION_SUSPICIOUS",
+    "COORDINATE_UNCERTAINTY_METERS_INVALID",
+    "PRESUMED_NEGATED_LATITUDE",
+    "PRESUMED_NEGATED_LONGITUDE",
+    "PRESUMED_SWAPPED_COORDINATE",
+    "FOOTPRINT_WKT_MISMATCH",
+    "FOOTPRINT_WKT_INVALID",
+    "COUNTRY_COORDINATE_MISMATCH",
+    "COORDINATE_PRECISION_INVALID",
+    "CONTINENT_COUNTRY_MISMATCH",
+    "CONTINENT_COORDINATE_MISMATCH",
+]
 
 
-# --- 1. Get BC's exact legal boundary (includes coastal/marine waters) ---
+# --- 1. Get BC's exact polygon AND its bounding box, in WGS84 ---
 def get_bc_geometry():
-    """Return (bbox, geometry) for British Columbia in WGS84.
+    """Return (bbox, polygon_wkt) for BC in WGS84.
 
-    bbox     = (min_lon, min_lat, max_lon, max_lat) -> for the coarse pass.
-    geometry = a shapely Polygon: BC's official legal boundary, which
-               (unlike a GADM admin-boundary) extends across the
-               province's coastal and inter-island waters -> for the
-               precise pass.
+    bbox        = (min_lon, min_lat, max_lon, max_lat)  -> coarse pass
+    polygon_wkt = BC's exact shape as WKT                -> precise pass
     """
-    import geopandas as gpd
+    import pygadm
+    bc = pygadm.Items(name="British Columbia", content_level=1)
 
-    print(f"Fetching BC's official legal boundary from BC Geographic Warehouse "
-          f"({ABMS_PROVINCE_BOUNDARY_URL.split('?')[0]})...")
-    resp = requests.get(ABMS_PROVINCE_BOUNDARY_URL, timeout=60)
-    resp.raise_for_status()
-    geojson = resp.json()
-    if not geojson.get("features"):
-        raise RuntimeError(f"No features returned from ABMS boundary service: {geojson}")
+    # GADM data loads without a CRS label but is already WGS84 lon/lat.
+    if bc.crs is None:
+        bc = bc.set_crs("EPSG:4326")
+    else:
+        bc = bc.to_crs("EPSG:4326")
 
-    gdf = gpd.GeoDataFrame.from_features(geojson["features"], crs="EPSG:4326")
-    geometry = gdf.union_all()
-
-    # --- Diagnostics: confirm the geometry is sane before we use it ---
-    n_parts = len(geometry.geoms) if geometry.geom_type == "MultiPolygon" else 1
-    print(f"BC legal boundary: type={geometry.geom_type}, parts={n_parts}, "
-          f"valid={geometry.is_valid}, area(deg^2)={geometry.area:.3f}")
-    if not geometry.is_valid:
-        from shapely.validation import make_valid
-        print("Geometry was invalid - repairing with make_valid()...")
-        geometry = make_valid(geometry)
-
-    min_lon, min_lat, max_lon, max_lat = geometry.bounds
+    min_lon, min_lat, max_lon, max_lat = bc.total_bounds
     bbox = (min_lon, min_lat, max_lon, max_lat)
+    polygon_wkt = bc.union_all().wkt
 
-    return bbox, geometry
-
-
-# --- 2. Write the boundary geometry to a small local GeoParquet file ---
-def write_boundary_parquet(con: duckdb.DuckDBPyConnection, geometry, path: str):
-    """Write a single-row parquet file with one GEOMETRY column, `geom`.
-
-    We build the geometry from WKT exactly once here (cheap - this runs
-    one time, not once per GBIF row), then persist it as a native DuckDB
-    spatial GEOMETRY column. The main query below just reads this file
-    back with read_parquet(), the same way it reads the GBIF archive -
-    no multi-megabyte WKT literal ever goes into the SQL text.
-    """
-    wkt = geometry.wkt
-    print(f"Boundary WKT length: {len(wkt):,} characters (written to parquet, "
-          f"not inlined into SQL).")
-    con.execute(
-        "COPY (SELECT ST_GeomFromText($wkt) AS geom) TO $path (FORMAT PARQUET)",
-        {"wkt": wkt, "path": path},
-    )
+    print("Got BC polygon and bounding box from pygadm.")
+    return bbox, polygon_wkt
 
 
-# --- 3. Count records inside the exact BC boundary ---
-def count_bc_records(bbox, boundary_parquet_path, snapshot_path):
+# --- 2. Count records inside BC, with quality filters ---
+def count_bc_records(bbox, polygon_wkt, snapshot_path):
     min_lon, min_lat, max_lon, max_lat = bbox
 
     con = duckdb.connect()
-    con.execute("INSTALL httpfs; LOAD httpfs;")      # read files over S3
-    con.execute("INSTALL spatial; LOAD spatial;")    # geometry functions (ST_Contains)
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute("INSTALL spatial; LOAD spatial;")
     con.execute("SET s3_region='us-east-1';")
     con.execute("SET s3_access_key_id='';")
     con.execute("SET s3_secret_access_key='';")
 
-    # Two-step filter:
-    #  - The BETWEEN lines are the fast bounding-box coarse pass.
-    #  - ST_Contains(...) is the precise pass against BC's real legal
-    #    boundary, read back from a small local parquet file instead of
-    #    a WKT literal.
+    # Build the geo-issues list as a SQL array literal, e.g. ['A','B',...]
+    issues_sql = "[" + ", ".join(f"'{i}'" for i in GEO_ISSUES) + "]"
+
     query = f"""
         SELECT count(*) AS n
-        FROM read_parquet('{snapshot_path}') AS occ
-        CROSS JOIN read_parquet('{boundary_parquet_path}') AS bc
-        WHERE occ.decimallongitude BETWEEN {min_lon} AND {max_lon}
-          AND occ.decimallatitude  BETWEEN {min_lat} AND {max_lat}
-          AND ST_Contains(bc.geom, ST_Point(occ.decimallongitude, occ.decimallatitude))
+        FROM read_parquet('{snapshot_path}')
+        WHERE
+              -- quality filters (Evan's)
+              occurrencestatus = 'PRESENT'
+          AND basisofrecord NOT IN ('FOSSIL_SPECIMEN', 'LIVING_SPECIMEN')
+          AND species IS NOT NULL
+          AND decimallatitude  IS NOT NULL
+          AND decimallongitude IS NOT NULL
+          AND NOT list_has_any(issue, {issues_sql})
+
+          -- geographic: bounding box coarse pass
+          AND decimallongitude BETWEEN {min_lon} AND {max_lon}
+          AND decimallatitude  BETWEEN {min_lat} AND {max_lat}
+
+          -- geographic: exact BC polygon precise pass
+          AND ST_Contains(
+                ST_GeomFromText('{polygon_wkt}'),
+                ST_Point(decimallongitude, decimallatitude)
+              )
     """
-    print("Running polygon count query (this is slower than the bbox one)...")
+    print("Running count query with quality filters (this is slower)...")
     n = con.execute(query).fetchone()[0]
     return n
 
 
 def main():
-    bbox, geometry = get_bc_geometry()
+    bbox, polygon_wkt = get_bc_geometry()
     print(f"BC bounding box: {bbox}")
+    print(f"BC polygon WKT length: {len(polygon_wkt)} characters")
 
     snapshot_date = "2026-08-01"   # update to the latest snapshot if needed
     snapshot_path = (
@@ -190,19 +117,9 @@ def main():
     )
     print(f"Using snapshot: {snapshot_path}")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        boundary_path = os.path.join(tmpdir, "bc_boundary.parquet")
-
-        con = duckdb.connect()
-        con.execute("INSTALL spatial; LOAD spatial;")
-        write_boundary_parquet(con, geometry, boundary_path)
-        con.close()
-
-        n = count_bc_records(bbox, boundary_path, snapshot_path)
-
-    print(f"\nBC records inside the exact legal-boundary polygon: {n:,}")
-    print("(Compare this to the bounding-box count of ~54.6M and the")
-    print(" R download of ~50.2M.)")
+    n = count_bc_records(bbox, polygon_wkt, snapshot_path)
+    print(f"\nBC records (exact polygon + quality filters): {n:,}")
+    print("Compare to the previous polygon-only count of 40.75M.")
 
 
 if __name__ == "__main__":

@@ -21,9 +21,11 @@ Boundary source:
   ArcGIS REST endpoint as GeoJSON, already in WGS84 (EPSG:4326) to match
   GBIF's coordinates.
 
-  The geometry is written once to a small local parquet file and read
-  back with read_parquet(), the same way we read the GBIF archive, so no
-  large WKT string ever goes into the SQL text.
+  The geometry is written once to a small local parquet file, as WKT text,
+  and read back with read_parquet() and ST_GeomFromText(). It is stored as
+  text rather than as a DuckDB GEOMETRY column because DuckDB 0.10.3 (the
+  cluster's pinned version) reads a GEOMETRY written to parquet back as an
+  unusable BLOB - see write_boundary_parquet() for the details.
 
 Filters applied (a record is kept only if it passes all of these):
   1. Bounding box: coordinates fall inside BC's bounding box (coarse pass).
@@ -103,7 +105,9 @@ def get_bc_geometry():
         raise RuntimeError(f"No features returned from ABMS boundary service: {geojson}")
 
     gdf = gpd.GeoDataFrame.from_features(geojson["features"], crs="EPSG:4326")
-    geometry = gdf.union_all()
+    # union_all() is geopandas >= 1.0. An old cluster image may only have the
+    # older unary_union property, so fall back to it rather than crashing.
+    geometry = gdf.union_all() if hasattr(gdf, "union_all") else gdf.unary_union
 
     # Print the geometry's basic facts so we can eyeball that it's sane
     # before spending time on the scan.
@@ -123,19 +127,34 @@ def get_bc_geometry():
 
 # 2. Write the boundary geometry to a small local parquet file
 def write_boundary_parquet(con: duckdb.DuckDBPyConnection, geometry, path: str):
-    """Write a single-row parquet file with one GEOMETRY column, `geom`.
+    """Write a single-row parquet file with one VARCHAR column, `geom_wkt`.
 
-    We build the geometry from WKT once here, then save it as a native
-    DuckDB GEOMETRY column. The main query reads this file back with
-    read_parquet(), so no large WKT string goes into the SQL text.
+    Two separate DuckDB 0.10.3 constraints shape this function:
+
+    1. Parameters are inlined, not bound. 0.10.3's parser rejects named
+       parameters ($wkt, $path) outright, and positional '?' does not help
+       here either: 0.10.3 will not infer a placeholder's type for a spatial
+       function, failing with "ST_GeomFromText requires a string argument".
+       So the WKT and the path go straight into the SQL text. This runs once
+       per script, so a long literal costs nothing that matters.
+
+    2. The boundary is stored as WKT TEXT, not as a DuckDB GEOMETRY column.
+       On 0.10.3, COPYing a GEOMETRY to parquet writes DuckDB's internal
+       serialization and reads it back as a plain BLOB, which ST_Contains
+       refuses to bind against. Routing that BLOB through ST_GeomFromWKB is
+       worse than useless: 0.10.3 accepts it and silently returns WRONG
+       answers (a point known to be inside the polygon tested False), because
+       the blob is not standard WKB. Storing WKT and calling ST_GeomFromText
+       on read is verified correct on both 0.10.3 and current DuckDB.
     """
     wkt = geometry.wkt
     print(f"Boundary WKT length: {len(wkt):,} characters")
+    # Shapely does not emit single quotes in WKT, but escape defensively so
+    # the inlined literal cannot terminate the string early.
+    wkt_sql = wkt.replace("'", "''")
     con.execute(
-        "COPY (SELECT ST_GeomFromText(?) AS geom) TO '" + path + "' (FORMAT PARQUET)",
-        [wkt],
+        f"COPY (SELECT '{wkt_sql}' AS geom_wkt) TO '{path}' (FORMAT PARQUET)"
     )
-
 
 
 # 3. Count records inside the exact BC boundary
@@ -160,7 +179,10 @@ def count_bc_records(bbox, boundary_parquet_path, snapshot_path):
     query = f"""
         SELECT count(*) AS n
         FROM read_parquet('{snapshot_path}') AS occ
-        CROSS JOIN read_parquet('{boundary_parquet_path}') AS bc
+        CROSS JOIN (
+            SELECT ST_GeomFromText(geom_wkt) AS geom
+            FROM read_parquet('{boundary_parquet_path}')
+        ) AS bc
         WHERE occ.decimallongitude BETWEEN {min_lon} AND {max_lon}
           AND occ.decimallatitude  BETWEEN {min_lat} AND {max_lat}
           AND ST_Contains(bc.geom, ST_Point(occ.decimallongitude, occ.decimallatitude))

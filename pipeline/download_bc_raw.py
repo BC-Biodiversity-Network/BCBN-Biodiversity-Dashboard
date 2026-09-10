@@ -78,6 +78,8 @@ def download_bc_raw(snapshot_date, out_path):
 
     # Report how many rows landed, as a sanity check.
     n = con.execute(f"SELECT count(*) FROM read_parquet('{out_path}')").fetchone()[0]
+    con.close()
+
     print(f"\nDone. Rows written: {n:,}")
     print(f"File: {out_path}")
 

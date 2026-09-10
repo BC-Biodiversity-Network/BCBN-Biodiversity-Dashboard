@@ -152,6 +152,7 @@ def build_clean(raw_path, boundary_parquet_path, out_path):
     con.execute(query)
 
     n = con.execute(f"SELECT count(*) FROM read_parquet('{out_path}')").fetchone()[0]
+    con.close()
     return n
 
 

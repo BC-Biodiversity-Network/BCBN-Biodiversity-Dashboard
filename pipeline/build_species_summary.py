@@ -51,6 +51,7 @@ def build_summary(clean_path, out_path):
     n_species = con.execute(
         f"SELECT count(*) FROM read_csv('{out_path}')"
     ).fetchone()[0]
+    con.close()
     return n_species
 
 

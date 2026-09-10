@@ -184,6 +184,7 @@ def count_bc_records(bbox, boundary_parquet_path, snapshot_path):
     """
     print("Running polygon count query (this is slower than the bbox one)...")
     n = con.execute(query).fetchone()[0]
+    con.close()
     return n
 
 

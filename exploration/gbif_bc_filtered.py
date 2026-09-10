@@ -127,25 +127,14 @@ def get_bc_geometry():
 
 # 2. Write the boundary geometry to a small local parquet file
 def write_boundary_parquet(con: duckdb.DuckDBPyConnection, geometry, path: str):
-    """Write a single-row parquet file with one VARCHAR column, `geom_wkt`.
+    """Write the boundary to a single-row parquet file as a WKT text
+    column (`geom_wkt`), read back with ST_GeomFromText.
 
-    Two separate DuckDB 0.10.3 constraints shape this function:
-
-    1. Parameters are inlined, not bound. 0.10.3's parser rejects named
-       parameters ($wkt, $path) outright, and positional '?' does not help
-       here either: 0.10.3 will not infer a placeholder's type for a spatial
-       function, failing with "ST_GeomFromText requires a string argument".
-       So the WKT and the path go straight into the SQL text. This runs once
-       per script, so a long literal costs nothing that matters.
-
-    2. The boundary is stored as WKT TEXT, not as a DuckDB GEOMETRY column.
-       On 0.10.3, COPYing a GEOMETRY to parquet writes DuckDB's internal
-       serialization and reads it back as a plain BLOB, which ST_Contains
-       refuses to bind against. Routing that BLOB through ST_GeomFromWKB is
-       worse than useless: 0.10.3 accepts it and silently returns WRONG
-       answers (a point known to be inside the polygon tested False), because
-       the blob is not standard WKB. Storing WKT and calling ST_GeomFromText
-       on read is verified correct on both 0.10.3 and current DuckDB.
+    Stored as WKT text, not a GEOMETRY column, because DuckDB 0.10.3
+    (the cluster's version) reads a GEOMETRY written to parquet back as
+    an unusable BLOB. The WKT and path are inlined into the SQL rather
+    than passed as parameters, since 0.10.3 doesn't accept placeholders
+    for spatial functions. Both are fine here: this runs once per script.
     """
     wkt = geometry.wkt
     print(f"Boundary WKT length: {len(wkt):,} characters")

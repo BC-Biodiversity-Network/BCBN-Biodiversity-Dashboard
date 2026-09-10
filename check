@@ -1,4 +1,0 @@
-import pygadm
-bc = pygadm.Items(name="British Columbia", content_level=1)
-print("CRS as loaded:", bc.crs)           # 看它加载时到底有没有坐标系
-print("Bounds as loaded:", bc.total_bounds)  # 看坐标范围

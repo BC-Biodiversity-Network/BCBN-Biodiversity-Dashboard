@@ -22,8 +22,8 @@ from pathlib import Path
 # The filter itself is finalized and lives in pipeline/lunaris_keywords.py.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pipeline"))
 
-from lunaris_keywords import (KEYWORD_RES, as_text, is_biodiversity,
-                              mask_false_positives)
+from lunaris_keywords import (KEYWORD_RES, STRONG_RE, as_text,
+                              is_biodiversity, mask_false_positives)
 from lunaris_sample_for_review import looks_french
 
 # (title, judgment, reason). Looked up by title rather than by row number:
@@ -143,6 +143,10 @@ def main():
 
     df = pd.read_csv(args.sample, encoding="utf-8-sig")
     by_title = {t: (v, why) for t, v, why in JUDGMENTS}
+    assert len(by_title) == len(JUDGMENTS), (
+        f"{len(JUDGMENTS) - len(by_title)} judgment(s) share a title with "
+        "another and would quietly overwrite each other"
+    )
     unlabelled = sorted(set(df["title"]) - set(by_title))
     if unlabelled:
         raise SystemExit(
@@ -165,6 +169,9 @@ def main():
     # Left unmasked on purpose: the comparison is about which keyword the
     # filter fired on before the misleading phrases were blanked out.
 
+    # A record whose title is missing from the harvest would silently come back
+    # with empty text, and every number below would then be wrong while looking
+    # perfectly reasonable. Stop instead.
     def full_hay(row):
         """Find this record's full text in the harvest, matching on title."""
         cand = harvest[harvest["_t"] == row["title"]]
@@ -173,36 +180,54 @@ def main():
             exact = cand[cand["_a"].str.startswith(pref, na=False)]
             if len(exact):
                 cand = exact
-        return cand.iloc[0]["_hay"] if len(cand) else ""
+        if not len(cand):
+            raise SystemExit(
+                f"'{str(row['title'])[:70]}' is not in {args.harvest}. The "
+                "sample and the harvest are out of step -- point --harvest at "
+                "the harvest the sample was drawn from."
+            )
+        return cand.iloc[0]["_hay"]
 
     full = [full_hay(r) for _, r in df.iterrows()]
     df["keyword_hits"] = [
         ", ".join(kw for kw, rx in KEYWORD_RES.items() if rx.search(h)) for h in full
     ]
+    # The verdict with nothing blanked out, computed here rather than taken
+    # from the CSV. The CSV's own column is whatever the filter said the day
+    # the sample was drawn; redraw the sample and it becomes identical to the
+    # masked verdict, leaving the comparison below saying nothing at all.
+    df["keyword_kept_unmasked"] = [bool(STRONG_RE.search(h)) for h in full]
     # What the filter decides once the misleading phrases are blanked out.
     df["keyword_kept_fixed"] = [is_biodiversity(mask_false_positives(h)) for h in full]
     df["is_french"] = df["abstract"].fillna("").apply(looks_french)
-    df["agrees"] = df["keyword_kept"].map({True: "YES", False: "NO"}) == df["semantic_judgment"]
+    # Derived from the filter as it stands today, which is also the headline
+    # number printed below, so the column and the printout cannot disagree.
+    df["agrees"] = (df["keyword_kept_fixed"].map({True: "YES", False: "NO"})
+                    == df["semantic_judgment"])
 
-    cols = ["sampled_because", "keyword_kept", "keyword_kept_fixed",
-            "semantic_judgment", "agrees",
+    cols = ["sampled_because", "keyword_kept", "keyword_kept_unmasked",
+            "keyword_kept_fixed", "semantic_judgment", "agrees",
             "semantic_reason", "keyword_hits", "is_french",
             "title", "subjects", "abstract"]
     df[cols].to_csv(args.out, index=False, encoding="utf-8-sig")
     print(f"Wrote {args.out} ({len(df)} rows)")
 
-    kw_yes = df["keyword_kept"]
     sem_yes = df["semantic_judgment"] == "YES"
-    print()
-    print(f"agreement                {df['agrees'].sum()}/{len(df)}")
-    print(f"keyword kept, sem NO     {int((kw_yes & ~sem_yes).sum())}  (false positives)")
-    print(f"keyword dropped, sem YES {int((~kw_yes & sem_yes).sum())}  (missed)")
-
+    raw = df["keyword_kept_unmasked"]
     fx = df["keyword_kept_fixed"]
-    print(f"\nafter mask_false_positives():")
-    print(f"agreement                {int((fx == sem_yes).sum())}/{len(df)}")
+
+    # The filter as it stands today: the number that actually matters.
+    print()
+    print(f"agreement                {int(df['agrees'].sum())}/{len(df)}")
     print(f"keyword kept, sem NO     {int((fx & ~sem_yes).sum())}  (false positives)")
     print(f"keyword dropped, sem YES {int((~fx & sem_yes).sum())}  (missed)")
+
+    print("\nbefore the misleading phrases are blanked out:")
+    print(f"agreement                {int((raw == sem_yes).sum())}/{len(df)}")
+    print(f"keyword kept, sem NO     {int((raw & ~sem_yes).sum())}  (false positives)")
+    print(f"keyword dropped, sem YES {int((~raw & sem_yes).sum())}  (missed)")
+    if raw.equals(fx):
+        print("\n(identical: no record in this sample is affected by the masking)")
 
 
 if __name__ == "__main__":

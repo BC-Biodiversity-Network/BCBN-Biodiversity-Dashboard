@@ -65,42 +65,61 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_parquet(args.harvest)
+    if len(df) == 0:
+        raise SystemExit(f"{args.harvest} holds no records.")
     df["_title"] = df["title"].apply(as_text)
     df["_subj"] = df["subjects"].apply(as_text)
     df["_abs"] = df["abstract"].apply(as_text)
     df["_hay"] = [build_haystack(t, s, a)
                   for t, s, a in zip(df["_title"], df["_subj"], df["_abs"])]
+    # The un-masked text. "_hay" has already had the misleading phrases blanked
+    # out, so looking for "power plant" in it always fails -- yet those are
+    # exactly the records this group is meant to surface.
+    df["_plain"] = (df["_title"] + " " + df["_subj"] + " " + df["_abs"]).str.lower()
     df["_kept"] = df["_hay"].apply(is_biodiversity)
     df["_french"] = df["_abs"].apply(looks_french)
-    df["_questionable"] = df["_hay"].apply(lambda h: any(q in h for q in QUESTIONABLE))
+    df["_questionable"] = df["_plain"].apply(lambda h: any(q in h for q in QUESTIONABLE))
 
     n = args.per_group
     seed = args.seed
     picks = []
+    seen = set()          # records already picked
+    seen_titles = set()   # titles already picked
+
+    def take(rows, tag):
+        """Add rows under `tag`, skipping any record or title already taken.
+
+        A record can qualify for two groups -- every French record is also
+        either kept or dropped -- and the harvest holds thousands of titles
+        shared by more than one record. Either would put a duplicate in the
+        sample, and the review step matches judgments to records by title, so
+        the titles have to be unique. A group may come up one or two short as
+        a result, which is the better trade.
+        """
+        for i, r in rows.iterrows():
+            if i in seen or r["_title"] in seen_titles:
+                continue
+            seen.add(i)
+            seen_titles.add(r["_title"])
+            picks.append((r, tag))
 
     # Group 1: kept, with nothing suspicious about the keyword that kept it.
-    g = df[df["_kept"] & ~df["_questionable"]].sample(min(n, sum(df["_kept"] & ~df["_questionable"])), random_state=seed)
-    for _, r in g.iterrows():
-        picks.append((r, "kept_clear"))
+    clear = df["_kept"] & ~df["_questionable"]
+    take(df[clear].sample(min(n, int(clear.sum())), random_state=seed), "kept_clear")
 
     # Group 2: kept, but on a keyword that is often not biological.
     q = df[df["_kept"] & df["_questionable"]]
     if len(q):
-        g = q.sample(min(n, len(q)), random_state=seed)
-        for _, r in g.iterrows():
-            picks.append((r, "kept_questionable"))
+        take(q.sample(min(n, len(q)), random_state=seed), "kept_questionable")
 
     # Group 3: dropped -- mostly correct, but this is where misses hide.
-    g = df[~df["_kept"]].sample(min(n, sum(~df["_kept"])), random_state=seed)
-    for _, r in g.iterrows():
-        picks.append((r, "dropped"))
+    drop = ~df["_kept"]
+    take(df[drop].sample(min(n, int(drop.sum())), random_state=seed), "dropped")
 
     # Group 4: French records, kept or not, to check the French keywords.
     fr = df[df["_french"]]
     if len(fr):
-        g = fr.sample(min(n, len(fr)), random_state=seed)
-        for _, r in g.iterrows():
-            picks.append((r, "french"))
+        take(fr.sample(min(n, len(fr)), random_state=seed), "french")
 
     rows = []
     for r, tag in picks:

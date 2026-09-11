@@ -52,6 +52,8 @@ def main():
 
     df = pd.read_parquet(args.harvest)
     n = len(df)
+    if n == 0:
+        raise SystemExit(f"{args.harvest} holds no records.")
     print(f"Loaded {n:,} records from {args.harvest}\n")
 
     word_counter = Counter()

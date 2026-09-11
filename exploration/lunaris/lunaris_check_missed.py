@@ -33,21 +33,34 @@ from pathlib import Path
 # The filter itself is finalized and lives in pipeline/lunaris_keywords.py.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pipeline"))
 
-from lunaris_keywords import as_text, build_haystack, is_biodiversity
+from lunaris_keywords import (MATCH_KEYWORDS, as_text, build_haystack,
+                              is_biodiversity)
 
 
 # Biology words deliberately left out of the keyword list. If one of them
 # turns up often among the dropped records, the keywords are probably missing
 # that whole category.
+#
+# These are matched as whole words, so every entry must be a word someone would
+# actually write -- a stem like "phylogen" matches nothing at all. And a word
+# that is already a keyword always scores 0, because a record containing it is
+# never dropped. The check below stops either mistake going unnoticed.
 PROBE_WORDS = [
     "genome", "genomic", "dna", "rna", "microbe", "microbial", "microbiome",
     "bacteria", "virus", "viral", "pathogen", "phenology", "pollination",
     "nesting", "breeding", "spawning", "migration", "foraging", "predation",
-    "genetic", "genetics", "phylogen", "sequencing", "abundance",
+    "genetic", "genetics", "phylogenetic", "phylogeny", "phylogenomic",
+    "sequencing",
     "biological", "wild", "forest", "soil", "pollen", "larvae", "larval",
-    "nectar", "wetlands", "marine", "aquatic", "terrestrial", "diversity",
+    "nectar", "marine", "aquatic", "terrestrial", "diversity",
     "population dynamics", "evolution", "reproduction",
 ]
+
+_already_keywords = sorted(set(PROBE_WORDS) & set(MATCH_KEYWORDS))
+assert not _already_keywords, (
+    "these probe words are already keywords, so they can only ever score 0: "
+    f"{_already_keywords}"
+)
 
 
 def main():
@@ -64,6 +77,8 @@ def main():
 
     df = pd.read_parquet(args.harvest)
     n = len(df)
+    if n == 0:
+        raise SystemExit(f"{args.harvest} holds no records.")
 
     # Judge every record, then throw away the keepers and study the rest.
     titles = df["title"].apply(as_text)

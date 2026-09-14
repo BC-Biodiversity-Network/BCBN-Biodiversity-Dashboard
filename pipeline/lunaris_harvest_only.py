@@ -39,15 +39,28 @@ NS = {"datacite": "http://datacite.org/schema/kernel-4"}
 BATCH_SIZE = 5000
 
 
+# Only these are treated as markup. Matching anything between angle brackets is
+# too greedy: it deleted the package name from the real title "Circuit diagrams
+# with < q|pic >". A tag name has to follow "<" immediately, which is what keeps
+# that title safe even though "q" is itself a tag name.
+HTML_TAG = re.compile(
+    r"</?(?:a|b|big|blockquote|br|code|div|em|font|h[1-6]|hr|i|img|italic|li"
+    r"|ol|p|pre|q|small|span|strong|sub|sup|table|tbody|td|th|thead|tr|u|ul)"
+    r"(?:\s[^<>]*)?/?>",
+    re.IGNORECASE,
+)
+
+
 def clean_html(text):
     """Strip the web markup out of a description and tidy the spacing.
 
     Takes a raw string or None, and returns the readable text, or None if
-    there was nothing left once the markup was removed.
+    there was nothing left once the markup was removed. Text that merely looks
+    like a tag, such as a package name in angle brackets, is left alone.
     """
     if not text:
         return None
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip() or None
+    return re.sub(r"\s+", " ", HTML_TAG.sub(" ", text)).strip() or None
 
 
 def pick_abstract(tree):
@@ -97,13 +110,20 @@ def normalize_record(record):
         if url_id is not None:
             rec["doi"] = url_id.text
 
+    # Titles and subjects get the same cleaning as the abstract. Lunaris sends
+    # italics as escaped markup, so without this a title arrives reading
+    # "genotypes of <em>Ipomoea hederacea</em>" and that is what anyone
+    # reviewing the data would see.
     title = tree.find(".//datacite:title", NS)
     if title is not None:
-        rec["title"] = title.text
+        rec["title"] = clean_html(title.text)
     # A record can carry many subjects (keywords, disciplines, both
     # languages), so collect all of them - the keyword filter searches the
-    # whole list, not just the first.
-    rec["subjects"] = [s.text for s in tree.findall(".//datacite:subject", NS) if s.text]
+    # whole list, not just the first. Subjects that are nothing but markup
+    # clean down to nothing and are dropped.
+    rec["subjects"] = [c for c in (clean_html(s.text)
+                                   for s in tree.findall(".//datacite:subject", NS))
+                       if c]
     rec["abstract"] = pick_abstract(tree)
     pub = tree.find(".//datacite:publisher", NS)
     if pub is not None:

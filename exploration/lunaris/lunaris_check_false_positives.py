@@ -5,21 +5,24 @@ Evidence check for changes to the keyword filter, run against the full local
 harvest. Nothing should be added to FALSE_POSITIVE_PATTERNS or removed from
 NO_PLURAL in lunaris_keywords.py without running this first.
 
-Two modes:
+Two modes, named after what they measure:
 
-  --mask PHRASE    Which records would blanking out this phrase turn from
-                   kept into dropped? Those are the only records it can hurt,
-                   so read the titles it prints: if any of them are real
-                   biodiversity datasets, the phrase is too broad.
+  --add-mask PHRASE  Measures which currently KEPT records this phrase would
+                     DROP. Those are the only records it can hurt, so read the
+                     titles it prints: if any of them are real biodiversity
+                     datasets, the phrase is too broad.
 
-  --plural WORD    Which dropped records would this plural form start
-                   keeping, and for how many is it the only reason? Read the
-                   titles to judge whether the plural pulls in more
-                   non-biodiversity than the singular does.
+  --add-word WORD    Measures which currently DROPPED records this word would
+                     newly KEEP. Read the titles to judge whether the word
+                     brings in biodiversity or another sense of itself. Works
+                     for any candidate word, not only plural forms.
+
+The older names --mask and --plural still work, so notes and saved commands
+written before the rename keep running.
 
 Run:
-    python lunaris_check_false_positives.py --mask "power\\s+plants?"
-    python lunaris_check_false_positives.py --plural trees
+    python lunaris_check_false_positives.py --add-mask "power\\s+plants?"
+    python lunaris_check_false_positives.py --add-word trees
 """
 
 import argparse
@@ -63,40 +66,52 @@ def main():
     """Check one candidate phrase or plural against the whole harvest."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--harvest", default="harvest/lunaris_full_harvest.parquet")
-    ap.add_argument("--mask", help="phrase to test blanking out")
-    ap.add_argument("--plural", help="candidate plural form to evaluate")
+    # The first name is the real one; the second is kept so older commands and
+    # notes still run.
+    ap.add_argument("--add-mask", "--mask", dest="add_mask",
+                    help="phrase to blank out: measures which kept records it drops")
+    ap.add_argument("--add-word", "--plural", dest="add_word",
+                    help="word to add: measures which dropped records it newly keeps")
     ap.add_argument("--samples", type=int, default=20)
     ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
-    if not (args.mask or args.plural):
-        ap.error("give --mask or --plural")
+    if not (args.add_mask or args.add_word):
+        ap.error("give --add-mask or --add-word")
 
     titles, hay = load(args.harvest)
     kept = hay.apply(is_biodiversity)
     print(f"{len(hay):,} records, {int(kept.sum()):,} currently kept\n")
 
-    if args.mask:
-        rx = re.compile(args.mask, re.IGNORECASE)
+    if args.add_mask:
+        rx = re.compile(args.add_mask, re.IGNORECASE)
         after = hay.apply(lambda h: rx.sub(lambda m: " " * len(m.group(0)), h))
         flip = kept & ~after.apply(is_biodiversity)
-        print(f"--mask /{args.mask}/")
+        print(f"--add-mask /{args.add_mask}/")
         print(f"  appears in            {int(hay.str.contains(rx).sum()):,}")
         print(f"  kept -> dropped       {int(flip.sum()):,}")
         # Safe only if every single one of these is non-biodiversity.
         print("  (every one of these must be non-biodiversity to be safe)")
         show(titles, flip, args.samples, args.seed)
 
-    if args.plural:
-        p = args.plural.lower()
+    if args.add_word:
+        p = args.add_word.lower()
         rx = compile_boundary([p])
         newly = ~kept & hay.str.contains(rx)
+        # These records are dropped, which means no keyword matched them at all,
+        # so none of them can contain another keyword either. This used to be
+        # printed as a second figure that was always equal to the first.
         others = [q for q in PLURAL_KEYWORDS if q != p]
-        sole = newly & ~hay.str.contains(compile_boundary(others)) if others else newly
-        print(f"--plural {p}")
+        if others:
+            still_has_one = int((newly & hay.str.contains(compile_boundary(others))).sum())
+            assert still_has_one == 0, (
+                f"{still_has_one} dropped record(s) contain a keyword. A dropped "
+                "record should contain none, so either the filter or this check "
+                "is no longer doing what it says."
+            )
+        print(f"--add-word {p}")
         print(f"  newly kept            {int(newly.sum()):,}")
-        print(f"  sole reason           {int(sole.sum()):,}")
         print("  (read these: are they biodiversity, or another sense of the word?)")
-        show(titles, sole, args.samples, args.seed)
+        show(titles, newly, args.samples, args.seed)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,12 @@ rather than assumed, which keeps every added form reviewable.
 import re
 
 
+# Some plurals are listed here as well as their singular -- "fishery" and
+# "fisheries", "forest" and "forests", "espece" and "especes", "poisson" and
+# "poissons". That is on purpose, not something left untidy. Spelling both out
+# means you can read what the filter matches without working out in your head
+# what pluralize() would build, and removing them would reshuffle the order of
+# MATCH_KEYWORDS, which is the order the matched_keywords column is written in.
 STRONG_KEYWORDS = [
     "biodiversity", "species", "taxonomy", "taxonomic", "taxa", "taxon",
     "wildlife", "fauna", "flora", "vegetation", "habitat", "organism",
@@ -39,6 +45,7 @@ STRONG_KEYWORDS = [
     "ecology", "ecological", "ecosystem", "conservation", "endangered",
     "threatened species", "invasive", "abundance", "occurrence", "biomass",
     "wetland", "estuary", "estuarine", "riparian", "intertidal", "reef",
+    "forest", "forests", "marine", "freshwater", "fresh water",
     "ecotoxicology",
     "biodiversité", "espèce", "espèces", "faune", "flore",
     "poisson", "poissons", "oiseau", "oiseaux", "écologie",
@@ -92,6 +99,14 @@ FALSE_POSITIVE_PATTERNS = [
      "a plant is a factory. 37 records flipped, all from that one series, "
      "0 biodiversity."),
 
+    # "random forest" is a machine-learning method, not vegetation. Only bites
+    # now that "forest" is a keyword. 20 records, verified: all statistics,
+    # genomics or remote sensing, and no species-distribution paper among them
+    # (those say "species" too, so the filter keeps them anyway).
+    (r"random\s+forests?",
+     "machine-learning method, not vegetation. 20 records flipped, "
+     "0 biodiversity."),
+
     # An "invasive method" or "invasive test" is clinical or geotechnical
     # measurement, not an invasive species. 5 records, verified.
     (r"invasive\s+(?:method|technique|procedure|test|surgery|measurement)s?",
@@ -131,6 +146,12 @@ NO_PLURAL = {
     "shrimp": "same form",
     "fungus": "irregular plural 'fungi' is already a keyword",
     "oiseau": "irregular plural 'oiseaux' is already a keyword",
+    "forests": "already plural; it is listed as a keyword in its own right "
+               "because whole-word matching means 'forest' does not catch it",
+    "marine": "adjective, and 'marines' is military: it would add 46 records "
+              "of sonar, geology and mine water quality, none biodiversity",
+    "freshwater": "'freshwaters' is real but was not part of the five forms "
+                  "decided, and adds only 1 record",
 
     # the plural brings in more non-biodiversity than biodiversity
     "occurrence": "'occurrences' of events/failures dominates; 266 records, "
@@ -151,11 +172,14 @@ NO_PLURAL = {
 }
 
 
-def pluralize(word):
-    """The plural of one keyword, or None if it should not get one."""
-    if " " in word:                        # "threatened species"
-        return None
-    if word in NO_PLURAL:
+def plural_spelling(word):
+    """How this word would be spelled in the plural, want it or not.
+
+    Used both to build plural forms and to recognise a word that is already
+    one. Returns None for anything with a space in it, like "threatened
+    species", which has no useful plural.
+    """
+    if " " in word:
         return None
     if re.search(r"(?:s|x|z|ch|sh)$", word):
         return word + "es"                 # moss -> mosses, fish -> fishes
@@ -164,10 +188,32 @@ def pluralize(word):
     return word + "s"
 
 
+def pluralize(word):
+    """The plural of one keyword, or None if it should not get one."""
+    if word in NO_PLURAL:
+        return None
+    return plural_spelling(word)
+
+
+def already_plural(words):
+    """The keywords that are themselves the plural of another keyword.
+
+    "forests" is in the list and so is "forest", so "forests" is one of these.
+    Pluralising such a word a second time invents a form nobody would write --
+    "forests" becomes "forestses" -- and it would sit in the keyword list
+    matching nothing, unnoticed, until someone read the list closely.
+    """
+    wordset = set(words)
+    return {p for p in (plural_spelling(w) for w in words) if p in wordset}
+
+
 def plural_forms(words):
     """The plural forms added to the keyword list, in keyword order."""
+    skip = already_plural(words)
     out, seen = [], set(words)
     for w in words:
+        if w in skip:
+            continue
         p = pluralize(w)
         if p and p not in seen:
             out.append(p)
@@ -175,6 +221,7 @@ def plural_forms(words):
     return out
 
 
+ALREADY_PLURAL = already_plural(STRONG_KEYWORDS)
 PLURAL_KEYWORDS = plural_forms(STRONG_KEYWORDS)
 MATCH_KEYWORDS = STRONG_KEYWORDS + PLURAL_KEYWORDS
 

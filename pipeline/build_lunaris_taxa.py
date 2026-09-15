@@ -91,6 +91,121 @@ GEOGRAPHIC_NOUNS = {
     "county", "coast", "basin", "watershed", "sound", "strait",
 }
 
+# Words that are never a common name on their own. A candidate is thrown away
+# when EVERY word in it is on this list, so "black" goes and "black bear" stays.
+# Built from what actually turned up in the mined map rather than guessed: the
+# number after each group is how many no-taxon records that word was matching.
+COMMON_NAME_STOPWORDS = {
+    # sentence residue the boundary rule left behind
+    "is", "which", "non", "species", "diversity", "local", "link", "days",
+    "host", "culture", "pairs", "sorted", "interspecific", "bacterial",
+    "native", "introduced", "wild", "fin", "related", "certaines", "espèces",
+    "pour", "biological", "sciences",
+    # directions and colours, which only ever qualify a name. Only the ones
+    # that actually fire are listed: a rule that never fires cannot be told
+    # apart from a broken one later.
+    "northern", "eastern", "north", "white", "black", "blue", "brown", "grey",
+    "vert",
+    # places
+    "usa", "europe", "canada", "america", "american",
+}
+
+# Botanists are credited in the same brackets that hold common names:
+# "Picea glauca (Moench) Voss", and "L." is Linnaeus. Without this the map
+# gained "moench" and "l." as if they were names for a tree.
+AUTHORITY_ABBREVIATIONS = {
+    "l.", "dc.", "michx.", "nutt.", "hook.", "pursh", "raf.", "vahl",
+    "willd.", "moench",
+}
+
+# Words that follow a one-word name when it is really part of a place: "Trout
+# River", "Elk Island". Built from what actually follows a match in this corpus,
+# not from a general list of geographic words -- bay, valley, park, sound,
+# harbour, pass and ridge were checked and never occur, so they are not here.
+# Counts across the records a one-word name would rescue: river 29, lake 20,
+# creek 20, island 20, fraser 19 (as in Simon Fraser).
+GEOGRAPHIC_FOLLOWERS = {"river", "lake", "creek", "island", "fraser"}
+
+# Mined entries that are not names for a living thing at all. They are dropped
+# from the seventh tier AND from the map, because the map doubles as the synonym
+# list for dashboard search and a place name is no use there either. Scored
+# against 1,102 hand-judged records: together these removed 18 wrong matches and
+# cost nothing -- no record that was judged right lost its tag.
+NOT_ORGANISM_NAMES = {
+    # a place. It was mined from "... de l'estuaire du Saint-Laurent (Genus
+    # species)" and then matched every St. Lawrence record: 14 wrong matches,
+    # the single largest cause.
+    "l'estuaire du saint-laurent",
+    # says where a creature lives, not what it is. All 4 records it rescued were
+    # wrong matches. "graminoids" was checked the same way and kept: it rescued
+    # 8 records with no wrong matches, so a coarse plant-group tag is earning
+    # its place even though it is not a species name.
+    "epibenthic",
+    # the other half of the same accident. Both were mined from one sentence in
+    # one ecotoxicology paper -- "an epibenthic (Hyalella azteca) and
+    # endobenthic (Tubifex tubifex) invertebrate" -- which is a choice of test
+    # animals, not a definition. Living in the sediment is not a synonym for one
+    # worm. It tagged a single record in the whole corpus, and that record
+    # already names both species properly in species_found, so removing it
+    # scored 0 on every count.
+    "endobenthic",
+    # where a herd lives, not what it is called. Mined from "belugas from the
+    # St. Lawrence Estuary population (Delphinapterus leucas)" -- the same
+    # failure as the entry above. It tags 3 records in the whole corpus and none
+    # of the judged ones, so removing it scored 0 on every count; it is here to
+    # keep the map honest, not to fix anything.
+    "lawrence estuary population",
+}
+
+# Names switched off while it is undecided whether crop records belong in the
+# dashboard at all. NOT deleted, and deliberately still in the map, because a
+# crop name is a perfectly good dashboard synonym -- emptying this set turns
+# them back on. Measured over 1,102 hand-judged records, neither has EVER been
+# right:
+#   coffee   8 records, 8 wrong, 0 right, 0 scope -- six household food
+#            expenditure surveys, a Yukon gold deposit named Coffee, and a
+#            study of ants living in coffee plantations
+#   potato   8 records, 4 wrong, 0 right, 4 scope -- soil-survey and phenology
+#            records mentioning potato planting; the 4 scope records are real
+#            potato-as-a-crop material that a decision to include crops would
+#            bring back
+DISABLED_PENDING_SCOPE = {"coffee", "potato"}
+
+# Words that name a kind of creature and so usually finish a longer name:
+# "Colorado potato BEETLE", "walleye POLLOCK". When a one-word name is followed
+# by one of these the match is a slice out of the middle of some other
+# creature's name, so it is thrown away. Scored on the judged records: 4 wrong
+# matches removed, nothing judged right lost.
+ORGANISM_HEAD_NOUNS = {
+    "beetle", "beetles", "leafhopper", "leafhoppers", "nematode", "nematodes",
+    "cyst", "pollock", "moth", "moths", "weevil", "weevils", "borer", "borers",
+    "aphid", "aphids", "midge", "midges", "mite", "mites", "louse", "lice",
+    "wasp", "wasps", "worm", "worms",
+}
+
+# One-word names allowed into the seventh tier. Each was checked for how often
+# it lands inside a place name; anything above roughly one in ten is left out
+# and listed in the report instead. "trout" is the clearest rejection: 37 of its
+# 47 matches are Trout River, Trout Lake or Trout Creek.
+SINGLE_WORD_COMMON_NAMES = {
+    "caribou", "moose", "seagrass", "eelgrass", "bison", "coyote", "canola",
+    "soybean", "birch", "potato", "aspen", "wolves", "sunflower", "coffee",
+    "beluga", "capelin", "zostère", "guppies", "woodpecker", "alfalfa",
+    "douglas-fir", "duckweed", "muskox", "raccoon", "larch", "lynx", "walleye",
+    "earthworms", "pumpkinseed", "reindeer", "sablefish", "bobcat", "cheetah",
+    "dandelion", "redfish", "sanderling", "turbot", "walrus", "kokanee",
+    "bullsnake", "clubroot", "cougars", "golden-crowned-kinglets",
+    "houndstongue", "lionfish", "merlin", "muskoxen", "ovenbird", "pronghorn",
+    "puma", "quatre-temps", "ragweed", "salmonberry", "tamarack", "thyme",
+    "tête-de-boule", "yellowhammer",
+    # generic rather than a species name, but it only appears in biological
+    # writing, so it still marks a record as being about living things. It
+    # rescued 8 judged records with no wrong matches. "epibenthic" and
+    # "endobenthic" used to sit here and were both removed: see
+    # NOT_ORGANISM_NAMES.
+    "graminoids",
+}
+
 # Words that should not start a common name. "of the lake whitefish" is really
 # just "lake whitefish". English and French, because much of this corpus is
 # French.
@@ -266,7 +381,7 @@ def clean_common_name(raw):
 
       - everything up to and including the last preposition is thrown away,
         which turns "context of lake whitefish" into "lake whitefish"
-      - at most three words are kept
+      - at most four words are kept
       - leading function words go, so "the tufted puffin" becomes "tufted puffin"
       - a candidate ending in a place word is rejected outright, because
         "Lawrence Estuary" in front of a bracketed name is a location
@@ -279,7 +394,7 @@ def clean_common_name(raw):
     cut = [i for i, w in enumerate(words) if bare(w) in PREPOSITIONS]
     if cut:
         words = words[cut[-1] + 1:]
-    words = words[-3:]
+    words = words[-4:]
     while words and bare(words[0]) in FUNCTION_WORDS:
         words.pop(0)
     if not words:
@@ -287,7 +402,15 @@ def clean_common_name(raw):
     if bare(words[-1]) in GEOGRAPHIC_NOUNS:
         return None
     name = " ".join(words).strip(" -'’").lower()
-    return name or None
+    if not name:
+        return None
+    # An author credit is not a common name.
+    if name in AUTHORITY_ABBREVIATIONS or name.endswith(".") or len(name) <= 2:
+        return None
+    # Nothing but filler words.
+    if all(bare(w) in COMMON_NAME_STOPWORDS for w in name.split()):
+        return None
+    return name
 
 
 def mine_common_names(text, names):
@@ -325,6 +448,69 @@ def mine_common_names(text, names):
     return pairs
 
 
+def common_name_tier(texts, pair_counts, min_seen=2):
+    """Find the mined common names in each record's text.
+
+    A name is used only if it was mined at least `min_seen` times. Names of more
+    than one word are taken as they come; one-word names are the dangerous group
+    ("trout" also means Trout Lake) so only those on the checked list get in.
+    Hand-judging 1,102 of the records this tier rescues bore that out: one-word
+    names are wrong about four times as often as longer ones.
+
+    Two kinds of near-miss are thrown away after a match is found, both because
+    the name turned out to be part of a longer phrase: a place ("Trout Lake")
+    and another creature's name ("Colorado potato beetle").
+
+    Matching ignores case, because a common name is written lowercase in a
+    sentence and capitalised in a title, so case carries no information. This is
+    the opposite of the scientific names, where capitals are the whole point.
+
+    A WARNING FOR WHOEVER READS THIS NEXT. It is tempting to treat a record that
+    has both a common name and a bare genus as better evidence than one with a
+    common name alone -- two weak signals agreeing. It is not. Measured by hand
+    on the 68 such records: the wrong-match rate is roughly DOUBLE, 14.7%
+    against 6.7% (n=68, p=0.015 -- a real effect, but a small sample). The two
+    tiers fail on the same records rather than independently, because genus_bare
+    fires on Barbara, Beta, Erica and Columba, which are ordinary words in
+    non-biological writing -- exactly the writing where a stray common name also
+    turns up. Those 68 stay in common_name_found and are not given a tier of
+    their own; they can be picked out from the existing columns whenever they
+    are wanted (common_name_found filled, the five real scientific tiers empty,
+    genus_bare filled).
+    """
+    seen_enough = {name for (name, _), n in pair_counts.items() if n >= min_seen}
+    multi = {n for n in seen_enough if " " in n}
+    single = {n for n in seen_enough
+              if " " not in n and n in SINGLE_WORD_COMMON_NAMES}
+    names = sorted((multi | single) - NOT_ORGANISM_NAMES - DISABLED_PENDING_SCOPE,
+                   key=len, reverse=True)
+    if not names:
+        return [[] for _ in texts], names
+    # The word after the match is looked at but NOT eaten. It used to be eaten,
+    # which silently hid any name starting at that word: in "moose Bighorn
+    # Sheep" only "moose" was ever found. Peeking instead of eating recovered a
+    # missing name on 39 of the 1,102 hand-judged records and lost nothing.
+    pattern = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(n) for n in names)
+                         + r")(?!\w)(?:(?=\W+(\w+)))?", re.IGNORECASE)
+    found = []
+    for text in texts:
+        hits = []
+        for m in pattern.finditer(text):
+            name = m.group(0).lower()
+            following = (m.group(1) or "").lower()
+            if " " not in name:
+                # "Trout Lake" is a place, not a fish.
+                if following in GEOGRAPHIC_FOLLOWERS:
+                    continue
+                # "potato" in "Colorado potato beetle" is a slice out of the
+                # middle of another creature's name.
+                if following in ORGANISM_HEAD_NOUNS:
+                    continue
+            hits.append(name)
+        found.append(list(dict.fromkeys(hits)))
+    return found, names
+
+
 def merge_plurals(pair_counts):
     """Count "tree swallow" and "tree swallows" as one name.
 
@@ -358,10 +544,12 @@ def annotate(df, names):
     columns = collections.defaultdict(list)
     pair_counts = collections.Counter()
     pair_example = {}
+    texts = []
 
     for title, subjects, abstract in zip(df["title"], df["subjects"],
                                          df["abstract"]):
         text = record_text(title, subjects, abstract)
+        texts.append(text)
         hits = find_taxa(text, names)
         for tier, value in hits.items():
             columns[tier].append(value)
@@ -372,7 +560,7 @@ def annotate(df, names):
     out = df.copy()
     for tier, values in columns.items():
         out[tier] = values
-    return out, pair_counts, pair_example
+    return out, pair_counts, pair_example, texts
 
 
 def main():
@@ -414,12 +602,20 @@ def main():
     df = pd.read_parquet(args.candidates)
     print(f"\nRead {len(df):,} records.")
 
-    out, pair_counts, pair_example = annotate(df, names)
+    out, pair_counts, pair_example, texts = annotate(df, names)
+
+    # The common-name map has to exist before it can be matched back, so the
+    # pairs are merged first and the seventh tier is a second pass.
+    pair_counts, merged_count = merge_plurals(pair_counts)
+    found, tier_names = common_name_tier(texts, pair_counts)
+    out["common_name_found"] = found
+    print(f"\nCommon names used by the seventh tier: {len(tier_names):,} "
+          f"(more than one word, seen at least twice)")
 
     tiers = ["species_found", "species_off_list", "genus_qualified",
              "family_found", "higher_taxa_found", "genus_bare"]
     print("\nRecords mentioning at least one name, by tier:")
-    for tier in tiers:
+    for tier in tiers + ["common_name_found"]:
         n = int(out[tier].apply(bool).sum())
         print(f"{n:>8,}  {100 * n / len(out):5.1f}%  {tier}")
 
@@ -428,24 +624,34 @@ def main():
     # "found nothing" is decided on the other five, and the figure including it
     # is printed alongside for comparison.
     strong_tiers = [t for t in tiers if t != "genus_bare"]
-    nothing = out[strong_tiers].apply(lambda row: not any(row), axis=1)
-    nothing_all = out[tiers].apply(lambda row: not any(row), axis=1)
-    print(f"\n{int(nothing.sum()):,} records matched nothing "
+    without_cn = out[strong_tiers].apply(lambda row: not any(row), axis=1)
+    nothing = out[strong_tiers + ["common_name_found"]].apply(
+        lambda row: not any(row), axis=1)
+    nothing_all = out[tiers + ["common_name_found"]].apply(
+        lambda row: not any(row), axis=1)
+    print(f"\n{int(without_cn.sum()):,} records matched nothing "
+          f"({100 * without_cn.sum() / len(out):.1f}%)  "
+          f"[no common names, genus_bare not counted]")
+    print(f"{int(nothing.sum()):,} records matched nothing "
           f"({100 * nothing.sum() / len(out):.1f}%)  "
-          f"[genus_bare not counted as a find]")
+          f"[with common names, genus_bare not counted]")
     print(f"{int(nothing_all.sum()):,} records matched nothing "
           f"({100 * nothing_all.sum() / len(out):.1f}%)  "
-          f"[genus_bare counted as a find]")
+          f"[with common names, genus_bare counted]")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     out.to_parquet(args.out, index=False)
 
-    # common-name map, with "tree swallow" and "tree swallows" counted together
-    pair_counts, merged = merge_plurals(pair_counts)
-    print(f"Singular/plural pairs merged: {merged:,}")
+    # already merged above, before the seventh tier was matched
+    print(f"Singular/plural pairs merged: {merged_count:,}")
+    # Entries that name a place or a way of life rather than a creature are of
+    # no use to dashboard search either, so they leave the map as well as the
+    # seventh tier.
+    dropped_rows = sum(1 for (c, _) in pair_counts if c in NOT_ORGANISM_NAMES)
     rows = [{"common_name": c, "scientific_name": s, "times_seen": n,
              "example": pair_example.get((c, s)) or pair_example.get((c + "s", s))}
-            for (c, s), n in pair_counts.items()]
+            for (c, s), n in pair_counts.items() if c not in NOT_ORGANISM_NAMES]
+    print(f"Map rows dropped as not a creature's name: {dropped_rows}")
     common = pd.DataFrame(rows).sort_values(
         ["times_seen", "common_name"], ascending=[False, True])
     common.to_csv(args.common_out, index=False, encoding="utf-8-sig")
@@ -453,6 +659,7 @@ def main():
 
     # records with nothing
     none_cols = ["id", "doi", "title", "publisher", "matched_keywords", "abstract"]
+    # "nothing" now includes the seventh tier as a find.
     none_df = out.loc[nothing, none_cols].copy()
     none_df["matched_keywords"] = none_df["matched_keywords"].apply(
         lambda v: "; ".join(v.tolist() if hasattr(v, "tolist") else list(v)))

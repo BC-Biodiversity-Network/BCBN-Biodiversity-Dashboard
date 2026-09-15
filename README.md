@@ -77,7 +77,7 @@ Evan's `countrycode` filter**, which makes our counts run slightly higher.
 
 | Folder | Contents |
 | --- | --- |
-| `pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, and `lunaris_keywords.py` is the finalized biodiversity keyword filter (see below). |
+| `pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
 | `tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
@@ -91,7 +91,7 @@ actually about biodiversity. `pipeline/lunaris_keywords.py` is the single
 source of truth for that filter and runs in three stages:
 
 1. **`mask_false_positives()`** blanks out phrases where a keyword is not
-   being used biologically, *before* matching. Each of the 7 patterns has a
+   being used biologically, *before* matching. Each of the 8 patterns has a
    documented record count behind it. The one that mattered most: Sea-Bird
    Scientific makes the CTD and oxygen sensors Ocean Networks Canada deploys,
    so `Sea-Bird` matched the `bird` keyword on 791 instrument-deployment
@@ -114,7 +114,11 @@ Effect on the full harvest, one stage at a time:
 | + Sea-Bird mask | 16,601 |
 | + power / industrial / energy / invasive masks | 16,542 |
 | + plural matching | 17,094 |
-| + StatCan `percentage of plants` mask | **17,057** |
+| + StatCan `percentage of plants` mask | 17,057 |
+| + `forest`, `marine`, `freshwater` and the random-forest mask | **18,931** |
+
+The last row is the current kept count, and it is what
+`data/lunaris_biodiv_candidates.parquet` holds.
 
 **Never change the keyword list or the masks without running
 `exploration/lunaris/lunaris_check_false_positives.py` first.** A mask is only
@@ -130,6 +134,104 @@ later species-name pass rather than chased with more masks. Recall is the
 untested side: the hand-labelled sample drew only 12 records from the ~106,000
 the filter drops, so it cannot say how much biodiversity data is being lost.
 
+## The Lunaris taxon extraction
+
+The species-name pass the keyword filter defers to. Two production steps run
+after the harvest:
+
+```
+lunaris_full_harvest.parquet -> lunaris_biodiv_candidates.parquet -> lunaris_taxa.parquet
+       (123,479 records)              (18,931 candidates)              (+ 7 taxon columns)
+```
+
+**`pipeline/build_lunaris_candidates.py` -> `data/lunaris_biodiv_candidates.parquet`**
+Applies `lunaris_keywords.py` to the full harvest and writes the records that
+pass, plus a `matched_keywords` column recording which keywords fired.
+
+```
+python pipeline/build_lunaris_candidates.py
+```
+
+**`pipeline/build_lunaris_taxa.py` -> `data/lunaris_taxa.parquet`**
+This is **extraction, not filtering**: all 18,931 candidates come out again,
+with seven columns added saying which taxon names each record mentions. Names
+come from the Layer-3 species summary (`bc_species_summary.csv`), matched
+case-sensitively against the original text, because capitals are what separate
+the genus *Beta* from "beta diversity".
+
+```
+python pipeline/build_lunaris_taxa.py
+```
+
+| Column | What it holds |
+| --- | --- |
+| `species_found` | Full binomials from the BC species list |
+| `species_off_list` | Binomials whose genus is on the list but the species is not |
+| `genus_qualified` | A genus name next to a qualifier, e.g. `Salmo sp.` |
+| `family_found` | Family names |
+| `higher_taxa_found` | Order, class, phylum, kingdom |
+| `genus_bare` | A genus name on its own — **not counted as a find** |
+| `common_name_found` | Common names, mined from this corpus (below) |
+
+`genus_bare` is written out because it is occasionally useful, but a record
+with nothing else is treated as having matched nothing. Its commonest entries
+are *Beta*, *Argentina*, *Pan*, *Cancer* and *Barbara* — ordinary words that
+happen to also be genus names. The "matched nothing" figures the script prints
+are reported both ways so the difference stays visible.
+
+### The common-name map
+
+`data/lunaris_common_name_map.csv` (2,456 rows) is built by the same script and
+holds `common_name, scientific_name, times_seen, example`. It is mined from the
+corpus itself: wherever the text reads `common name (Scientific name)` or the
+reverse, the pair is recorded, with the sentence it came from kept in `example`
+so any entry can be checked.
+
+**The map has two uses with opposite thresholds.** Tagging records wants
+`times_seen >= 2`, because a pair seen once is usually a mining accident.
+Dashboard search synonyms want everything, because a synonym used once is still
+a synonym someone might type. So **the map keeps every pair and the threshold is
+applied at use time** — `common_name_tier()` filters to `times_seen >= 2`,
+search should not.
+
+The map holds 2,419 distinct common names across its 2,456 pairs. **610** of them
+were seen at least twice, and **577** of those are enabled for tagging. The
+remaining 33 are one-word names that did not survive the checks below, plus the
+handful dropped outright. Multi-word names are taken
+as they come; one-word names are allowlisted individually, because hand-judging
+showed a one-word name is **3.5x** more likely to be wrong than a multi-word one
+("Trout Lake" is a place, not a fish). A short `NOT_ORGANISM_NAMES` list drops
+entries that name a place or a way of life rather than a creature; those leave
+the map as well, since they are no use to search either.
+
+`coffee` and `potato` are currently in `DISABLED_PENDING_SCOPE`, switched off
+while it is undecided whether crop records belong in the dashboard. They stay in
+the map, because a crop name is still a valid search synonym. **To turn them back
+on, empty that set** in `pipeline/build_lunaris_taxa.py` and re-run.
+
+### How far the common-name tier has been checked
+
+Every record rescued by `common_name_found` alone — i.e. where no scientific-name
+tier fired — has been read and judged by hand: 1,102 records across two rounds,
+of which **1,063** survive the current rules. Each was called RIGHT (the record
+really is about that organism), WRONG MATCH (a matching bug) or SCOPE (right
+organism, but the record is not biodiversity data).
+
+Current matching precision is **95.8%**: 45 of 1,063 are wrong matches.
+
+The verdicts are kept at **`Results/Claude outputs/tier7_verdicts.csv`** and are
+reusable — any proposed new rule can be scored against them for how many wrong
+matches it removes and how many right ones it destroys, instead of being argued
+about. Rules that sounded sensible and scored zero have been rejected on that
+basis.
+
+**Outputs of the taxon step**
+
+| File | What it is |
+| --- | --- |
+| `data/lunaris_taxa.parquet` | All 18,931 candidates with the seven taxon columns |
+| `data/lunaris_common_name_map.csv` | The mined common-name map, 2,456 rows |
+| `data/lunaris_no_taxon.csv` | The records that matched nothing, for review |
 
 ## Running environment
 
@@ -148,3 +250,9 @@ Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`.
 and are regenerated by the pipeline, so `data/` and `*.parquet` are
 gitignored. On the cluster they live under `~/bcbn/data/`. Never commit them.
 The Layer-3 species summary CSV is the exception - it's small enough to share.
+
+The Lunaris products follow the same rule: `lunaris_full_harvest.parquet`,
+`lunaris_biodiv_candidates.parquet`, `lunaris_taxa.parquet` and the 17 MB
+`lunaris_no_taxon.csv` are all regenerated and stay out of git.
+`lunaris_common_name_map.csv` is 330 KB, so it can be shared the same way the
+species summary is.

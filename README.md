@@ -19,7 +19,7 @@ GBIF S3 snapshot -> bc_raw.parquet -> bc_clean.parquet -> bc_species_summary.csv
                        (Layer 1)        (Layer 2)              (Layer 3)
 ```
 
-**Layer 1 - `pipeline/download_bc_raw.py` -> `bc_raw.parquet`**
+**Layer 1 - `backend/pipeline/download_bc_raw.py` -> `bc_raw.parquet`**
 Downloads the raw BC slice of a GBIF snapshot to a local parquet file.
 It clips to BC's *bounding box* only - a cheap lon/lat range check that lets
 DuckDB skip most of the world using parquet row-group statistics. The box is
@@ -28,10 +28,11 @@ quality filters are applied, and all 50 columns are kept. The point is a
 wide, unfiltered local copy, so later steps never have to re-download.
 
 ```
+cd backend
 python pipeline/download_bc_raw.py --snapshot 2026-08-01 --out ~/bcbn/data/bc_raw.parquet
 ```
 
-**Layer 2 - `pipeline/build_bc_clean.py` -> `bc_clean.parquet`**
+**Layer 2 - `backend/pipeline/build_bc_clean.py` -> `bc_clean.parquet`**
 Turns the raw slice into the clean product the dashboard consumes. It fetches
 BC's official legal boundary (ABMS, marine-inclusive, so coastal records are
 kept) from the BC Geographic Warehouse, clips the raw data from the bounding
@@ -41,10 +42,11 @@ require a species-level ID and coordinates, and drop anything GBIF flagged
 with one of 12 coordinate-quality issues.
 
 ```
+cd backend
 python pipeline/build_bc_clean.py --raw ~/bcbn/data/bc_raw.parquet --out ~/bcbn/data/bc_clean.parquet
 ```
 
-**Layer 3 - `pipeline/build_species_summary.py` -> `bc_species_summary.csv`**
+**Layer 3 - `backend/pipeline/build_species_summary.py` -> `bc_species_summary.csv`**
 Groups the clean product by species to give a per-species BC record count
 (`n_bc`). The output columns - `kingdom, phylum, class, order, family, genus,
 species, n_bc` - match Evan's `for_lucia.csv` so the two can be compared row
@@ -53,6 +55,7 @@ the clean product holds BC records only. The result is a few MB, small enough
 to commit and share.
 
 ```
+cd backend
 python pipeline/build_species_summary.py --clean ~/bcbn/data/bc_clean.parquet --out ~/bcbn/data/bc_species_summary.csv
 ```
 
@@ -65,7 +68,7 @@ GBIF publishes a new snapshot, then Layers 2 and 3.
 
 The clean product holds **38,739,753 records** and **38,218 distinct
 species**. The record count matches the earlier direct-from-S3 count in
-`exploration/gbif_bc_filtered.py`, so the two-step raw-then-clean path gives
+`backend/exploration/gbif_bc_filtered.py`, so the two-step raw-then-clean path gives
 the same answer as filtering in one pass.
 
 Compared species by species against Evan's `for_lucia.csv` (36,156 species):
@@ -75,19 +78,24 @@ Evan's `countrycode` filter**, which makes our counts run slightly higher.
 
 ## Layout
 
+The Python moved under `backend/` in September 2026. **Run the pipeline
+scripts from inside `backend/`, not from the repo root.** Several of them take
+default paths like `data/...` that are relative to the working directory, so
+running them from anywhere else quietly writes to the wrong place.
+
 | Folder | Contents |
 | --- | --- |
-| `pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
-| `exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
-| `exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
-| `exploration/archive/` | Superseded early attempts, kept for history: `gbif_bc_boundingBox.py` (bounding box only, the first feasibility check) and `gbif_bc_polygon.py` (first exact-polygon version). Not maintained - read them for context, don't run them. |
+| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
+| `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
+| `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
+| `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
+| `backend/exploration/archive/` | Superseded early attempts, kept for history: `gbif_bc_boundingBox.py` (bounding box only, the first feasibility check) and `gbif_bc_polygon.py` (first exact-polygon version). Not maintained - read them for context, don't run them. |
 
 ## The Lunaris keyword filter
 
 A second data source: dataset-level metadata harvested from
 [Lunaris](https://lunaris.ca/) (123,479 records), filtered down to the ones
-actually about biodiversity. `pipeline/lunaris_keywords.py` is the single
+actually about biodiversity. `backend/pipeline/lunaris_keywords.py` is the single
 source of truth for that filter and runs in three stages:
 
 1. **`mask_false_positives()`** blanks out phrases where a keyword is not
@@ -118,10 +126,10 @@ Effect on the full harvest, one stage at a time:
 | + `forest`, `marine`, `freshwater` and the random-forest mask | **18,931** |
 
 The last row is the current kept count, and it is what
-`data/lunaris_biodiv_candidates.parquet` holds.
+`backend/data/lunaris_biodiv_candidates.parquet` holds.
 
 **Never change the keyword list or the masks without running
-`exploration/lunaris/lunaris_check_false_positives.py` first.** A mask is only
+`backend/exploration/lunaris/lunaris_check_false_positives.py` first.** A mask is only
 safe if every record it flips from kept to dropped is genuinely
 non-biodiversity; a plural is only worth adding if the records it newly keeps
 are biodiversity rather than another sense of the word.
@@ -144,15 +152,16 @@ lunaris_full_harvest.parquet -> lunaris_biodiv_candidates.parquet -> lunaris_tax
        (123,479 records)              (18,931 candidates)              (+ 7 taxon columns)
 ```
 
-**`pipeline/build_lunaris_candidates.py` -> `data/lunaris_biodiv_candidates.parquet`**
+**`backend/pipeline/build_lunaris_candidates.py` -> `backend/data/lunaris_biodiv_candidates.parquet`**
 Applies `lunaris_keywords.py` to the full harvest and writes the records that
 pass, plus a `matched_keywords` column recording which keywords fired.
 
 ```
+cd backend
 python pipeline/build_lunaris_candidates.py
 ```
 
-**`pipeline/build_lunaris_taxa.py` -> `data/lunaris_taxa.parquet`**
+**`backend/pipeline/build_lunaris_taxa.py` -> `backend/data/lunaris_taxa.parquet`**
 This is **extraction, not filtering**: all 18,931 candidates come out again,
 with seven columns added saying which taxon names each record mentions. Names
 come from the Layer-3 species summary (`bc_species_summary.csv`), matched
@@ -160,6 +169,7 @@ case-sensitively against the original text, because capitals are what separate
 the genus *Beta* from "beta diversity".
 
 ```
+cd backend
 python pipeline/build_lunaris_taxa.py
 ```
 
@@ -181,7 +191,7 @@ are reported both ways so the difference stays visible.
 
 ### The common-name map
 
-`data/lunaris_common_name_map.csv` (2,456 rows) is built by the same script and
+`backend/data/lunaris_common_name_map.csv` (2,456 rows) is built by the same script and
 holds `common_name, scientific_name, times_seen, example`. It is mined from the
 corpus itself: wherever the text reads `common name (Scientific name)` or the
 reverse, the pair is recorded, with the sentence it came from kept in `example`
@@ -207,7 +217,7 @@ the map as well, since they are no use to search either.
 `coffee` and `potato` are currently in `DISABLED_PENDING_SCOPE`, switched off
 while it is undecided whether crop records belong in the dashboard. They stay in
 the map, because a crop name is still a valid search synonym. **To turn them back
-on, empty that set** in `pipeline/build_lunaris_taxa.py` and re-run.
+on, empty that set** in `backend/pipeline/build_lunaris_taxa.py` and re-run.
 
 ### How far the common-name tier has been checked
 
@@ -229,9 +239,9 @@ basis.
 
 | File | What it is |
 | --- | --- |
-| `data/lunaris_taxa.parquet` | All 18,931 candidates with the seven taxon columns |
-| `data/lunaris_common_name_map.csv` | The mined common-name map, 2,456 rows |
-| `data/lunaris_no_taxon.csv` | The records that matched nothing, for review |
+| `backend/data/lunaris_taxa.parquet` | All 18,931 candidates with the seven taxon columns |
+| `backend/data/lunaris_common_name_map.csv` | The mined common-name map, 2,456 rows |
+| `backend/data/lunaris_no_taxon.csv` | The records that matched nothing, for review |
 
 ## Running environment
 
@@ -243,6 +253,31 @@ parquet back as an unusable BLOB. Keep new code inside those constraints, or
 the cluster run will fail even though it works locally.
 
 Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`.
+
+## Running the front end
+
+The map lives in `frontend/`. It is a Vite + React app that draws the hexagon
+aggregates over an OpenFreeMap basemap with deck.gl.
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+That serves the app at `http://localhost:5173`. `npm run build` writes a
+production bundle to `frontend/dist/`, and `npm run preview` serves that build.
+
+The map reads `frontend/public/data/bc_hex_r5.csv.gz`, which is produced by
+`backend/pipeline/build_hex_aggregates.py` and committed. Nothing is fetched
+from the backend at run time, so the front end works with no server behind it.
+
+**maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with
+`react-map-gl` 8.1.3: the basemap style never finishes loading, so no tiles are
+requested and the map stays blank with no error in the console. deck.gl's
+interleaved renderer also fails against 6.x, reading a `_nearZ` property that
+version no longer exposes. Do not upgrade maplibre-gl past 5.x without checking
+that tiles still draw.
 
 ## Data files
 

@@ -8,4 +8,13 @@ __pycache__/
 # pattern matches a data directory at any depth, so it still covers that
 # one - narrowing it to backend/data/ would only lose future ones.
 data/
+
+# The `data/` rule above matches a folder called data at any depth, so it
+# also caught frontend/public/data/, where the browser copies of the hex
+# aggregates live. Those are small and are meant to be committed. Git does
+# not look inside an ignored folder, so a rule naming the files themselves
+# would never be read; the folder has to be allowed back in, and it has to
+# happen after the rule that excluded it.
+!frontend/public/data/
+
 *.parquet

@@ -64,11 +64,16 @@ TEST_SPECIES = "Turdus migratorius"
 TEST_RESOLUTIONS = [5, 6]
 
 # The resolutions copied to the front end as gzipped CSV. Res 4 is the province
-# view, 5 the regional view, 6 the local view. Res 3 is too coarse to be worth
-# drawing and res 7 has one record in a fifth of its cells, so neither is
-# shipped. To ship res 7 later, add it to this list; nothing else needs to
-# change.
-FRONTEND_RESOLUTIONS = [4, 5, 6]
+# view, 5 the regional view, 6 the local view, and 7 the closest view, added so
+# that zooming past about level 8 keeps resolving finer instead of just making
+# the same hexagons bigger.
+#
+# Res 3 is not shipped: at 127 cells for the whole province it is too coarse to
+# draw. Res 8 is deliberately not shipped either. Hexagons there are about 1.1 km
+# across, which is finer than anyone has asked for, and the file would add
+# roughly 800 KB to the repository. Res 7 is already about 2.8 km across, finer
+# than the 5 km hexagons used by the Biodiversite Quebec atlas we are following.
+FRONTEND_RESOLUTIONS = [4, 5, 6, 7]
 
 
 def connect(threads, memory_limit, temp_dir):

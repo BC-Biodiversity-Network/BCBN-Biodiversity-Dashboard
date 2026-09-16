@@ -45,10 +45,18 @@ const ZOOM_TIERS = [
 // happens once and stays.
 const ZOOM_DEAD_ZONE = 0.25
 
-// Every layer keeps this same id across a switch. deck.gl matches layers by id,
-// so reusing it means a zoom change updates the existing layer instead of
-// throwing it away and building a new one.
-const HEX_LAYER_ID = 'bc-hexagons'
+// Each resolution gets its own layer id.
+//
+// They must not share an id. deck.gl matches layers between renders by id and
+// carries internal state across the match, so when one id was used for all
+// three resolutions the hexagon geometry worked out for one tier was handed to
+// the next one and part of the map drew at the wrong cell size.
+function hexLayerId(resolution) {
+  return `bc-hexagons-r${resolution}`
+}
+
+// The three resolutions, coarsest first.
+const RESOLUTIONS = [4, 5, 6]
 
 // Where the three hexagon files live, one per resolution.
 const HEX_DATA_URLS = {
@@ -155,16 +163,23 @@ function pickResolution(zoom, currentResolution) {
     : currentResolution
 }
 
-// Builds the hexagon layer for one resolution's rows.
+// Builds the hexagon layer for one resolution.
+//
+// All three resolutions are built and handed to deck.gl together, and only the
+// one for the current zoom is set visible. The other two stay loaded on the
+// graphics card without being drawn, so changing tier costs nothing and no
+// hexagons are ever uploaded twice.
+//
 // Returns null when that file has not arrived yet.
-function buildHexagonLayer(rows) {
+function buildHexagonLayer(resolution, rows, visible) {
   if (!rows || rows.length === 0) {
     return null
   }
 
   return new H3HexagonLayer({
-    id: HEX_LAYER_ID,
+    id: hexLayerId(resolution),
     data: rows,
+    visible,
     getHexagon: (hexagon) => hexagon.h3Cell,
     getFillColor: (hexagon) => getHexagonColor(hexagon.occurrences),
     opacity: HEX_OPACITY,
@@ -222,12 +237,10 @@ export default function App() {
   // the whole session. Fetching them up front means zooming never waits on the
   // network. The empty list at the end tells React not to run this again.
   useEffect(() => {
-    const resolutions = Object.keys(HEX_DATA_URLS).map(Number)
-
-    Promise.all(resolutions.map((r) => loadHexData(HEX_DATA_URLS[r])))
+    Promise.all(RESOLUTIONS.map((r) => loadHexData(HEX_DATA_URLS[r])))
       .then((loaded) => {
         const byResolution = {}
-        resolutions.forEach((r, index) => {
+        RESOLUTIONS.forEach((r, index) => {
           byResolution[r] = loaded[index]
           console.log(`Loaded ${loaded[index].length} hexagons for res ${r}`)
         })
@@ -239,29 +252,22 @@ export default function App() {
       })
   }, [])
 
-  // Build one layer per resolution and keep each of them.
+  // Build all three layers, and mark only the current one visible.
   //
-  // React runs this component again on every state change, and building a new
-  // H3HexagonLayer each time would make deck.gl treat it as a different layer
-  // and redraw everything. useMemo keeps each layer object alive until the rows
-  // behind it change, which after the first load is never. Zooming back and
-  // forth then reuses layers that already exist instead of rebuilding them.
-  const layerForRes4 = useMemo(
-    () => buildHexagonLayer(rowsByResolution[4]),
-    [rowsByResolution[4]],
-  )
-  const layerForRes5 = useMemo(
-    () => buildHexagonLayer(rowsByResolution[5]),
-    [rowsByResolution[5]],
-  )
-  const layerForRes6 = useMemo(
-    () => buildHexagonLayer(rowsByResolution[6]),
-    [rowsByResolution[6]],
-  )
-
-  const layersByResolution = { 4: layerForRes4, 5: layerForRes5, 6: layerForRes6 }
-  const activeLayer = layersByResolution[resolution]
-  const layers = activeLayer ? [activeLayer] : []
+  // A deck.gl layer is a description of what to draw, not the drawing itself.
+  // They are meant to be thrown away and made again; deck.gl keeps the real
+  // work, the data already on the graphics card, and finds it again by layer
+  // id. Holding on to an old layer object and handing the same one back is what
+  // caused hexagons from one zoom tier to show up under another.
+  //
+  // So these are rebuilt whenever the tier changes, which is cheap: making a
+  // layer only stores a few properties. The rows themselves are the same arrays
+  // as before, so deck.gl knows the hexagons are unchanged and leaves them be.
+  const layers = useMemo(() => {
+    return RESOLUTIONS.map((r) =>
+      buildHexagonLayer(r, rowsByResolution[r], r === resolution),
+    ).filter((layer) => layer !== null)
+  }, [rowsByResolution, resolution])
 
   // Called whenever the map moves. Only stores a new resolution when the tier
   // actually changes, so panning and ordinary zooming do not redraw the page.

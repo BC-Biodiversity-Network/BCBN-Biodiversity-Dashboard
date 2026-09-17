@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Map, { useControl } from 'react-map-gl/maplibre'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
+import { getHexagonEdgeLengthAvg } from 'h3-js'
 
 // MapLibre ships its own stylesheet. Without it the map still draws, but the
 // zoom buttons and the attribution line in the corner come out unstyled.
@@ -20,22 +21,87 @@ const INITIAL_VIEW_STATE = {
   zoom: 4.5,
 }
 
+// The four resolutions, coarsest first.
+const RESOLUTIONS = [4, 5, 6, 7]
+
+// Switch to the finer tier once a hexagon grows past this many pixels
+// across. This one number sets every threshold. Larger means hexagons
+// get bigger before switching, so the map reads coarser and less busy.
+const SWITCH_AT_PX = 80
+
+// How many metres of ground one pixel covers at zoom 0, on the equator.
+//
+// The familiar figure for this is 156543.03, but that is for maps built from
+// 256-pixel tiles. MapLibre uses 512-pixel tiles, so at the same zoom number
+// the world is twice as wide in pixels and each pixel covers half as much
+// ground. Using the 256 figure here makes every hexagon come out half its real
+// size on screen. Measured against the map's own projection this value is
+// right to within about one percent, and that last one percent is real
+// variation in H3 cell sizes rather than an error in the arithmetic.
+const METRES_PER_PIXEL_AT_ZOOM_0 = 78271.52
+
+// The latitude the thresholds are worked out for: the middle of BC.
+//
+// A pixel covers less ground the further north you go, so a hexagon looks
+// bigger in the north than in the south at the same zoom. If the thresholds
+// followed the live map centre, the tier would change while panning north or
+// south at a fixed zoom, which is confusing. BC spans 48 to 60 degrees, enough
+// to move a threshold by about 0.4 of a zoom level. Fixing the latitude here
+// costs a little accuracy at the top and bottom of the province and buys a
+// threshold that never moves under the user.
+const REFERENCE_LATITUDE = 54.5
+
+// How wide a hexagon of this resolution is, corner to corner, in metres.
+// A regular hexagon measures two edge lengths across its widest point.
+function hexagonWidthMetres(resolution) {
+  return 2 * getHexagonEdgeLengthAvg(resolution, 'm')
+}
+
+// The zoom level at which a hexagon of this resolution appears this many
+// pixels wide. This is the pixel formula turned around to solve for zoom.
+function zoomAtWidth(resolution, widthPx) {
+  const metresPerPixel =
+    METRES_PER_PIXEL_AT_ZOOM_0 * Math.cos((REFERENCE_LATITUDE * Math.PI) / 180)
+
+  return Math.log2((widthPx * metresPerPixel) / hexagonWidthMetres(resolution))
+}
+
+// The text shown in the corner label for one resolution, for example
+// "Hexagons ~52 km". The number is the width corner to corner, rounded to
+// whole kilometres, worked out from the resolution rather than written down.
+function hexagonSizeLabel(resolution) {
+  const widthKm = hexagonWidthMetres(resolution) / 1000
+
+  return `Hexagons ~${Math.round(widthKm)} km`
+}
+
 // Which hexagon file to use at which zoom level, coarsest first.
 //
-// A tier applies from its own minZoom up to the next tier's minZoom. So res 4
-// is used below zoom 5.5, res 5 from 5.5 up to 6.5, and res 6 from 6.5 up.
+// A tier applies from its own minZoom up to the next tier's minZoom. Each one
+// takes over at the zoom where the tier before it has grown to SWITCH_AT_PX
+// across, so every threshold moves together when that one number is changed.
 //
-// These came from looking at all three files side by side at zoom 4.5, 5, 5.5,
-// 6, 6.5, 7 and 8 on the real basemap, not from the hexagon sizes on paper.
-// What decides it is how many pixels wide a hexagon ends up. Below roughly ten
-// pixels the map turns to speckle; above roughly sixty the hexagons swallow the
-// towns and rivers underneath. Each tier is used over the range where it sits
-// between those two.
-const ZOOM_TIERS = [
-  { minZoom: 0, resolution: 4 },
-  { minZoom: 5.5, resolution: 5 },
-  { minZoom: 6.5, resolution: 6 },
-]
+// Because consecutive H3 resolutions differ in width by the square root of
+// seven, about 2.65, a tier is entered at roughly SWITCH_AT_PX / 2.65 pixels
+// and left at SWITCH_AT_PX. At 80 that is 30 pixels entering, 80 leaving.
+const ZOOM_TIERS = RESOLUTIONS.map((resolution, index) => ({
+  resolution,
+  // The coarsest tier has to cover everything below it, so it starts at zero.
+  minZoom: index === 0 ? 0 : zoomAtWidth(RESOLUTIONS[index - 1], SWITCH_AT_PX),
+}))
+
+// How far the map is allowed to zoom in.
+//
+// Past this point a res 7 hexagon is twice SWITCH_AT_PX across and still
+// growing, so zooming further only magnifies the same aggregate instead of
+// showing anything new. Going deeper would mean drawing individual occurrence
+// records rather than hexagons, and that needs a query API that does not exist
+// yet. This cap is the edge of what the aggregates can usefully show, not an
+// arbitrary limit.
+const MAX_ZOOM = zoomAtWidth(
+  RESOLUTIONS[RESOLUTIONS.length - 1],
+  2 * SWITCH_AT_PX,
+)
 
 // How far past a threshold the zoom has to go before the tier actually changes.
 //
@@ -55,14 +121,17 @@ function hexLayerId(resolution) {
   return `bc-hexagons-r${resolution}`
 }
 
-// The three resolutions, coarsest first.
-const RESOLUTIONS = [4, 5, 6]
-
-// Where the three hexagon files live, one per resolution.
+// Where the four hexagon files live, one per resolution.
+//
+// All four are fetched at startup. Together they are about 469 KB, which is
+// less than a single photograph, so fetching only the one the current zoom
+// needs would add code and a loading pause for no real saving. Please do not
+// add lazy loading here without a measurement showing it is worth it.
 const HEX_DATA_URLS = {
   4: 'data/bc_hex_r4.csv.gz',
   5: 'data/bc_hex_r5.csv.gz',
   6: 'data/bc_hex_r6.csv.gz',
+  7: 'data/bc_hex_r7.csv.gz',
 }
 
 // The five fill colours, palest to darkest, matching the project deck.
@@ -126,12 +195,15 @@ function tierIndexForZoom(zoom) {
 // Decides which resolution to show at this zoom, given the one already showing.
 //
 // The dead zone is what stops the flicker. Moving to a finer tier needs the
-// zoom to be a little past that tier's threshold; moving back to a coarser one
+// zoom to be a little past the next threshold; moving back to a coarser one
 // needs it to be a little below the current tier's threshold. In between,
 // whatever is already on screen stays there.
 //
-// The move is one tier at a time, which is all that is needed because zooming
-// is continuous.
+// Once the zoom has cleared that dead zone it goes straight to whichever tier
+// the new zoom belongs to, however many tiers away that is. Dragging the zoom
+// slowly sends a stream of small movements and would step through the tiers
+// anyway, but a jump straight to a new zoom arrives as a single movement, and
+// stepping one tier at a time would leave the map showing the wrong one.
 function pickResolution(zoom, currentResolution) {
   const wantedIndex = tierIndexForZoom(zoom)
 
@@ -149,17 +221,17 @@ function pickResolution(zoom, currentResolution) {
   }
 
   if (wantedIndex > currentIndex) {
-    // Zooming in. Only step up once clearly past the next threshold.
+    // Zooming in. Only move once clearly past the next threshold up.
     const nextTier = ZOOM_TIERS[currentIndex + 1]
     return zoom >= nextTier.minZoom + ZOOM_DEAD_ZONE
-      ? nextTier.resolution
+      ? ZOOM_TIERS[wantedIndex].resolution
       : currentResolution
   }
 
-  // Zooming out. Only step down once clearly below this tier's own threshold.
+  // Zooming out. Only move once clearly below this tier's own threshold.
   const currentTier = ZOOM_TIERS[currentIndex]
   return zoom < currentTier.minZoom - ZOOM_DEAD_ZONE
-    ? ZOOM_TIERS[currentIndex - 1].resolution
+    ? ZOOM_TIERS[wantedIndex].resolution
     : currentResolution
 }
 
@@ -287,11 +359,16 @@ export default function App() {
       {error && <div className="status-message">Could not load the data: {error}</div>}
       {stillLoading && <div className="status-message">Loading hexagons...</div>}
 
+      {!stillLoading && !error && (
+        <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
+      )}
+
       <Map
         initialViewState={INITIAL_VIEW_STATE}
         mapStyle={BASEMAP_STYLE}
         style={{ width: '100%', height: '100%' }}
         onMove={handleMove}
+        maxZoom={MAX_ZOOM}
       >
         <DeckGLOverlay layers={layers} interleaved={true} getTooltip={getTooltip} />
       </Map>

@@ -31,10 +31,6 @@ body {
    message so the two do not jar when one replaces the other. The bottom left
    is deliberately left empty for the colour legend. */
 .hex-size-label {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 1;
   padding: 6px 10px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.92);
@@ -43,4 +39,100 @@ body {
   color: #1a1a1a;
   pointer-events: none;
   white-space: nowrap;
+}
+
+/* The stack of controls in the top left: the hexagon size label with the
+   variable toggle beneath it. The bottom left is kept clear for the legend. */
+.top-left-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The two buttons that choose what the colour means. They sit side by side in
+   one rounded box, so they read as two settings of one control rather than as
+   two separate buttons. */
+.variable-toggle {
+  display: flex;
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.toggle-button {
+  border: 0;
+  margin: 0;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.92);
+  font-family: inherit;
+  font-size: 13px;
+  color: #444;
+  cursor: pointer;
+}
+
+.toggle-button + .toggle-button {
+  border-left: 1px solid #d8d8d8;
+}
+
+.toggle-button:hover {
+  background: #fff;
+}
+
+/* The chosen one is filled in, so which map you are looking at is readable at
+   a glance without reading the words. */
+.toggle-button.selected {
+  background: #184f95;
+  color: #fff;
+}
+
+/* The colour key, bottom left. The basemap credit sits bottom right, so this
+   is kept narrow enough that the two never meet. */
+.legend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 1;
+  width: 320px;
+  padding: 8px 10px 9px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.legend-caption {
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+/* The swatches and the numbers under them use the same row layout, so each
+   number sits under the colour whose range it begins. */
+.legend-strip {
+  display: flex;
+}
+
+.legend-swatch {
+  flex: 1;
+  height: 12px;
+}
+
+.legend-edge {
+  flex: 1;
+  padding-top: 3px;
+  font-size: 10px;
+  color: #555;
+  text-align: left;
+}
+
+.legend-note {
+  margin-top: 7px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #777;
 }

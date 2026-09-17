@@ -134,26 +134,83 @@ const HEX_DATA_URLS = {
   7: 'data/bc_hex_r7.csv.gz',
 }
 
-// The five fill colours, palest to darkest, matching the project deck.
+// The nine blue steps, palest to darkest, from the project's sequential ramp.
 // Written as red, green, blue numbers because that is what deck.gl expects.
-const COLOR_RAMP = [
+const BLUE_STEPS = [
   [205, 226, 251], // #cde2fb
   [158, 197, 244], // #9ec5f4
-  [85, 152, 231], // #5598e7
+  [109, 167, 236], // #6da7ec
+  [57, 135, 229], // #3987e5
   [37, 106, 191], // #256abf
+  [28, 92, 171], // #1c5cab
   [24, 79, 149], // #184f95
+  [16, 66, 129], // #104281
+  [13, 54, 107], // #0d366b
 ]
 
-// Where each colour starts, written as log10 of the occurrence count.
-// 1 means 10 records, 2 means 100, 3 means 1,000 and 4 means 10,000, so each
-// colour covers a tenfold jump in the count.
+// The nine orange steps, palest to darkest.
 //
-// The scale has to be logarithmic. Counts at this resolution run from 1 to
-// 2,201,357, so spacing the colours evenly by count would give Vancouver the
-// darkest shade and leave the other 4,461 hexagons looking identical.
+// These start from the well known ColorBrewer "Oranges" nine-step ramp and
+// darken it throughout. The published ramp begins at a near-white #fff5eb,
+// which at the fill opacity used here is almost the same colour as the
+// basemap, so the lightest bin would look like missing data rather than a
+// small count. Darkening the whole ramp also brings its lightness range into
+// line with the blue one, so neither map looks flatter than the other.
+const ORANGE_STEPS = [
+  [254, 233, 214], // #fee9d6
+  [253, 213, 174], // #fdd5ae
+  [253, 187, 124], // #fdbb7c
+  [253, 157, 74], // #fd9d4a
+  [245, 126, 34], // #f57e22
+  [224, 102, 18], // #e06612
+  [191, 79, 8], // #bf4f08
+  [150, 60, 5], // #963c05
+  [107, 42, 4], // #6b2a04
+]
+
+// The lowest value that falls in each bin. A value belongs to the last bin
+// whose lower edge it has reached, so the final bin has no upper limit.
 //
-// These numbers are a starting point and get tuned in the next round.
-const COLOR_BREAKS = [1, 2, 3, 4]
+// These are explicit bins rather than a smooth ramp, which means the edges
+// themselves are the whole scale: there is no separate decision about whether
+// to space the colours by the logarithm or the square root of the count.
+const RECORD_BIN_EDGES = [1, 10, 50, 250, 1000, 5000, 25000, 100000, 500000]
+const SPECIES_BIN_EDGES = [1, 5, 15, 40, 100, 250, 600, 1200, 2500]
+
+// The two things a hexagon can be coloured by.
+//
+// The two colour families must not share a hue. If both maps were blue, anyone
+// glancing at the screen would have no way of telling which number they were
+// looking at.
+//
+// One scale covers all four resolutions. That makes the map go paler as you
+// zoom in, because one big hexagon splits into smaller ones that each hold
+// fewer records. That is deliberate: a colour has to mean the same number at
+// every zoom, otherwise two tiers cannot be compared.
+const COLOUR_VARIABLES = {
+  species: {
+    buttonLabel: 'Species',
+    legendCaption: 'Distinct species per hexagon',
+    valueOf: (hexagon) => hexagon.distinctSpecies,
+    binEdges: SPECIES_BIN_EDGES,
+    steps: BLUE_STEPS,
+  },
+  records: {
+    buttonLabel: 'Records',
+    legendCaption: 'Occurrence records per hexagon',
+    valueOf: (hexagon) => hexagon.occurrences,
+    binEdges: RECORD_BIN_EDGES,
+    steps: ORANGE_STEPS,
+  },
+}
+
+// Which variable the map opens on.
+//
+// Species, because it reads as a pattern where records read as noise. Measured
+// at resolution 5: records run 11,231 times from the middle cell to the
+// largest, while species run only 125 times, so the species surface is about
+// ninety times flatter.
+const DEFAULT_VARIABLE = 'species'
 
 // The basemap's place names start at this layer. Drawing the hexagons
 // immediately before it puts them underneath every label, so city names stay
@@ -163,18 +220,41 @@ const FIRST_LABEL_LAYER_ID = 'waterway_line_label'
 // How see-through the hexagons are, from 0 to 1.
 const HEX_OPACITY = 0.7
 
-// Picks the fill colour for one hexagon from its occurrence count.
-// Walks up the list of breakpoints and stops at the first one the count has
-// not reached yet.
-function getHexagonColor(occurrences) {
-  const scaled = Math.log10(occurrences)
-
+// Works out which bin a value belongs to, as a position in the list of edges.
+// Walks up the edges and keeps the last one the value has reached.
+function binIndexFor(value, binEdges) {
   let index = 0
-  while (index < COLOR_BREAKS.length && scaled >= COLOR_BREAKS[index]) {
-    index++
+
+  for (let i = 0; i < binEdges.length; i++) {
+    if (value >= binEdges[i]) {
+      index = i
+    }
   }
 
-  return COLOR_RAMP[index]
+  return index
+}
+
+// Picks the fill colour for one hexagon under the chosen variable.
+function getHexagonColor(hexagon, variable) {
+  const value = variable.valueOf(hexagon)
+
+  return variable.steps[binIndexFor(value, variable.binEdges)]
+}
+
+// Shortens a bin edge for the legend, so the strip stays narrow.
+// 500000 becomes "500K" and 1200 becomes "1.2K"; anything under a thousand is
+// written out in full.
+function shortEdgeLabel(edge) {
+  if (edge < 1000) {
+    return String(edge)
+  }
+
+  const thousands = edge / 1000
+
+  // Whole thousands lose the decimal point: 5000 is "5K", not "5.0K".
+  return Number.isInteger(thousands)
+    ? `${thousands}K`
+    : `${thousands.toFixed(1)}K`
 }
 
 // Works out which tier a zoom level belongs to, ignoring the dead zone.
@@ -243,17 +323,22 @@ function pickResolution(zoom, currentResolution) {
 // hexagons are ever uploaded twice.
 //
 // Returns null when that file has not arrived yet.
-function buildHexagonLayer(resolution, rows, visible) {
+function buildHexagonLayer(resolution, rows, visible, variableName) {
   if (!rows || rows.length === 0) {
     return null
   }
+
+  const variable = COLOUR_VARIABLES[variableName]
 
   return new H3HexagonLayer({
     id: hexLayerId(resolution),
     data: rows,
     visible,
     getHexagon: (hexagon) => hexagon.h3Cell,
-    getFillColor: (hexagon) => getHexagonColor(hexagon.occurrences),
+    getFillColor: (hexagon) => getHexagonColor(hexagon, variable),
+    // deck.gl reuses the colours it worked out last time unless it is told
+    // that the thing they were worked out from has changed.
+    updateTriggers: { getFillColor: variableName },
     opacity: HEX_OPACITY,
     filled: true,
     stroked: false,
@@ -295,12 +380,64 @@ function DeckGLOverlay(props) {
   return null
 }
 
+// The colour key, bottom left: a strip of the nine colours with the number each
+// one starts at underneath, and a caption saying which variable is shown.
+function Legend({ variable }) {
+  return (
+    <div className="legend">
+      <div className="legend-caption">{variable.legendCaption}</div>
+
+      <div className="legend-strip">
+        {variable.steps.map((step, index) => (
+          <div
+            key={index}
+            className="legend-swatch"
+            style={{ background: `rgb(${step[0]}, ${step[1]}, ${step[2]})` }}
+          />
+        ))}
+      </div>
+
+      <div className="legend-strip">
+        {variable.binEdges.map((edge) => (
+          <div key={edge} className="legend-edge">
+            {shortEdgeLabel(edge)}
+          </div>
+        ))}
+      </div>
+
+      <div className="legend-note">
+        These maps show where people have recorded wildlife, not where wildlife
+        is. Records cluster where people go.
+      </div>
+    </div>
+  )
+}
+
+// The two buttons that choose what the hexagons are coloured by.
+function VariableToggle({ current, onChange }) {
+  return (
+    <div className="variable-toggle">
+      {Object.keys(COLOUR_VARIABLES).map((name) => (
+        <button
+          key={name}
+          type="button"
+          className={name === current ? 'toggle-button selected' : 'toggle-button'}
+          onClick={() => onChange(name)}
+        >
+          {COLOUR_VARIABLES[name].buttonLabel}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // The whole page: a full-window map that swaps hexagon resolution as you zoom.
 export default function App() {
   const [rowsByResolution, setRowsByResolution] = useState({})
   const [resolution, setResolution] = useState(() =>
     pickResolution(INITIAL_VIEW_STATE.zoom, null),
   )
+  const [variableName, setVariableName] = useState(DEFAULT_VARIABLE)
   const [error, setError] = useState(null)
 
   // Download all three files once, when the page first appears.
@@ -337,9 +474,9 @@ export default function App() {
   // as before, so deck.gl knows the hexagons are unchanged and leaves them be.
   const layers = useMemo(() => {
     return RESOLUTIONS.map((r) =>
-      buildHexagonLayer(r, rowsByResolution[r], r === resolution),
+      buildHexagonLayer(r, rowsByResolution[r], r === resolution, variableName),
     ).filter((layer) => layer !== null)
-  }, [rowsByResolution, resolution])
+  }, [rowsByResolution, resolution, variableName])
 
   // Called whenever the map moves. Only stores a new resolution when the tier
   // actually changes, so panning and ordinary zooming do not redraw the page.
@@ -360,7 +497,14 @@ export default function App() {
       {stillLoading && <div className="status-message">Loading hexagons...</div>}
 
       {!stillLoading && !error && (
-        <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
+        <div className="top-left-controls">
+          <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
+          <VariableToggle current={variableName} onChange={setVariableName} />
+        </div>
+      )}
+
+      {!stillLoading && !error && (
+        <Legend variable={COLOUR_VARIABLES[variableName]} />
       )}
 
       <Map

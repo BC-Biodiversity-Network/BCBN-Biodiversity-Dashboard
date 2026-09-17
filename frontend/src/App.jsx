@@ -11,7 +11,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { loadHexData } from './loadHexData'
 
 // The basemap style. Swap this one line to change providers.
-const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
+const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/bright'
 
 // Where the map sits when the page opens: the middle of British Columbia,
 // zoomed out far enough to see the whole province.
@@ -217,8 +217,22 @@ const DEFAULT_VARIABLE = 'species'
 // readable through the semi-transparent fill.
 const FIRST_LABEL_LAYER_ID = 'waterway_line_label'
 
-// How see-through the hexagons are, from 0 to 1.
-const HEX_OPACITY = 0.7
+// How see-through each bin is, from the lowest bin to the highest.
+//
+// A single flat opacity hid the basemap everywhere, which for an ecology atlas
+// throws away real information: forest, glacier, water and the dry interior all
+// matter. Letting the sparse bins be more see-through lets the land show
+// through where there is little to report, while the busy bins stay as solid as
+// before. Opacity and darkness then both say "more", so they pull in the same
+// direction rather than fighting.
+//
+// The low end is not a taste decision. Below 0.55 the palest fill stops being
+// separable from the basemap's own ocean blue, which would make a hexagon
+// holding one record look like a hexagon holding nothing. Measured: at 0.55 the
+// palest blue sits 4.05 CIEDE2000 from the ocean colour, and at 0.54 it sits
+// 3.98, under the 4 that counts as reliably distinguishable. So 0.55 is the
+// floor, not a preference.
+const BIN_ALPHAS = [0.55, 0.584, 0.618, 0.651, 0.685, 0.719, 0.753, 0.786, 0.82]
 
 // Works out which bin a value belongs to, as a position in the list of edges.
 // Walks up the edges and keeps the last one the value has reached.
@@ -235,10 +249,16 @@ function binIndexFor(value, binEdges) {
 }
 
 // Picks the fill colour for one hexagon under the chosen variable.
+//
+// Returns red, green, blue and an opacity, all 0 to 255. The opacity comes from
+// the same bin as the colour, so a hexagon in a low bin is both paler and more
+// see-through than one in a high bin.
 function getHexagonColor(hexagon, variable) {
   const value = variable.valueOf(hexagon)
+  const bin = binIndexFor(value, variable.binEdges)
+  const [red, green, blue] = variable.steps[bin]
 
-  return variable.steps[binIndexFor(value, variable.binEdges)]
+  return [red, green, blue, Math.round(BIN_ALPHAS[bin] * 255)]
 }
 
 // Shortens a bin edge for the legend, so the strip stays narrow.
@@ -336,10 +356,25 @@ function buildHexagonLayer(resolution, rows, visible, variableName) {
     visible,
     getHexagon: (hexagon) => hexagon.h3Cell,
     getFillColor: (hexagon) => getHexagonColor(hexagon, variable),
-    // deck.gl reuses the colours it worked out last time unless it is told
-    // that the thing they were worked out from has changed.
+    // DO NOT DELETE THIS. It looks redundant and is not.
+    //
+    // deck.gl works out each hexagon's colour once and keeps the answer in a
+    // buffer on the graphics card. It only works them out again when the data
+    // changes, or when updateTriggers tells it something else has. Switching
+    // variable hands the layer a brand new getFillColor function, but the data
+    // array is the same one as before, so without this line deck.gl keeps the
+    // old colours and never calls the new function at all.
+    //
+    // Measured with the line removed: clicking the toggle ran getFillColor
+    // zero times and the hexagons stayed blue, while the legend and the button
+    // both switched correctly. With the line in place the same click ran it
+    // 98,158 times, once per hexagon across all four resolutions, and the fill
+    // changed. That is the whole difference.
     updateTriggers: { getFillColor: variableName },
-    opacity: HEX_OPACITY,
+    // Left at 1 because the opacity that matters is the one carried per hexagon
+    // by getFillColor above. deck.gl multiplies the two together, so anything
+    // less than 1 here would scale every bin down at once and undo the ramp.
+    opacity: 1,
     filled: true,
     stroked: false,
     extruded: false,

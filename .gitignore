@@ -22,3 +22,7 @@ data/
 !frontend/public/data/
 
 *.parquet
+.env
+
+# Cached LLM responses, regenerable and free to regenerate
+backend/exploration/llm/cache/

@@ -89,6 +89,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
+| `backend/exploration/llm/` | The trial that measures the keyword filter against a model, not part of the product build. `build_test_set.py` draws the labelling sample, `fix_stratum.py` repairs the labelled sheet, `test_key.py` checks the API key, `run_trial.py` runs the model and caches its answers, `check_stability.py` tests reproducibility and `cost_estimate.py` projects the cost of a full pass (described below). |
 | `backend/exploration/archive/` | Superseded early attempts, kept for history: `gbif_bc_boundingBox.py` (bounding box only, the first feasibility check) and `gbif_bc_polygon.py` (first exact-polygon version). Not maintained - read them for context, don't run them. |
 
 ## The Lunaris keyword filter
@@ -242,6 +243,63 @@ basis.
 | `backend/data/lunaris_taxa.parquet` | All 18,931 candidates with the seven taxon columns |
 | `backend/data/lunaris_common_name_map.csv` | The mined common-name map, 2,456 rows |
 | `backend/data/lunaris_no_taxon.csv` | The records that matched nothing, for review |
+
+## The LLM check on the keyword filter
+
+`backend/exploration/llm/` is a trial that measures the Lunaris keyword
+filter against a model. Until now the filter has only ever been checked
+against itself — every review sample was drawn from the records it keeps —
+so recall stayed untested. The trial labels both sides of the split instead.
+
+The scripts, in the order they are used:
+
+**`build_test_set.py`** samples 900 records and writes a CSV for a human to
+label: 500 drawn at random from the 18,931 the keyword filter kept, and 400
+from the 104,548 it dropped. The dropped half is what makes recall
+measurable.
+
+**`fix_stratum.py`** repairs the stratum column in the labelled sheet and
+joins the filter 2 tier columns back on by record id, adding `filter2_found`
+and `filter2_organism`.
+
+**`test_key.py`** sends one small request to check the API key and the model
+name before a long run.
+
+**`run_trial.py`** asks the model about each record and caches every answer
+to disk.
+
+**`check_stability.py`** asks the same records repeatedly to see whether the
+answers are reproducible.
+
+**`cost_estimate.py`** counts tokens and projects the cost of a full pass.
+
+**The model is never asked whether a record is biodiversity data.**
+`run_trial.py` asks only for facts: whether the record concerns living
+things, which organisms it names and at what level (species, group or none),
+what the record is mainly about, and what form it takes. The yes-or-no
+decision is applied afterwards in code, so changing the criteria does not
+mean paying to run everything again.
+
+**Every answer is cached in its own file**, keyed by record id, model name
+and `PROMPT_VERSION`, so an interrupted run resumes at no cost. **Changing
+the prompt or the schema requires bumping `PROMPT_VERSION`** — otherwise the
+old answers are silently reused and the change has no effect. That is the
+easiest mistake to make here.
+
+```
+cd backend
+python exploration/llm/test_key.py
+python exploration/llm/run_trial.py --dry-run --limit 2
+python exploration/llm/run_trial.py --model gemini-3.5-flash-lite
+```
+
+The key goes in `backend/.env` as `GEMINI_API_KEY`, which is gitignored.
+Requires `google-genai` and `python-dotenv`.
+
+The trial runs inside the Gemini free tier, which allows 500 requests a day
+per model, so 900 records takes two days and costs nothing. A full pass over
+all 123,479 harvested records would need billing. The response cache is
+gitignored, because it is regenerable at no cost.
 
 ## Running environment
 

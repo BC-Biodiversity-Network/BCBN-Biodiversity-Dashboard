@@ -26,3 +26,4 @@ data/
 
 # Cached LLM responses, regenerable and free to regenerate
 backend/exploration/llm/cache/
+backend/exploration/llm/for_evan_disagreements.csv

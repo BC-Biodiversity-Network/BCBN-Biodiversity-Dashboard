@@ -451,7 +451,13 @@ def main():
                 break
             cached = {"record_id": record_id, "model": args.model,
                       "prompt_version": PROMPT_VERSION, **result}
-            path.write_text(json.dumps(cached, ensure_ascii=False, indent=1), encoding="utf-8")
+            # Only a real answer goes in the cache. A failure is usually
+            # temporary, such as the model being briefly overloaded, and
+            # caching it would mean this record is never attempted again on a
+            # later run. Leaving it out lets the next run pick it up.
+            if "error" not in cached:
+                path.write_text(json.dumps(cached, ensure_ascii=False, indent=1),
+                                encoding="utf-8")
             fresh_calls += 1
             total_in += cached.get("input_tokens") or 0
             total_out += cached.get("output_tokens") or 0

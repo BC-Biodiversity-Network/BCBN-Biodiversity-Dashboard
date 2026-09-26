@@ -85,11 +85,13 @@ running them from anywhere else quietly writes to the wrong place.
 
 | Folder | Contents |
 | --- | --- |
-| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
+| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). And the BCSEE side: `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BC Species and Ecosystems Explorer (BCSEE) list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
 | `backend/exploration/llm/` | The trial that measures the keyword filter against a model, not part of the product build. `build_test_set.py` draws the labelling sample, `fix_stratum.py` repairs the labelled sheet, `test_key.py` checks the API key, `run_trial.py` runs the model and caches its answers, `check_stability.py` tests reproducibility and `cost_estimate.py` projects the cost of a full pass (described below). |
+| `backend/exploration/bcdc/` | Survey of the BC Data Catalogue, not part of the product build. `survey_bcdc.py` downloads the whole BC Data Catalogue once and sorts every package by licence and by whether it has anything to download. |
+| `backend/exploration/bcsee/` | Finding the BCSEE and Conservation Data Centre sources, not part of the product build. `find_cdc.py` finds Conservation Data Centre and BCSEE packages in that cached catalogue; `probe_bcsee.py` is an earlier keyword search of the live catalogue for BCSEE packages. |
 | `backend/exploration/archive/` | Superseded early attempts, kept for history: `gbif_bc_boundingBox.py` (bounding box only, the first feasibility check) and `gbif_bc_polygon.py` (first exact-polygon version). Not maintained - read them for context, don't run them. |
 
 ## The Lunaris keyword filter
@@ -310,7 +312,7 @@ rather than a `GEOMETRY` column, because 0.10.3 reads a `GEOMETRY` written to
 parquet back as an unusable BLOB. Keep new code inside those constraints, or
 the cluster run will fail even though it works locally.
 
-Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`.
+Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`.
 
 ## Running the front end
 

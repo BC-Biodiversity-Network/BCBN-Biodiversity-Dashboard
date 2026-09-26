@@ -31,10 +31,21 @@ import requests
 CKAN = "https://catalogue.data.gov.bc.ca/api/3/action"
 HEADERS = {"User-Agent": "BCBN-Dashboard probe (UBC Biodiversity Research Centre)"}
 
-# Several phrasings, because a catalogue search is only as good as the words
-# you happen to use, and the official title may not be the obvious one.
+# A catalogue search only finds the words you happen to think of, so this
+# uses several phrasings. The quoted ones are exact phrase matches, which are
+# far more precise than loose words: "conservation status" on its own turns up
+# heritage sites and park planning documents.
+#
+# This is still not a guarantee. One package is titled "CDC BIOTICS Occurence
+# Attributes", misspelled, and no correctly spelled search will ever reach it.
+# That is why the run finishes by counting how many packages each owning
+# organisation holds in total, so the gap between "matched" and "exists" is
+# visible rather than assumed away.
 SEARCHES = [
+    '"Conservation Data Centre"',
+    '"species and ecosystems at risk"',
     "species and ecosystems explorer",
+    "CDC BIOTICS",
     "conservation data centre",
     "BC Conservation Data Centre occurrences",
     "red blue list species",
@@ -61,10 +72,48 @@ def call(action, params):
         return None
 
 
-def search(term):
-    """Return the packages the catalogue finds for one search phrase."""
-    res = call("package_search", {"q": term, "rows": 12})
+def search(term, rows=100):
+    """
+    Return the packages the catalogue finds for one search phrase.
+
+    The row limit matters more than it looks. At the default of 10 a phrase
+    matching 40 packages returns 10 and says nothing about the other 30, so
+    the caller would quietly work from a third of the answer.
+    """
+    res = call("package_search", {"q": term, "rows": rows})
     return res["results"] if res else []
+
+
+def coverage(packages):
+    """
+    Say how much of each owning organisation the search actually reached.
+
+    Everything above finds packages by matching words. This asks a different
+    question: of all the packages these organisations publish, how many did
+    the search see? A low share is a warning that the phrasings are missing
+    things, which is the one weakness word matching cannot detect on its own.
+    """
+    print()
+    print("=" * 76)
+    print("HOW MUCH OF EACH ORGANISATION THIS REACHED")
+    print("=" * 76)
+    print()
+    mine = {}
+    for pkg in packages:
+        org = (pkg.get("organization") or {}).get("name")
+        if org:
+            mine[org] = mine.get(org, 0) + 1
+    for org, matched in sorted(mine.items(), key=lambda kv: -kv[1]):
+        res = call("package_search", {"fq": f"organization:{org}", "rows": 0})
+        total = res["count"] if res else None
+        if total:
+            print(f"  {org:42s} matched {matched:3d} of {total:4d}")
+        else:
+            print(f"  {org:42s} matched {matched:3d} of ?")
+    print()
+    print("  A small share is normal: these organisations publish far more")
+    print("  than conservation data. It is only a problem if something")
+    print("  relevant is sitting in the part that was never looked at.")
 
 
 def describe(pkg):
@@ -134,6 +183,8 @@ def main():
     print("  Look for a CSV or a file geodatabase holding one row per species.")
     print("  A package whose only resource is a link to a web application is")
     print("  not harvestable and should be ruled out now rather than later.")
+
+    coverage(keep)
 
     if keep:
         path = Path(args.out_dir) / "bcsee_catalogue_packages.json"

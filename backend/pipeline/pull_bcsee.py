@@ -24,8 +24,10 @@ province only recorded the month.
 
 Output:
     bcsee_status.parquet   one row per species or community, all 93 columns
-                           with tidy names, plus the date the province made
-                           the file and the date we downloaded it
+                           with tidy names, plus three added columns: where
+                           the data came from (source), the date the province
+                           made the file (source_generated), and the date we
+                           downloaded it (pulled_on)
 
 Usage:
     python pull_bcsee.py

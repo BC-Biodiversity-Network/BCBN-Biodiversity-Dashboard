@@ -53,6 +53,12 @@ HEADERS = {"User-Agent": "BCBN-Dashboard (UBC Biodiversity Research Centre)"}
 DATA_SHEET = "summaryExport"
 INFO_SHEET = "Metadata"
 
+# The columns this script and the report rely on, after tidy_name has been
+# applied. Every other column is kept too, but these must be there. If the
+# province ever renames one, the script stops with a message naming it.
+REQUIRED = ["element_code", "scientific_name", "bc_list",
+            "prov_status", "global_status", "name_category"]
+
 # If the province's copy is older than this, the script still runs but says
 # so loudly. Statuses change a few times a year, so a copy this old may be
 # missing recent changes.
@@ -167,6 +173,15 @@ def read_species(path):
     if repeated:
         raise ValueError(f"two headings became the same name: {repeated}")
     frame.columns = names
+
+    # Check before doing anything else, so a renamed column produces a clear
+    # message instead of an error deep inside pandas.
+    missing = [c for c in REQUIRED if c not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"{path.name} is missing columns this script needs: {missing}. "
+            f"The province may have renamed them. Open the file and check "
+            f"its header row.")
 
     frame = frame.apply(lambda col: col.map(tidy_value))
     frame = frame[frame["element_code"].notna()].copy()

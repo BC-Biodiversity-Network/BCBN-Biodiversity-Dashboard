@@ -16,9 +16,15 @@ the status now".
 Like the rest of the pipeline this rebuilds its output from scratch every
 run, so running it twice is the same as running it once.
 
+Every column from both archives is kept, with tidy names, because nobody
+has yet decided which fields the platform needs. The two files do not have
+the same columns: ecological communities have no taxonomy or federal
+listings, for example. Where a column exists in only one file, rows from the
+other file are left blank in it.
+
 Output:
-    bcsee_history.parquet   one row per entity per year, with the fields
-                            that change over time
+    bcsee_history.parquet   one row per entity per year, every column from
+                            both archives, plus snapshot_year and kind
 
 Usage:
     python build_bcsee_history.py
@@ -28,6 +34,7 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -48,18 +55,28 @@ SOURCES = {
 }
 HEADERS = {"User-Agent": "BCBN-Dashboard (UBC Biodiversity Research Centre)"}
 
-# The archive column each output column comes from. The two files use the
-# same names for these particular fields, which is why one mapping serves
-# both. element_code matches the column of the same name in
-# bcsee_status.parquet, so the two tables can be joined on it.
-COLUMNS = {
-    "element_code": "Element.Code",
-    "scientific_name": "Scientific.Name",
-    "snapshot_year": "Year",
-    "bc_list": "BC.List",
-    "prov_status": "Prov.Status",
-    "global_status": "Global.Status",
+# The columns this script relies on, spelled as they appear in the archive
+# files. Both files have all of these. If the province ever renames one, the
+# script stops with a message naming it, rather than failing somewhere later
+# with an error that looks like a bug in the code.
+REQUIRED = ["Year", "Element.Code", "Scientific.Name",
+            "BC.List", "Prov.Status", "Global.Status"]
+
+# Three archive columns hold the same thing as a column in
+# bcsee_status.parquet but under a different name. Renaming them here means
+# the same field has the same name in both tables. Note that in the older
+# years "sara" packs schedule, status and date into one value, for example
+# "1-E (Jun 2003)", while recent years hold only the schedule number.
+SAME_AS_STATUS = {
+    "sara": "sara_schedule",
+    "mbca": "migratory_bird_convention_act",
+    "biogeoclimatic_units": "bgc",
 }
+
+# Columns to put first in the output, so the ones you look at most are on
+# the left. Every other column follows in the order it appears in the files.
+FIRST_COLUMNS = ["element_code", "kind", "scientific_name", "snapshot_year",
+                 "bc_list", "prov_status", "global_status"]
 
 
 def download(url, path):
@@ -95,9 +112,22 @@ def download(url, path):
     return True
 
 
+def tidy_name(name):
+    """
+    Turn an archive column heading into a short lowercase name.
+
+    The archives separate words with dots, like "Element.Code". This turns
+    that into "element_code", the same style pull_bcsee.py uses, so the two
+    tables share names wherever they describe the same thing. Anything that
+    is not a letter or a digit becomes a single underscore.
+    """
+    name = re.sub(r"[^0-9a-zA-Z]+", "_", str(name)).strip("_")
+    return name.lower()
+
+
 def read_archive(path, kind):
     """
-    Read one archive file and keep only the columns the history needs.
+    Read one archive file, keep every column, and tidy it into shape.
 
     Two things make a plain read wrong. The files are latin-1 rather than
     UTF-8, and the last several rows are a contact address and an
@@ -110,22 +140,40 @@ def read_archive(path, kind):
     except UnicodeDecodeError:
         d = pd.read_csv(path, low_memory=False, encoding="latin-1", dtype=str)
 
+    # Check before doing anything else, so a renamed column produces a clear
+    # message instead of an error deep inside pandas.
+    missing = [c for c in REQUIRED if c not in d.columns]
+    if missing:
+        raise ValueError(
+            f"{path.name} is missing columns this script needs: {missing}. "
+            f"The province may have renamed them. Open the file and check "
+            f"its header row.")
+
     year = pd.to_numeric(d["Year"], errors="coerce")
     notes = int(year.isna().sum())
     d = d[year.notna()].copy()
 
-    out = pd.DataFrame({new: d[old] for new, old in COLUMNS.items()})
-    out["snapshot_year"] = year[year.notna()].astype(int)
-    out["kind"] = kind
+    names = [tidy_name(c) for c in d.columns]
+    repeated = sorted({n for n in names if names.count(n) > 1})
+    if repeated:
+        raise ValueError(f"two headings in {path.name} became the same "
+                         f"name: {repeated}")
+    d.columns = names
+
+    # "year" becomes a whole number and is renamed, so it cannot be confused
+    # with any date column and is clearly the year of the snapshot.
+    d = d.rename(columns={"year": "snapshot_year", **SAME_AS_STATUS})
+    d["snapshot_year"] = year[year.notna()].astype(int)
+    d["kind"] = kind
 
     # A handful of rows carry a year and nothing else, not even a code. They
     # cannot be linked to any entity, so they are dropped and counted.
-    blank = out["element_code"].isna() | (out["element_code"].str.strip() == "")
-    out = out[~blank].copy()
-    print(f"  {path.name}: {len(out):,} rows, dropped {notes} note rows and "
-          f"{int(blank.sum())} blank rows, "
-          f"{out['snapshot_year'].min()} to {out['snapshot_year'].max()}")
-    return out
+    blank = d["element_code"].isna() | (d["element_code"].str.strip() == "")
+    d = d[~blank].copy()
+    print(f"  {path.name}: {len(d):,} rows, {len(d.columns)} columns, "
+          f"dropped {notes} note rows and {int(blank.sum())} blank rows, "
+          f"{d['snapshot_year'].min()} to {d['snapshot_year'].max()}")
+    return d
 
 
 def tidy_text(frame):
@@ -182,8 +230,9 @@ def report(history):
     print("RESULT")
     print("=" * 70)
     print()
-    print(f"  {len(history):,} rows, {history['element_code'].nunique():,} "
-          f"entities, {history['snapshot_year'].min()} to "
+    print(f"  {len(history):,} rows, {len(history.columns)} columns, "
+          f"{history['element_code'].nunique():,} entities, "
+          f"{history['snapshot_year'].min()} to "
           f"{history['snapshot_year'].max()}")
     print(f"  {history['kind'].value_counts().to_dict()}")
     dupes = int(history.duplicated(["element_code", "snapshot_year"]).sum())
@@ -191,6 +240,25 @@ def report(history):
     changed = history.groupby("element_code")["prov_status"].nunique()
     print(f"  entities whose provincial status changed at least once: "
           f"{int((changed > 1).sum()):,}")
+
+    # A value never seen before, such as a new spelling of a list name,
+    # shows up here as an extra line.
+    latest = history["snapshot_year"].max()
+    print()
+    print(f"  by BC list, in {latest}")
+    counts = history.loc[history["snapshot_year"] == latest, "bc_list"]
+    for value, n in counts.value_counts(dropna=False).items():
+        print(f"    {str(value):16s} {n:7,}")
+
+    # Columns that exist in only one of the two files are blank for every
+    # row from the other file. Listing them makes that expected gap visible.
+    print()
+    print("  columns only in one file (blank for the other kind)")
+    for col in history.columns:
+        filled = history.groupby("kind")[col].apply(lambda s: s.notna().any())
+        if not filled.all():
+            only = ", ".join(k for k, v in filled.items() if v)
+            print(f"    {col:32s} {only}")
 
 
 def main():
@@ -234,9 +302,8 @@ def main():
         read_archive(paths["communities"], "ecological_community"),
     ], ignore_index=True)
     history = tidy_text(history)
-    history = history[["element_code", "kind", "scientific_name",
-                       "snapshot_year", "bc_list", "prov_status",
-                       "global_status"]]
+    rest = [c for c in history.columns if c not in FIRST_COLUMNS]
+    history = history[FIRST_COLUMNS + rest]
 
     print()
     print("=" * 70)

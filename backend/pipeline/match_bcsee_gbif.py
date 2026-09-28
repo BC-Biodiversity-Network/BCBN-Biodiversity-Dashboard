@@ -1,11 +1,21 @@
 """
-Match every BCSEE species name to its GBIF species number.
+Match every BCSEE species name to its GBIF species key.
 
 BCSEE gives each species its own code (element_code) and GBIF gives each
-species its own number (speciesKey). The two systems were built separately,
+species its own key (speciesKey). The two systems were built separately,
 so nothing links them yet. This script asks GBIF's name matching service,
 one BCSEE name at a time, "which of your species is this?", and saves the
 answers as a lookup table from element_code to speciesKey.
+
+Which checklist: GBIF's version 2 matching service, against the Catalogue
+of Life checklist (CHECKLIST_KEY). bc_clean.parquet comes from GBIF's
+monthly cloud snapshot, which files every observation under a Catalogue
+of Life key, a short code such as 63Z5D for Abies amabilis. The older
+matching service, and version 2 without a checklist, answer with GBIF's
+old backbone numbers instead (2685524 for the same tree), which appear
+nowhere in the snapshot. Catalogue of Life keys can change between
+releases, so rerun this script with --refresh whenever a new GBIF snapshot
+is downloaded.
 
 Everything else from the Conservation Data Centre can then reach GBIF
 through that one table: the status history and the public occurrence areas
@@ -15,16 +25,21 @@ What is sent: each name is asked about in up to two steps.
 
   1. The scientific name, plus BCSEE's kingdom, phylum, class, order and
      family as hints. The hints keep GBIF from matching a name to a
-     look-alike in the wrong group (a water mite to a wasp, a bee to an
-     orchid).
+     look-alike in the wrong group. With GBIF's older version 1 service,
+     a name alone matched a water mite to a wasp and a bee to an orchid;
+     version 2 did not repeat these in testing, but the risk is the same.
   2. If that answer is not an exact match, the name alone. Hints can do
      harm too: where BCSEE files a species in a different family or
      kingdom than GBIF, GBIF prefers a similar name inside the hinted
-     family over the exact name elsewhere (Irpex lacteus came back as
+     family over the exact name elsewhere (Irpex lacteus comes back as
      Irpex lacer). The name-only answer replaces the first one only if it
      is an exact match, its kingdom agrees with BCSEE's group, and, for
      animals, its class agrees with BCSEE's class (or its order, when GBIF
      gives no class). Column gbif_answer_from says which answer was kept.
+
+The kingdom, class, order and family of an answer come from its
+classification list, and gbif_species_key is the key of the SPECIES entry
+in that list.
 
 What is not sent: the 632 ecological communities and 2 ecological systems.
 GBIF has no such thing, so they can never match.
@@ -33,19 +48,19 @@ Names are sent exactly as BCSEE writes them. For a population such as
 "Oncorhynchus tshawytscha pop. 36", GBIF drops the "pop. 36" by itself and
 returns the species, marked as a match at a higher rank.
 
-Which GBIF number to join on: use gbif_species_key, and only in rows where
-join_ok is true. For a subspecies it is the number of the species it
-belongs to, and for an outdated name GBIF has already pointed it at the
-name it accepts today. GBIF observations almost never record a subspecies,
-so joining on the subspecies number would miss nearly everything.
+Which GBIF key to join on: use gbif_species_key, and only in rows where
+join_ok is true. For a subspecies it is the key of the species it belongs
+to, and for an outdated name GBIF has already pointed it at the name it
+accepts today. GBIF observations almost never record a subspecies, so
+joining on the subspecies key would miss nearly everything.
 
 join_ok is true only for an exact match, or for a population, subspecies
 or variety that GBIF matched to its species, and never for a placeholder
 name such as "Cottus sp. 9" or "Steiroxys cf. strepens". Close-spelling
-(FUZZY) matches are left out for now, even at confidence 100: most are the
-same species spelled with a different Latin ending, but some are a
-different species (Russula albida came back as Russula alpium), and the
-two cannot yet be told apart without a person checking. needs_review marks
+matches (VARIANT, and the rarer CANONICAL and AMBIGUOUS) are left out for
+now, even at confidence 100: most are the same species spelled with a
+different Latin ending, but some can be a different species, and the two
+cannot yet be told apart without a person checking. needs_review marks
 those rows, and the few other answers that look odd, for that check.
 
 GBIF's answers are saved as they arrive, so a run that stops halfway picks
@@ -55,7 +70,8 @@ changed. Use --refresh to ask about every name again.
 Output:
     bcsee_gbif_match.parquet   one row per BCSEE species, subspecies,
                                variety or population, with what GBIF matched
-                               it to, how sure GBIF was, and the join_ok and
+                               it to, how sure GBIF was, the checklist used
+                               (gbif_checklist_key), and the join_ok and
                                needs_review flags
 
 Usage:
@@ -76,10 +92,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import duckdb
+import numpy as np
+import pandas as pd
 import requests
 
 
-MATCH_URL = "https://api.gbif.org/v1/species/match"
+MATCH_URL = "https://api.gbif.org/v2/species/match"
+
+# The Catalogue of Life checklist, the one GBIF's cloud snapshot (and so
+# bc_clean.parquet) uses for its species keys. Without it, GBIF answers
+# with its old backbone numbers, which cannot be joined to the snapshot.
+CHECKLIST_KEY = "7ddf754f-d193-4cc9-b351-99906754a03b"
 HEADERS = {"User-Agent": "BCBN-Dashboard (UBC Biodiversity Research Centre)"}
 
 # The kinds of BCSEE entry that are sent to GBIF. Everything else is an
@@ -87,6 +110,7 @@ HEADERS = {"User-Agent": "BCBN-Dashboard (UBC Biodiversity Research Centre)"}
 LEVELS_TO_MATCH = ["Species", "Subspecies", "Variety", "Population"]
 
 # BCSEE column name on the left, the name GBIF expects on the right.
+# Checked against GBIF's matching service source code on 2026-09-27.
 HINTS = {"kingdom": "kingdom", "phylum": "phylum", "class": "class",
          "order": "order", "family": "family"}
 
@@ -101,17 +125,20 @@ KINGDOM_BY_GROUP = {
 }
 ANIMAL_GROUPS = {"Invertebrate Animal", "Vertebrate Animal"}
 
-# BCSEE class names that GBIF writes differently, with the GBIF classes
-# each may appear as. Without this, a name-only answer for any reptile,
-# turtle, shark, lamprey or earthworm would fail the class check. A class
-# not listed here must match GBIF's exactly. GBIF gives ray-finned fish no
-# class at all; for those the order is compared instead.
+# BCSEE class names that the Catalogue of Life writes differently, with
+# the classes each may appear as there. Without this, a name-only answer
+# for any fish, soft coral, turtle, shark, lamprey or earthworm would fail
+# the class check. A class not listed here must match exactly. For the few
+# answers with no class at all, the order is compared instead. Checked
+# against the first answers on 2026-09-27; recheck when the checklist
+# changes.
 CLASS_NAMES = {
-    "Chelonia": {"Testudines"},
-    "Reptilia": {"Squamata"},
+    "Actinopterygii": {"Teleostei", "Chondrostei"},
+    "Anthozoa": {"Anthozoa", "Octocorallia"},
+    "Chelonia": {"Reptilia"},
+    "Chondrichthyes": {"Elasmobranchii", "Holocephali"},
     "Oligochaeta": {"Clitellata"},
     "Petromyzontida": {"Petromyzonti"},
-    "Chondrichthyes": {"Elasmobranchii", "Holocephali"},
 }
 
 # A BCSEE name for an undescribed or uncertain species: "Cottus sp. 9",
@@ -138,8 +165,9 @@ WORKERS = 4
 RETRIES = 3
 WAIT = 2
 
-# The fields kept from each GBIF answer, GBIF's name on the left and the
-# output column on the right. Any field GBIF leaves out becomes a blank.
+# The fields kept from each GBIF answer, as flatten() names them on the
+# left and the output column on the right. Any field GBIF leaves out
+# becomes a blank.
 KEEP = {
     "matchType": "gbif_match_type",
     "status": "gbif_status",
@@ -155,9 +183,24 @@ KEEP = {
     "note": "gbif_note",
 }
 
-# The output columns that hold whole numbers. Every other column is text.
-NUMBER_COLUMNS = {"gbif_confidence", "gbif_usage_key",
-                  "gbif_accepted_usage_key", "gbif_species_key"}
+# The output columns that hold whole numbers. Every other column is text,
+# including the Catalogue of Life keys, which are short codes like 63Z5D.
+NUMBER_COLUMNS = {"gbif_confidence"}
+
+# Match types that mean "a name like this one", not the name itself. They
+# are never joined until a person has checked them.
+#   VARIANT    a spelling GBIF counts as the same name (often only the
+#              Latin ending differs)
+#   CANONICAL  matched on the bare name, ignoring author or rank
+#   AMBIGUOUS  several names fit and GBIF could not choose
+REVIEW_MATCH_TYPES = {"VARIANT", "CANONICAL", "AMBIGUOUS"}
+
+# Statuses that mean the name may stand for more than one species, so its
+# species key may be the wrong one. Treated like a close spelling: never
+# joined until a person has checked it.
+#   AMBIGUOUS_SYNONYM  the name points to more than one species
+#   MISAPPLIED         the name was once used by mistake for another species
+REVIEW_STATUSES = {"AMBIGUOUS_SYNONYM", "MISAPPLIED"}
 
 # Each thread gets its own connection to GBIF, because one connection shared
 # between threads can mix up their answers.
@@ -197,7 +240,8 @@ def question(row):
     Blank hints are left out rather than sent empty, because an empty hint
     could be read as "this species has no family".
     """
-    params = {"name": row["scientific_name"]}
+    params = {"scientificName": row["scientific_name"],
+              "checklistKey": CHECKLIST_KEY}
     for ours, theirs in HINTS.items():
         value = row[ours]
         if isinstance(value, str) and value.strip():
@@ -209,9 +253,10 @@ def cache_key(element_code, params):
     """
     Label one question so its answer can be found again later.
 
-    The label contains the code and everything sent. If BCSEE changes a
-    name or a hint in a later pull, the label changes too, so that entry is
-    asked again instead of reusing an answer to a different question.
+    The label contains the code and everything sent, the checklist
+    included. If BCSEE changes a name or a hint in a later pull, or the
+    checklist changes, the label changes too, so that entry is asked again
+    instead of reusing an answer to a different question.
     """
     return element_code + "|" + json.dumps(params, sort_keys=True)
 
@@ -299,9 +344,46 @@ def ask_missing(questions, answers, fh):
     return failed
 
 
+def flatten(answer):
+    """
+    Pull the fields this script uses out of one GBIF version 2 answer.
+
+    The matched name is in "usage", the accepted name for a synonym in
+    "acceptedUsage", and matchType and confidence in "diagnostics".
+    Kingdom, class, order and family come from the "classification" list,
+    which for a synonym is the accepted name's. The species key is the key
+    of the SPECIES entry in that list: for a subspecies it is the species
+    it belongs to, and for a genus-level match there is none. A no-match
+    answer has only "diagnostics", so every other field comes back blank.
+    """
+    usage = answer.get("usage") or {}
+    diagnostics = answer.get("diagnostics") or {}
+    ranks = {c.get("rank"): c for c in answer.get("classification") or []}
+    notes = list(diagnostics.get("issues") or [])
+    if diagnostics.get("note"):
+        notes.append(diagnostics["note"])
+    return {
+        "matchType": diagnostics.get("matchType"),
+        "confidence": diagnostics.get("confidence"),
+        "status": usage.get("status"),
+        "rank": usage.get("rank"),
+        "usageKey": usage.get("key"),
+        "acceptedUsageKey": (answer.get("acceptedUsage") or {}).get("key"),
+        "speciesKey": ranks.get("SPECIES", {}).get("key"),
+        "scientificName": usage.get("name"),
+        "canonicalName": usage.get("canonicalName"),
+        "kingdom": ranks.get("KINGDOM", {}).get("name"),
+        "class": ranks.get("CLASS", {}).get("name"),
+        "order": ranks.get("ORDER", {}).get("name"),
+        "family": ranks.get("FAMILY", {}).get("name"),
+        "note": "; ".join(notes) or None,
+    }
+
+
 def check_name_only(row, answer):
     """
-    Decide whether a name-only answer can replace the answer with hints.
+    Decide whether a name-only answer, as flatten() returns it, can
+    replace the answer with hints.
 
     Returns None if it can, or the reason it cannot: "not exact",
     "kingdom", or "class" (the class, or the order when GBIF gives no
@@ -346,8 +428,10 @@ def match_all(rows, cache_path, refresh):
         second_keys = {}
         for i, (params, key) in enumerate(zip(firsts, first_keys)):
             answer = answers.get(key)
-            name_only = {"name": params["name"]}
-            if answer is None or answer.get("matchType") == "EXACT" or name_only == params:
+            name_only = {"scientificName": params["scientificName"],
+                         "checklistKey": CHECKLIST_KEY}
+            if (answer is None or flatten(answer)["matchType"] == "EXACT"
+                    or name_only == params):
                 continue
             second_keys[i] = (cache_key(rows.at[i, "element_code"], name_only), name_only)
         print()
@@ -361,12 +445,12 @@ def match_all(rows, cache_path, refresh):
     rows["gbif_answer_from"] = None
     second = []
     for i, key in enumerate(first_keys):
-        answer = answers.get(key)
-        if answer is None:
+        if key not in answers:
             continue
+        answer = flatten(answers[key])
         source = "with_hints"
         if i in second_keys and second_keys[i][0] in answers:
-            other = answers[second_keys[i][0]]
+            other = flatten(answers[second_keys[i][0]])
             reason = check_name_only(rows.loc[i], other)
             second.append({"row": i, "first": answer, "second": other,
                            "rejected": reason})
@@ -385,6 +469,7 @@ def match_all(rows, cache_path, refresh):
         else:
             rows[out] = rows[out].astype("string")
     rows["gbif_answer_from"] = rows["gbif_answer_from"].astype("string")
+    rows["gbif_checklist_key"] = CHECKLIST_KEY
     return rows, second, failed
 
 
@@ -395,25 +480,47 @@ def add_flags(rows):
 
     join_ok: safe to join to GBIF observations on gbif_species_key. The
     match is exact, or GBIF gave the species for a BCSEE level below
-    species, and the name is not a placeholder.
+    species, the name is not a placeholder, and its status is not one of
+    REVIEW_STATUSES.
 
-    needs_review: a person should look at it. Every close-spelling match,
-    every placeholder name GBIF gave a species number anyway, and a BCSEE
+    needs_review: a person should look at it. Every close-spelling match
+    (REVIEW_MATCH_TYPES), every answer with a status in REVIEW_STATUSES,
+    every placeholder name GBIF gave a species key anyway, and a BCSEE
     species that GBIF matched to a species "at a higher rank".
     """
     has_key = rows["gbif_species_key"].notna().to_numpy()
     match = rows["gbif_match_type"].fillna("").to_numpy()
     rank = rows["gbif_rank"].fillna("").to_numpy()
     level = rows["classification_level"]
+    unclear = rows["gbif_status"].isin(REVIEW_STATUSES).to_numpy()
     placeholder = rows["scientific_name"].str.contains(PLACEHOLDER).to_numpy()
     species_above = (match == "HIGHERRANK") & (rank == "SPECIES")
     right_match = (match == "EXACT") | (species_above & level.isin(BELOW_SPECIES).to_numpy())
 
-    rows["join_ok"] = has_key & right_match & ~placeholder
-    rows["needs_review"] = ((match == "FUZZY")
+    rows["join_ok"] = has_key & right_match & ~placeholder & ~unclear
+    rows["needs_review"] = (np.isin(match, list(REVIEW_MATCH_TYPES))
+                            | unclear
                             | (placeholder & has_key)
                             | (species_above & (level == "Species").to_numpy()))
     return rows
+
+
+def plain_text_columns(frame):
+    """
+    Return a copy of the table with every text column in the oldest,
+    most widely understood text format, and blanks as true blanks.
+
+    pandas 3 stores text in a new format. Older copies of DuckDB, like the
+    0.10.3 on the lab server, do not recognise it and stop with "Data type
+    'str' not recognized". Converting text columns back to the old general
+    format first lets any DuckDB version read the table.
+    """
+    out = frame.copy()
+    for col in out.columns:
+        if pd.api.types.is_string_dtype(out[col].dtype):
+            values = out[col].astype(object)
+            out[col] = values.where(values.notna(), None)
+    return out
 
 
 def write_parquet(frame, path):
@@ -425,7 +532,7 @@ def write_parquet(frame, path):
     """
     tmp = path.with_suffix(path.suffix + ".partial")
     con = duckdb.connect()
-    con.register("staging", frame)
+    con.register("staging", plain_text_columns(frame))
     con.execute(f"COPY (SELECT * FROM staging) TO '{tmp}' "
                 f"(FORMAT PARQUET, COMPRESSION ZSTD)")
     con.close()
@@ -463,31 +570,38 @@ def report(frame, second, left_out):
     print("  not joined, by reason")
     left = frame[~join_ok]
     no_key = left["gbif_species_key"].isna()
-    fuzzy = ~no_key & (left["gbif_match_type"] == "FUZZY")
-    placeholder = (~no_key & ~fuzzy
+    fuzzy = ~no_key & left["gbif_match_type"].isin(REVIEW_MATCH_TYPES)
+    unclear = ~no_key & ~fuzzy & left["gbif_status"].isin(REVIEW_STATUSES)
+    placeholder = (~no_key & ~fuzzy & ~unclear
                    & left["scientific_name"].str.contains(PLACEHOLDER))
-    for label, n in [("no species number", no_key.sum()),
-                     ("close spelling (FUZZY)", fuzzy.sum()),
-                     ("placeholder name", placeholder.sum()),
-                     ("other", len(left) - no_key.sum() - fuzzy.sum()
-                      - placeholder.sum())]:
+    reasons = [("no species key", no_key.sum()),
+               ("close spelling", fuzzy.sum()),
+               ("ambiguous or misapplied", unclear.sum()),
+               ("placeholder name", placeholder.sum())]
+    reasons.append(("other", len(left) - sum(n for _, n in reasons)))
+    for label, n in reasons:
         print(f"    {label:24s} {int(n):7,}")
 
     print()
     print("  how the name matched")
-    print("    EXACT = same name, FUZZY = close spelling, HIGHERRANK = only a")
-    print("    level above (genus, or the species for a population), NONE = no match")
+    print("    EXACT = same name, VARIANT = a spelling GBIF counts as the same")
+    print("    name (often only the Latin ending differs), CANONICAL = matched on")
+    print("    the bare name, ignoring author or rank, AMBIGUOUS = several names")
+    print("    fit and GBIF could not choose, HIGHERRANK = only a level above")
+    print("    (genus, or the species for a population), NONE = no match,")
+    print("    UNSUPPORTED = a name GBIF can never match, such as a placeholder")
     for value, n in answered["gbif_match_type"].value_counts(dropna=False).items():
-        print(f"    {str(value):20s} {n:7,}")
+        print(f"    {str(value):24s} {n:7,}")
 
     print()
     print("  what GBIF thinks of the name")
-    print("    ACCEPTED = current name, SYNONYM = outdated name that GBIF")
-    print("    points to a newer one, HETEROTYPIC_SYNONYM = a synonym first")
-    print("    described as a separate species and later merged into another,")
-    print("    DOUBTFUL = GBIF is unsure the name is valid")
+    print("    ACCEPTED = current name, PROVISIONALLY_ACCEPTED = treated as")
+    print("    current but doubtful, SYNONYM = outdated name that GBIF points to")
+    print("    a newer one, AMBIGUOUS_SYNONYM = a name that points to more than")
+    print("    one species, MISAPPLIED = a name once used by mistake for another")
+    print("    species, BARE_NAME = a name with no taxonomic use, <NA> = no match")
     for value, n in answered["gbif_status"].value_counts(dropna=False).items():
-        print(f"    {str(value):20s} {n:7,}")
+        print(f"    {str(value):24s} {n:7,}")
 
     print()
     print("  higher rank matches, by BCSEE level")
@@ -620,7 +734,7 @@ def main():
     print("ASKING GBIF")
     print("=" * 70)
     print()
-    rows, second, failed = match_all(rows, raw / "gbif_match_answers.jsonl",
+    rows, second, failed = match_all(rows, raw / "gbif_match_answers_v2.jsonl",
                                      args.refresh)
     rows = add_flags(rows)
     rows["matched_on"] = dt.date.today().isoformat()

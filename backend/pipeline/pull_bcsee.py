@@ -195,6 +195,24 @@ def read_species(path):
     return frame
 
 
+def plain_text_columns(frame):
+    """
+    Return a copy of the table with every text column in the oldest,
+    most widely understood text format, and blanks as true blanks.
+
+    pandas 3 stores text in a new format. Older copies of DuckDB, like the
+    0.10.3 on the lab server, do not recognise it and stop with "Data type
+    'str' not recognized". Converting text columns back to the old general
+    format first lets any DuckDB version read the table.
+    """
+    out = frame.copy()
+    for col in out.columns:
+        if pd.api.types.is_string_dtype(out[col].dtype):
+            values = out[col].astype(object)
+            out[col] = values.where(values.notna(), None)
+    return out
+
+
 def write_parquet(frame, path):
     """
     Write the table, and do it so a failed run cannot leave a broken file.
@@ -205,7 +223,7 @@ def write_parquet(frame, path):
     """
     tmp = path.with_suffix(path.suffix + ".partial")
     con = duckdb.connect()
-    con.register("staging", frame)
+    con.register("staging", plain_text_columns(frame))
     con.execute(f"COPY (SELECT * FROM staging) TO '{tmp}' "
                 f"(FORMAT PARQUET, COMPRESSION ZSTD)")
     con.close()

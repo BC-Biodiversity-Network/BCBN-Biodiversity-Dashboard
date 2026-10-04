@@ -66,6 +66,36 @@ GBIF publishes a new snapshot, then Layers 2 and 3.
 
 ## Building from a GBIF Darwin Core Archive download
 
+This path is replacing the three layers above. The first step,
+`request_gbif_download.py`, replaces `download_bc_raw.py`, which is kept for
+now.
+
+**`backend/pipeline/request_gbif_download.py` -> `<key>.zip`, `<key>.download.json`**
+Asks GBIF for a Darwin Core Archive download of every PRESENT record inside
+the polygon in `bc_boundary_gbif.wkt` (from `make_gbif_boundary.py`). The
+download uses the Catalogue of Life taxonomy (the same checklist as
+`match_bcsee_gbif.py`) and includes the Multimedia extension. The script saves
+the download key as soon as GBIF returns it, checks the status every
+`--poll-minutes` (default 5) until the download is ready, which can take
+hours for all of BC, and then downloads the zip. `<key>.download.json`, saved
+next to the zip, holds the key, the DOI, the record count and the request
+sent. `--dry-run` only prints the request. `--key <key>` picks up an existing
+download (no new request, just wait and download), so a stopped run can
+continue. It doesn't download a zip that is already complete.
+
+Submitting needs your GBIF.org account in three environment variables, which
+the script never prints or saves: `GBIF_USER` (your username, not your
+email), `GBIF_PWD` and `GBIF_EMAIL` (where GBIF sends the "download ready"
+email). `--dry-run` and `--key` don't need them. GBIF only lets one user run
+a few downloads at once.
+
+```
+cd backend
+python pipeline/request_gbif_download.py --dry-run
+python pipeline/request_gbif_download.py --outdir ~/bcbn/data
+python pipeline/request_gbif_download.py --key <download key> --outdir ~/bcbn/data
+```
+
 **`backend/pipeline/build_dwca_tables.py` -> `bc_occurrence`, `bc_media`, `bc_datasets`, `bc_species_image`, `download_info.json`**
 Builds the dashboard's tables from a GBIF download in Darwin Core Archive
 format (the zip GBIF makes for a download request, filtered with
@@ -131,7 +161,7 @@ running them from anywhere else quietly writes to the wrong place.
 
 | Folder | Contents |
 | --- | --- |
-| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from a GBIF Darwin Core Archive download instead, using the same filter as `build_bc_clean.py` (described above). `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). And the BCSEE side: `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BC Species and Ecosystems Explorer (BCSEE) list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
+| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip, replacing `download_bc_raw.py`. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download instead, using the same filter as `build_bc_clean.py` (described above). `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). And the BCSEE side: `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BC Species and Ecosystems Explorer (BCSEE) list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |

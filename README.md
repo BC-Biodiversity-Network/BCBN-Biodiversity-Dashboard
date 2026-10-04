@@ -126,13 +126,29 @@ metadata of every dataset.
 - `download_info.json`: the download key, DOI, date and query. The DOI comes
   from the GBIF download API when the archive doesn't include it.
 
-The script extracts `occurrence.txt` and `multimedia.txt` to a temporary
-folder first, since DuckDB can't read inside a zip. A full BC download needs
-tens of GB there; `--workdir` chooses where.
+DuckDB can't read inside a zip, so the script extracts `occurrence.txt` and
+`multimedia.txt`, one at a time, to a temporary folder in `--workdir`. It
+never extracts `verbatim.txt`. Each text file is deleted as soon as it has
+been copied to parquet, and the folder is deleted at the end, even if the run
+fails. Every step streams: DuckDB spills to the temporary folder when it
+reaches `--memory-limit`, and the Python passes go a batch at a time.
+
+For a full BC download (about 43M records, `occurrence.txt` about 50 GB):
+
+- **Disk:** about 60 GB free in `--workdir`. The peak comes while
+  `occurrence.txt` (50 GB) and its parquet copy (about 4 GB) are both there.
+  Allow up to 15 GB more if DuckDB spills a lot. `--outdir` needs about 3 GB
+  for the tables.
+- **Memory:** `--memory-limit` plus about 1.5 GB for Python. With
+  `--memory-limit 8GB`, ask for a 12 GB job.
+- **Time:** from the test download scaled up, roughly an hour on DuckDB
+  0.10.3. This is a rough guess; the script prints the elapsed time at each
+  step.
 
 ```
 cd backend
-python pipeline/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca
+python pipeline/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
+    --workdir /scratch/$USER --memory-limit 8GB --threads 8
 ```
 
 ## Validation
@@ -388,7 +404,13 @@ rather than a `GEOMETRY` column, because 0.10.3 reads a `GEOMETRY` written to
 parquet back as an unusable BLOB. Keep new code inside those constraints, or
 the cluster run will fail even though it works locally.
 
-Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`.
+DuckDB's h3 extension only exists from DuckDB 1.0 on, so
+`build_dwca_tables.py` computes H3 cells with the `h3` Python package
+instead. It wraps the same H3 library, and the cells came out identical on
+the test download. (`build_hex_aggregates.py` still uses the extension, so it
+can't run on 0.10.3.)
+
+Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`, `pyarrow`, `h3`.
 
 ## Running the front end
 

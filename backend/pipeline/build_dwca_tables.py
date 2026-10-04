@@ -32,14 +32,27 @@ How the occurrence table is built:
   2. That file is passed to build_bc_clean.build_clean(), so the filters and
      the boundary clip are the exact same code that makes bc_clean.
   3. The H3 cells are computed straight from the coordinates, the same way
-     build_hex_aggregates.py bins records, once per resolution.
+     build_hex_aggregates.py bins records, once per resolution. This uses the
+     h3 Python package, which wraps the same H3 library as duckdb's h3
+     extension, because that extension does not exist for the cluster's
+     DuckDB 0.10.3. The cells are added in batches while bc_occurrence is
+     written.
 
-DuckDB cannot read inside a zip, so occurrence.txt and multimedia.txt are
-extracted to a temporary folder first (--workdir picks where; a full BC
-download needs tens of GB there).
+Disk and memory: DuckDB cannot read inside a zip, so only occurrence.txt and
+multimedia.txt are extracted to a temporary folder (--workdir picks where),
+never verbatim.txt. occurrence.txt is deleted as soon as it has been copied to
+parquet, and the whole folder is deleted at the end. Every step streams:
+DuckDB reads and writes the files in chunks and spills to that folder when it
+reaches --memory-limit, and the Python passes over multimedia.txt and over the
+kept records go a batch at a time. For a full BC download (about 43M records,
+occurrence.txt about 50 GB) plan on roughly 60 GB free in --workdir and
+--memory-limit 8GB to 10GB; the script prints how much temporary space it
+used at the end.
+
+Works on DuckDB 0.10.3 (the cluster's version) and newer.
 
 Run:
-    python build_dwca_tables.py --zip ~/bcbn/data/0009659-260928105237408.zip --outdir ~/bcbn/data/dwca
+    python build_dwca_tables.py --zip ~/bcbn/data/0009659-260928105237408.zip --outdir ~/bcbn/data/dwca --workdir /scratch/$USER --memory-limit 8GB
 """
 
 import argparse
@@ -52,6 +65,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import duckdb
+import h3
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
@@ -180,24 +194,55 @@ def read_header(txt_path):
         return f.readline().rstrip("\r\n").split("\t")
 
 
-def connect():
-    """Open a duckdb connection with the h3 and spatial extensions loaded,
-    and a macro that turns GBIF's date text into a timestamp."""
-    con = duckdb.connect()
-    con.execute("INSTALL h3 FROM community; LOAD h3;")
+def log(t_start, message):
+    """Print a progress line with the time since t_start, as [h:mm:ss]."""
+    elapsed = int(time.time() - t_start)
+    print(f"[{elapsed // 3600}:{elapsed // 60 % 60:02d}:{elapsed % 60:02d}] {message}",
+          flush=True)
+
+
+def dir_size(path):
+    """Return the total size in bytes of the files under path."""
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass  # a spill file DuckDB removed while we were counting
+    return total
+
+
+def connect(threads, memory_limit, temp_dir):
+    """Open a duckdb connection with the spatial extension loaded, a memory
+    limit, a folder to spill to when it is reached, and a macro that turns
+    GBIF's date text into a timestamp."""
+    con = duckdb.connect(config={"threads": threads, "memory_limit": memory_limit})
+    con.execute(f"SET temp_directory='{temp_dir}'")
     con.execute("INSTALL spatial; LOAD spatial;")
     # GBIF writes dates as text in several shapes: "1934", "1965-09",
     # "2020-09-10T09:05:43Z", or a range like "1988-07-04/1988-07-09". The
     # GBIF snapshot, and so bc_clean, stores the start of a range, without
     # the "Z", with a missing month or day filled in as 01. Checked against
     # bc_clean on the 175,347 records this test download shares with it.
+    # A time with no seconds ("2014-05-11T13:05", 16 characters) gets ":00",
+    # because DuckDB 0.10.3 cannot cast it without them.
+    #
+    # gbif_date_start is the part before any "/", without the "Z". nullif is
+    # there because DuckDB 0.10.3's split_part turns NULL into '', which
+    # would then fail the cast; newer versions keep NULL.
+    con.execute(
+        "CREATE MACRO gbif_date_start(txt) AS "
+        "nullif(rtrim(split_part(txt, '/', 1), 'Z'), '')"
+    )
     con.execute(
         """
         CREATE MACRO gbif_timestamp(txt) AS (
-            CASE length(rtrim(split_part(txt, '/', 1), 'Z'))
-                WHEN 4 THEN rtrim(split_part(txt, '/', 1), 'Z') || '-01-01'
-                WHEN 7 THEN rtrim(split_part(txt, '/', 1), 'Z') || '-01'
-                ELSE rtrim(split_part(txt, '/', 1), 'Z')
+            CASE length(gbif_date_start(txt))
+                WHEN 4 THEN gbif_date_start(txt) || '-01-01'
+                WHEN 7 THEN gbif_date_start(txt) || '-01'
+                WHEN 16 THEN gbif_date_start(txt) || ':00'
+                ELSE gbif_date_start(txt)
             END
         )::TIMESTAMP
         """
@@ -233,8 +278,7 @@ def column_sql(name, sql_type, source):
 
 def stage_occurrence(con, occ_txt, out_path):
     """Copy occurrence.txt to a parquet with bc_clean's column names and
-    types, plus references, the H3 cells and publisher. Returns the number
-    of rows."""
+    types, plus references and publisher. Returns the number of rows."""
     header = read_header(occ_txt)
     by_lower = {h.lower(): h for h in header}
     wanted = [name for name, _ in OCC_COLUMNS] + EXTRA_COLUMNS + STAGING_ONLY_COLUMNS
@@ -244,15 +288,6 @@ def stage_occurrence(con, occ_txt, out_path):
 
     select = [column_sql(name, t, by_lower[name]) for name, t in OCC_COLUMNS]
     select += [f'"{by_lower[name]}" AS "{name}"' for name in EXTRA_COLUMNS]
-    # Each resolution is binned straight from the coordinates, as in
-    # build_hex_aggregates.py (never rolled up from a finer cell). Records
-    # without coordinates get NULL and are removed by the filters anyway.
-    for r in H3_RESOLUTIONS:
-        select.append(
-            f"h3_h3_to_string(h3_latlng_to_cell("
-            f"CAST(\"{by_lower['decimallatitude']}\" AS DOUBLE), "
-            f"CAST(\"{by_lower['decimallongitude']}\" AS DOUBLE), {r})) AS h3_r{r}"
-        )
     select += [f'"{by_lower[name]}" AS "{name}"' for name in STAGING_ONLY_COLUMNS]
 
     # GBIF's text files are tab-separated with no quoting at all, so quote
@@ -315,19 +350,42 @@ def removal_breakdown(con, staged_path, boundary_path):
     ).fetchall()
 
 
-def write_occurrence(con, kept_path, out_path):
-    """Write bc_occurrence.parquet from the filtered records, leaving out
-    the staging-only columns."""
-    columns = (
-        [name for name, _ in OCC_COLUMNS]
-        + EXTRA_COLUMNS
-        + [f"h3_r{r}" for r in H3_RESOLUTIONS]
+def h3_cells(latitudes, longitudes, resolution):
+    """Return the H3 cell (15-character string) of each point at one
+    resolution, or None where a coordinate is missing."""
+    return [
+        h3.latlng_to_cell(lat, lon, resolution)
+        if lat is not None and lon is not None else None
+        for lat, lon in zip(latitudes, longitudes)
+    ]
+
+
+def write_occurrence(kept_path, out_path, batch_size=200_000):
+    """Write bc_occurrence.parquet from the filtered records: leave out the
+    staging-only columns and add the H3 cell at each resolution.
+
+    Goes through the records batch_size at a time, so memory stays small
+    however many records there are.
+    """
+    columns = [name for name, _ in OCC_COLUMNS] + EXTRA_COLUMNS
+    kept = pq.ParquetFile(kept_path)
+    schema = kept.schema_arrow
+    schema = pa.schema(
+        [schema.field(c) for c in columns]
+        + [pa.field(f"h3_r{r}", pa.string()) for r in H3_RESOLUTIONS]
     )
-    select = ", ".join(f'"{c}"' for c in columns)
-    con.execute(
-        f"""COPY (SELECT {select} FROM read_parquet('{kept_path}'))
-            TO '{out_path}' (FORMAT PARQUET, COMPRESSION ZSTD)"""
-    )
+
+    with pq.ParquetWriter(out_path, schema, compression="zstd") as writer:
+        for batch in kept.iter_batches(batch_size=batch_size, columns=columns):
+            latitudes = batch.column("decimallatitude").to_pylist()
+            longitudes = batch.column("decimallongitude").to_pylist()
+            # Each resolution is binned straight from the coordinates, as in
+            # build_hex_aggregates.py (never rolled up from a finer cell).
+            arrays = batch.columns + [
+                pa.array(h3_cells(latitudes, longitudes, r), pa.string())
+                for r in H3_RESOLUTIONS
+            ]
+            writer.write_table(pa.Table.from_arrays(arrays, schema=schema))
 
 
 def stage_multimedia(txt_path, out_path):
@@ -652,7 +710,7 @@ def build_species_image(con, occurrence_path, media_path, out_path):
                 ORDER BY license_rank, eventdate DESC NULLS LAST,
                          CAST(gbifid AS BIGINT), media_order
             ) = 1
-            ORDER BY species
+            ORDER BY species, specieskey
         ) TO '{out_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
     )
@@ -802,9 +860,17 @@ def main():
     parser.add_argument(
         "--workdir",
         default=None,
-        help="Where to put the temporary extracted files (default: the system "
-        "temp folder).",
+        help="Where to put the temporary files (default: the system temp "
+        "folder). Needs room for occurrence.txt unzipped, about 60 GB for all "
+        "of BC.",
     )
+    parser.add_argument(
+        "--memory-limit",
+        default="10GB",
+        help="Most memory DuckDB may use before it spills to --workdir "
+        "(default 10GB). Keep it below the memory your job is given.",
+    )
+    parser.add_argument("--threads", type=int, default=8)
     args = parser.parse_args()
 
     key = download_key_from_zip(args.zip)
@@ -821,16 +887,17 @@ def main():
     t_all = time.time()
 
     geometry = get_bc_geometry()
-    con = connect()
 
-    with zipfile.ZipFile(args.zip) as archive, \
-            tempfile.TemporaryDirectory(dir=args.workdir) as tmpdir:
-        print("\nExtracting occurrence.txt and multimedia.txt...")
-        occ_txt = extract_member(archive, "occurrence.txt", tmpdir)
-        if occ_txt is None:
-            raise RuntimeError("The archive has no occurrence.txt")
-        media_txt = extract_member(archive, "multimedia.txt", tmpdir)
-
+    # Everything temporary goes in one folder, deleted at the end even if
+    # the run fails: the extracted text files, the intermediate parquets and
+    # DuckDB's spill files.
+    tmp = tempfile.TemporaryDirectory(dir=args.workdir)
+    tmpdir = tmp.name
+    spill_dir = os.path.join(tmpdir, "duckdb_spill")
+    con = connect(args.threads, args.memory_limit, spill_dir)
+    peak_tmp = 0
+    try:
+        archive = zipfile.ZipFile(args.zip)
         boundary_path = os.path.join(tmpdir, "bc_boundary.parquet")
         staged_path = os.path.join(tmpdir, "occurrence_staged.parquet")
         kept_path = os.path.join(tmpdir, "occurrence_kept.parquet")
@@ -838,12 +905,22 @@ def main():
 
         write_boundary_parquet(con, geometry, boundary_path)
 
-        print("Converting occurrence.txt to bc_clean's columns and types...")
+        # Only occurrence.txt is extracted here, and it is deleted as soon as
+        # it is in parquet, so it never sits on disk next to multimedia.txt.
+        log(t_all, "Extracting occurrence.txt...")
+        occ_txt = extract_member(archive, "occurrence.txt", tmpdir)
+        if occ_txt is None:
+            raise RuntimeError("The archive has no occurrence.txt")
+        log(t_all, "Converting occurrence.txt to bc_clean's columns and types...")
         n_staged = stage_occurrence(con, occ_txt, staged_path)
+        peak_tmp = max(peak_tmp, dir_size(tmpdir))
+        os.remove(occ_txt)
         print(f"Records in the download: {n_staged:,}")
 
         # The real filter: build_bc_clean's own function.
+        log(t_all, "Filtering with build_bc_clean.build_clean()...")
         n_kept = build_clean(staged_path, boundary_path, kept_path)
+        log(t_all, "Counting what each filter removed...")
         breakdown = removal_breakdown(con, staged_path, boundary_path)
         kept_in_breakdown = dict(breakdown).get("kept", 0)
         if kept_in_breakdown != n_kept:
@@ -852,61 +929,73 @@ def main():
                 f"build_clean kept {n_kept:,}; the breakdown no longer matches "
                 f"build_bc_clean.py's filter"
             )
-        write_occurrence(con, kept_path, occurrence_path)
+        log(t_all, "Writing bc_occurrence with the H3 cells...")
+        write_occurrence(kept_path, occurrence_path)
+        peak_tmp = max(peak_tmp, dir_size(tmpdir))
+        os.remove(kept_path)
 
-        print("Building bc_media...")
+        log(t_all, "Building bc_media...")
+        media_txt = extract_member(archive, "multimedia.txt", tmpdir)
         if media_txt is None:
             print("The archive has no multimedia.txt; bc_media will be empty.")
             write_empty_multimedia(staged_media_path)
             n_media_all = 0
         else:
             n_media_all = stage_multimedia(media_txt, staged_media_path)
+            peak_tmp = max(peak_tmp, dir_size(tmpdir))
+            os.remove(media_txt)
         build_media(con, staged_media_path, occurrence_path, media_path)
 
-        print("Building bc_datasets...")
+        log(t_all, "Building bc_datasets...")
         multi_publisher = build_datasets(
             con, archive, staged_path, occurrence_path, datasets_path
         )
 
-        print("Building bc_species_image...")
+        log(t_all, "Building bc_species_image...")
         build_species_image(con, occurrence_path, media_path, species_image_path)
 
-        print("Writing download_info.json...")
+        log(t_all, "Writing download_info.json...")
         info = write_download_info(archive, key, args.zip, info_path)
+        archive.close()
+        peak_tmp = max(peak_tmp, dir_size(tmpdir))
+        # Summary.
+        n_occ = count(con, occurrence_path)
+        n_media = count(con, media_path)
+        n_datasets = count(con, datasets_path)
+        n_species_image = count(con, species_image_path)
+        n_species = con.execute(
+            f"""SELECT count(DISTINCT specieskey) FROM read_parquet('{occurrence_path}')"""
+        ).fetchone()[0]
 
-    # Summary.
-    n_occ = count(con, occurrence_path)
-    n_media = count(con, media_path)
-    n_datasets = count(con, datasets_path)
-    n_species_image = count(con, species_image_path)
-    n_species = con.execute(
-        f"""SELECT count(DISTINCT specieskey) FROM read_parquet('{occurrence_path}')"""
-    ).fetchone()[0]
+        print("\nRecords by the first filter that removes them:")
+        for reason, n in breakdown:
+            print(f"  {reason:<42} {n:>10,}")
+        print(f"  {'removed in total':<42} {n_staged - n_occ:>10,}")
 
-    print("\nRecords by the first filter that removes them:")
-    for reason, n in breakdown:
-        print(f"  {reason:<42} {n:>10,}")
-    print(f"  {'removed in total':<42} {n_staged - n_occ:>10,}")
+        print(f"\nbc_occurrence:    {n_occ:>10,} records")
+        print(f"bc_media:         {n_media:>10,} items "
+              f"(of {n_media_all:,} in multimedia.txt)")
+        print(f"bc_datasets:      {n_datasets:>10,} datasets")
+        print(f"bc_species_image: {n_species_image:>10,} species "
+              f"(of {n_species:,} species with records)")
+        for reason, n in species_without_image(
+            con, occurrence_path, media_path, species_image_path
+        ):
+            print(f"  no image, {reason}: {n:,}")
 
-    print(f"\nbc_occurrence:    {n_occ:>10,} records")
-    print(f"bc_media:         {n_media:>10,} items "
-          f"(of {n_media_all:,} in multimedia.txt)")
-    print(f"bc_datasets:      {n_datasets:>10,} datasets")
-    print(f"bc_species_image: {n_species_image:>10,} species "
-          f"(of {n_species:,} species with records)")
-    for reason, n in species_without_image(
-        con, occurrence_path, media_path, species_image_path
-    ):
-        print(f"  no image, {reason}: {n:,}")
+        print_media_licenses(con, media_path)
 
-    print_media_licenses(con, media_path)
+        for datasetkey, publishers in multi_publisher:
+            print(f"WARNING: dataset {datasetkey} has several publishers: {publishers}")
 
-    for datasetkey, publishers in multi_publisher:
-        print(f"WARNING: dataset {datasetkey} has several publishers: {publishers}")
+        print(f"\nDOI: {info['doi']} (from {info['doi_source']})")
+        print(f"Temporary space used: about {peak_tmp / 1e9:,.1f} GB at most "
+              f"(not counting DuckDB's spill files)")
+        print(f"\nDone in {time.time() - t_all:.1f}s")
 
-    print(f"\nDOI: {info['doi']} (from {info['doi_source']})")
-    print(f"\nDone in {time.time() - t_all:.1f}s")
-    con.close()
+    finally:
+        con.close()
+        tmp.cleanup()
 
 
 if __name__ == "__main__":

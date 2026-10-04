@@ -124,7 +124,14 @@ def build_clean(raw_path, boundary_parquet_path, out_path):
     # once, in the bc subquery, not per data row.
     #
     # Filters:
-    #   - ST_Contains: keep only points inside BC's exact polygon.
+    #   - ST_Contains: keep only points inside BC's exact polygon. It is
+    #     wrapped in a CASE on purpose. The spatial extension rewrites a
+    #     bare ST_Contains in WHERE into a nested loop join, and that join
+    #     tests each point against the ~54,000-point boundary very slowly.
+    #     Inside a CASE the rewrite doesn't happen.
+    #     Same rows either way (checked on 300,000 bc_raw points), but
+    #     hundreds of times faster: on DuckDB 0.10.3, 626 s against 0.6 s
+    #     for those points.
     #   - occurrencestatus = PRESENT: drop ABSENT non-detections.
     #   - basisofrecord not fossil/living: drop fossils and captive.
     #   - species not null: require a species-level id.
@@ -142,7 +149,8 @@ def build_clean(raw_path, boundary_parquet_path, out_path):
                 SELECT ST_GeomFromText(geom_wkt) AS geom
                 FROM read_parquet('{boundary_parquet_path}')
             ) AS bc
-            WHERE ST_Contains(bc.geom, ST_Point(occ.decimallongitude, occ.decimallatitude))
+            WHERE (CASE WHEN ST_Contains(bc.geom, ST_Point(occ.decimallongitude, occ.decimallatitude))
+                        THEN true ELSE false END)
               AND occ.occurrencestatus = 'PRESENT'
               AND occ.basisofrecord NOT IN ('FOSSIL_SPECIMEN', 'LIVING_SPECIMEN')
               AND occ.species IS NOT NULL

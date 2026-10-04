@@ -129,7 +129,10 @@ def build_clean(raw_path, boundary_parquet_path, out_path):
     #   - basisofrecord not fossil/living: drop fossils and captive.
     #   - species not null: require a species-level id.
     #   - coordinates not null.
-    #   - no coordinate-quality issue.
+    #   - no coordinate-quality issue. A record GBIF flagged with no issues
+    #     at all has issue = NULL, and list_has_any on NULL is NULL, which
+    #     would drop it. coalesce turns NULL into an empty list so these
+    #     records are kept.
     # SELECT occ.* keeps all 50 columns of the surviving records.
     query = f"""
         COPY (
@@ -145,7 +148,7 @@ def build_clean(raw_path, boundary_parquet_path, out_path):
               AND occ.species IS NOT NULL
               AND occ.decimallatitude IS NOT NULL
               AND occ.decimallongitude IS NOT NULL
-              AND NOT list_has_any(occ.issue, {geo_issues_sql})
+              AND NOT list_has_any(coalesce(occ.issue, []::VARCHAR[]), {geo_issues_sql})
         ) TO '{out_path}' (FORMAT PARQUET)
     """
     print("Building clean BC product (polygon + quality filters)...")

@@ -8,14 +8,15 @@ one BCSEE name at a time, "which of your species is this?", and saves the
 answers as a lookup table from element_code to speciesKey.
 
 Which checklist: GBIF's version 2 matching service, against the Catalogue
-of Life checklist (CHECKLIST_KEY). bc_clean.parquet comes from GBIF's
-monthly cloud snapshot, which files every observation under a Catalogue
-of Life key, a short code such as 63Z5D for Abies amabilis. The older
-matching service, and version 2 without a checklist, answer with GBIF's
-old backbone numbers instead (2685524 for the same tree), which appear
-nowhere in the snapshot. Catalogue of Life keys can change between
-releases, so rerun this script with --refresh whenever a new GBIF snapshot
-is downloaded.
+of Life checklist (CHECKLIST_KEY). bc_occurrence.parquet comes from a GBIF
+download that request_gbif_download.py asks for with this same checklist
+(as bc_clean.parquet, from GBIF's monthly cloud snapshot, did before). So
+every observation is filed under a Catalogue of Life key, a short code
+such as 63Z5D for Abies amabilis. The older matching service, and version
+2 without a checklist, answer with GBIF's old backbone numbers instead
+(2685524 for the same tree), which appear nowhere in those records.
+Catalogue of Life keys can change between releases, so rerun this script
+with --refresh whenever a new GBIF download is made.
 
 Everything else from the Conservation Data Centre can then reach GBIF
 through that one table: the status history and the public occurrence areas
@@ -99,9 +100,10 @@ import requests
 
 MATCH_URL = "https://api.gbif.org/v2/species/match"
 
-# The Catalogue of Life checklist, the one GBIF's cloud snapshot (and so
-# bc_clean.parquet) uses for its species keys. Without it, GBIF answers
-# with its old backbone numbers, which cannot be joined to the snapshot.
+# The Catalogue of Life checklist, the one bc_occurrence.parquet's species
+# keys come from (request_gbif_download.py asks for it). Without it, GBIF
+# answers with its old backbone numbers, which cannot be joined to the
+# occurrence records.
 CHECKLIST_KEY = "7ddf754f-d193-4cc9-b351-99906754a03b"
 HEADERS = {"User-Agent": "BCBN-Dashboard (UBC Biodiversity Research Centre)"}
 

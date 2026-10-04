@@ -47,16 +47,18 @@ python pipeline/build_bc_clean.py --raw ~/bcbn/data/bc_raw.parquet --out ~/bcbn/
 ```
 
 **Layer 3 - `backend/pipeline/build_species_summary.py` -> `bc_species_summary.csv`**
-Groups the clean product by species to give a per-species BC record count
-(`n_bc`). The output columns - `kingdom, phylum, class, order, family, genus,
-species, n_bc` - match Evan's `for_lucia.csv` so the two can be compared row
-by row. Only `n_bc` can be computed here (not `n_notbc` or `n_total`), since
-the clean product holds BC records only. The result is a few MB, small enough
-to commit and share.
+Groups the occurrence records by species to give a per-species BC record
+count (`n_bc`). The output columns - `kingdom, phylum, class, order, family,
+genus, species, n_bc` - match Evan's `for_lucia.csv` so the two can be
+compared row by row. Only `n_bc` can be computed here (not `n_notbc` or
+`n_total`), since the input holds BC records only. The result is a few MB,
+small enough to commit and share. It now reads `bc_occurrence.parquet` from
+`build_dwca_tables.py` (see below) instead of `bc_clean.parquet`, with the
+same output.
 
 ```
 cd backend
-python pipeline/build_species_summary.py --clean ~/bcbn/data/bc_clean.parquet --out ~/bcbn/data/bc_species_summary.csv
+python pipeline/build_species_summary.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --out ~/bcbn/data/bc_species_summary.csv
 ```
 
 Because Layers 2 and 3 read local files rather than S3, the filter rules can

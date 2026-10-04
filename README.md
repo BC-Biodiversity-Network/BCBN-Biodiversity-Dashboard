@@ -110,7 +110,9 @@ metadata of every dataset.
   `verbatimscientificnameauthorship` and `publishingorgkey`), with the same
   names and types, plus `references` (the link to the original record) and
   `h3_r4` to `h3_r7`, each record's H3 cell, binned straight from the
-  coordinates like `build_hex_aggregates.py` does.
+  coordinates at each resolution (never rolled up from a finer cell).
+  `build_hex_aggregates.py` groups by these columns to make the map's hexagon
+  tables.
 - `bc_media.parquet`: one row per media item (images, sound, video) of a kept
   record, numbered within the record by `media_order` in file order, with a
   short `license_code` (`CC0_1_0`, `CC_BY_4_0`, `CC_BY_NC_4_0`, ...) parsed
@@ -149,6 +151,22 @@ For a full BC download (about 43M records, `occurrence.txt` about 50 GB):
 cd backend
 python pipeline/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
     --workdir /scratch/$USER --memory-limit 8GB --threads 8
+```
+
+**`backend/pipeline/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `frontend/public/data/bc_hex_r{4..7}.csv.gz`**
+Counts the records and distinct species in each hexagon at resolutions 4 to
+7, by grouping `bc_occurrence.parquet` on its `h3_r4` to `h3_r7` columns. It
+computes no H3 itself, so it runs on DuckDB 0.10.3 and needs no h3 package.
+The gzipped CSVs are what the map loads, and they are committed. Their
+columns are `h3_cell`, `occurrences` and `distinct_species`, and the same
+data always gives the same bytes. It also writes resolution 5 and 6 tables
+for one species (American robin) as a test of filtering by species.
+Resolution 3 is no longer built: `bc_occurrence` has no `h3_r3` column, and
+the map never used it.
+
+```
+cd backend
+python pipeline/build_hex_aggregates.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --outdir ~/bcbn/data
 ```
 
 ## Validation
@@ -407,8 +425,8 @@ the cluster run will fail even though it works locally.
 DuckDB's h3 extension only exists from DuckDB 1.0 on, so
 `build_dwca_tables.py` computes H3 cells with the `h3` Python package
 instead. It wraps the same H3 library, and the cells came out identical on
-the test download. (`build_hex_aggregates.py` still uses the extension, so it
-can't run on 0.10.3.)
+the test download. `build_hex_aggregates.py` only groups by those stored
+cells, so it needs neither the extension nor the package.
 
 Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`, `pyarrow`, `h3`.
 
@@ -426,7 +444,8 @@ npm run dev
 That serves the app at `http://localhost:5173`. `npm run build` writes a
 production bundle to `frontend/dist/`, and `npm run preview` serves that build.
 
-The map reads `frontend/public/data/bc_hex_r5.csv.gz`, which is produced by
+The map reads `frontend/public/data/bc_hex_r4.csv.gz` to `bc_hex_r7.csv.gz`,
+one per zoom tier, which are produced by
 `backend/pipeline/build_hex_aggregates.py` and committed. Nothing is fetched
 from the backend at run time, so the front end works with no server behind it.
 

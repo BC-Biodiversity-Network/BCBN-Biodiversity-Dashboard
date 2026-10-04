@@ -206,7 +206,7 @@ def main():
     parser.add_argument(
         "--frontend-dir",
         default=str(
-            Path(__file__).resolve().parents[2] / "frontend" / "public" / "data"
+            Path(__file__).resolve().parents[3] / "frontend" / "public" / "data"
         ),
         help="Directory to write the browser-readable gzipped CSVs into.",
     )

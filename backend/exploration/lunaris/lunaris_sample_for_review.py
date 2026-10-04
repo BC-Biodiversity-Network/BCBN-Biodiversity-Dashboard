@@ -26,8 +26,8 @@ import pandas as pd
 import sys
 from pathlib import Path
 
-# The filter itself is finalized and lives in pipeline/lunaris_keywords.py.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pipeline"))
+# The filter itself is finalized and lives in pipeline/lunaris/lunaris_keywords.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pipeline" / "lunaris"))
 
 from lunaris_keywords import as_text, build_haystack, is_biodiversity
 

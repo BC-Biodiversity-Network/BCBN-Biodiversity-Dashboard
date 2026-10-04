@@ -46,7 +46,7 @@ async function unzipToText(buffer) {
 
 // Turns the CSV text into an array of objects, one per row.
 //
-// The file is written by backend/pipeline/build_hex_aggregates.py and is
+// The file is written by backend/pipeline/gbif/build_hex_aggregates.py and is
 // deliberately plain: three columns, plain digits, no quotes and no commas
 // inside any value. That is checked when the file is built, so splitting on
 // commas is safe here and a full CSV parser would be more than we need.

@@ -62,9 +62,14 @@ import sys
 import time
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 import shapely
+
+# match_bcsee_gbif.py lives in pipeline/bcsee/. Importing the checklist key
+# from it keeps both scripts on the same Catalogue of Life checklist.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bcsee"))
 
 from match_bcsee_gbif import CHECKLIST_KEY, HEADERS
 

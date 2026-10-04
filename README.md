@@ -19,7 +19,7 @@ GBIF S3 snapshot -> bc_raw.parquet -> bc_clean.parquet -> bc_species_summary.csv
                        (Layer 1)        (Layer 2)              (Layer 3)
 ```
 
-**Layer 1 - `backend/pipeline/download_bc_raw.py` -> `bc_raw.parquet`**
+**Layer 1 - `backend/pipeline/gbif/legacy/download_bc_raw.py` -> `bc_raw.parquet`**
 Downloads the raw BC slice of a GBIF snapshot to a local parquet file.
 It clips to BC's *bounding box* only - a cheap lon/lat range check that lets
 DuckDB skip most of the world using parquet row-group statistics. The box is
@@ -29,10 +29,10 @@ wide, unfiltered local copy, so later steps never have to re-download.
 
 ```
 cd backend
-python pipeline/download_bc_raw.py --snapshot 2026-08-01 --out ~/bcbn/data/bc_raw.parquet
+python pipeline/gbif/legacy/download_bc_raw.py --snapshot 2026-08-01 --out ~/bcbn/data/bc_raw.parquet
 ```
 
-**Layer 2 - `backend/pipeline/build_bc_clean.py` -> `bc_clean.parquet`**
+**Layer 2 - `backend/pipeline/gbif/build_bc_clean.py` -> `bc_clean.parquet`**
 Turns the raw slice into the clean product the dashboard consumes. It fetches
 BC's official legal boundary (ABMS, marine-inclusive, so coastal records are
 kept) from the BC Geographic Warehouse, clips the raw data from the bounding
@@ -43,10 +43,10 @@ with one of 12 coordinate-quality issues.
 
 ```
 cd backend
-python pipeline/build_bc_clean.py --raw ~/bcbn/data/bc_raw.parquet --out ~/bcbn/data/bc_clean.parquet
+python pipeline/gbif/build_bc_clean.py --raw ~/bcbn/data/bc_raw.parquet --out ~/bcbn/data/bc_clean.parquet
 ```
 
-**Layer 3 - `backend/pipeline/build_species_summary.py` -> `bc_species_summary.csv`**
+**Layer 3 - `backend/pipeline/gbif/build_species_summary.py` -> `bc_species_summary.csv`**
 Groups the occurrence records by species to give a per-species BC record
 count (`n_bc`). The output columns - `kingdom, phylum, class, order, family,
 genus, species, n_bc` - match Evan's `for_lucia.csv` so the two can be
@@ -58,7 +58,7 @@ same output.
 
 ```
 cd backend
-python pipeline/build_species_summary.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --out ~/bcbn/data/bc_species_summary.csv
+python pipeline/gbif/build_species_summary.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --out ~/bcbn/data/bc_species_summary.csv
 ```
 
 Because Layers 2 and 3 read local files rather than S3, the filter rules can
@@ -72,7 +72,7 @@ This path is replacing the three layers above. The first step,
 `request_gbif_download.py`, replaces `download_bc_raw.py`, which is kept for
 now.
 
-**`backend/pipeline/request_gbif_download.py` -> `<key>.zip`, `<key>.download.json`**
+**`backend/pipeline/gbif/request_gbif_download.py` -> `<key>.zip`, `<key>.download.json`**
 Asks GBIF for a Darwin Core Archive download of every PRESENT record inside
 the polygon in `bc_boundary_gbif.wkt` (from `make_gbif_boundary.py`). The
 download uses the Catalogue of Life taxonomy (the same checklist as
@@ -93,12 +93,12 @@ a few downloads at once.
 
 ```
 cd backend
-python pipeline/request_gbif_download.py --dry-run
-python pipeline/request_gbif_download.py --outdir ~/bcbn/data
-python pipeline/request_gbif_download.py --key <download key> --outdir ~/bcbn/data
+python pipeline/gbif/request_gbif_download.py --dry-run
+python pipeline/gbif/request_gbif_download.py --outdir ~/bcbn/data
+python pipeline/gbif/request_gbif_download.py --key <download key> --outdir ~/bcbn/data
 ```
 
-**`backend/pipeline/build_dwca_tables.py` -> `bc_occurrence`, `bc_media`, `bc_datasets`, `bc_species_image`, `download_info.json`**
+**`backend/pipeline/gbif/build_dwca_tables.py` -> `bc_occurrence`, `bc_media`, `bc_datasets`, `bc_species_image`, `download_info.json`**
 Builds the dashboard's tables from a GBIF download in Darwin Core Archive
 format (the zip GBIF makes for a download request, filtered with
 `bc_boundary_gbif.wkt`), instead of from the S3 snapshot. Unlike the
@@ -151,11 +151,11 @@ For a full BC download (about 43M records, `occurrence.txt` about 50 GB):
 
 ```
 cd backend
-python pipeline/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
+python pipeline/gbif/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
     --workdir /scratch/$USER --memory-limit 8GB --threads 8
 ```
 
-**`backend/pipeline/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `frontend/public/data/bc_hex_r{4..7}.csv.gz`**
+**`backend/pipeline/gbif/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `frontend/public/data/bc_hex_r{4..7}.csv.gz`**
 Counts the records and distinct species in each hexagon at resolutions 4 to
 7, by grouping `bc_occurrence.parquet` on its `h3_r4` to `h3_r7` columns. It
 computes no H3 itself, so it runs on DuckDB 0.10.3 and needs no h3 package.
@@ -168,7 +168,7 @@ the map never used it.
 
 ```
 cd backend
-python pipeline/build_hex_aggregates.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --outdir ~/bcbn/data
+python pipeline/gbif/build_hex_aggregates.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --outdir ~/bcbn/data
 ```
 
 ## Validation
@@ -197,10 +197,14 @@ running them from anywhere else quietly writes to the wrong place.
 
 | Folder | Contents |
 | --- | --- |
-| `backend/pipeline/` | The production pipeline: `download_bc_raw.py` (Layer 1), `build_bc_clean.py` (Layer 2), `build_species_summary.py` (Layer 3). These are what runs to produce the dashboard's data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip, replacing `download_bc_raw.py`. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download instead, using the same filter as `build_bc_clean.py` (described above). `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. Also the Lunaris side: `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). And the BCSEE side: `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BC Species and Ecosystems Explorer (BCSEE) list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
+| `backend/pipeline/` | The production pipeline, one folder per data source (below). These are what runs to produce the dashboard's data. Run them from `backend/`, e.g. `python pipeline/gbif/build_dwca_tables.py`. A script that needs another folder's code adds that folder to its import path itself. |
+| `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `build_hex_aggregates.py` and `build_species_summary.py` (Layer 3) build the map's hexagon tables and the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
+| `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
+| `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
+| `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
-| `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
+| `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
 | `backend/exploration/llm/` | The trial that measures the keyword filter against a model, not part of the product build. `build_test_set.py` draws the labelling sample, `fix_stratum.py` repairs the labelled sheet, `test_key.py` checks the API key, `run_trial.py` runs the model and caches its answers, `check_stability.py` tests reproducibility and `cost_estimate.py` projects the cost of a full pass (described below). |
 | `backend/exploration/bcdc/` | Survey of the BC Data Catalogue, not part of the product build. `survey_bcdc.py` downloads the whole BC Data Catalogue once and sorts every package by licence and by whether it has anything to download. |
 | `backend/exploration/bcsee/` | Finding the BCSEE and Conservation Data Centre sources, not part of the product build. `find_cdc.py` finds Conservation Data Centre and BCSEE packages in that cached catalogue; `probe_bcsee.py` is an earlier keyword search of the live catalogue for BCSEE packages. |
@@ -210,7 +214,7 @@ running them from anywhere else quietly writes to the wrong place.
 
 A second data source: dataset-level metadata harvested from
 [Lunaris](https://lunaris.ca/) (123,479 records), filtered down to the ones
-actually about biodiversity. `backend/pipeline/lunaris_keywords.py` is the single
+actually about biodiversity. `backend/pipeline/lunaris/lunaris_keywords.py` is the single
 source of truth for that filter and runs in three stages:
 
 1. **`mask_false_positives()`** blanks out phrases where a keyword is not
@@ -267,16 +271,16 @@ lunaris_full_harvest.parquet -> lunaris_biodiv_candidates.parquet -> lunaris_tax
        (123,479 records)              (18,931 candidates)              (+ 7 taxon columns)
 ```
 
-**`backend/pipeline/build_lunaris_candidates.py` -> `backend/data/lunaris_biodiv_candidates.parquet`**
+**`backend/pipeline/lunaris/build_lunaris_candidates.py` -> `backend/data/lunaris_biodiv_candidates.parquet`**
 Applies `lunaris_keywords.py` to the full harvest and writes the records that
 pass, plus a `matched_keywords` column recording which keywords fired.
 
 ```
 cd backend
-python pipeline/build_lunaris_candidates.py
+python pipeline/lunaris/build_lunaris_candidates.py
 ```
 
-**`backend/pipeline/build_lunaris_taxa.py` -> `backend/data/lunaris_taxa.parquet`**
+**`backend/pipeline/lunaris/build_lunaris_taxa.py` -> `backend/data/lunaris_taxa.parquet`**
 This is **extraction, not filtering**: all 18,931 candidates come out again,
 with seven columns added saying which taxon names each record mentions. Names
 come from the Layer-3 species summary (`bc_species_summary.csv`), matched
@@ -285,7 +289,7 @@ the genus *Beta* from "beta diversity".
 
 ```
 cd backend
-python pipeline/build_lunaris_taxa.py
+python pipeline/lunaris/build_lunaris_taxa.py
 ```
 
 | Column | What it holds |
@@ -332,7 +336,7 @@ the map as well, since they are no use to search either.
 `coffee` and `potato` are currently in `DISABLED_PENDING_SCOPE`, switched off
 while it is undecided whether crop records belong in the dashboard. They stay in
 the map, because a crop name is still a valid search synonym. **To turn them back
-on, empty that set** in `backend/pipeline/build_lunaris_taxa.py` and re-run.
+on, empty that set** in `backend/pipeline/lunaris/build_lunaris_taxa.py` and re-run.
 
 ### How far the common-name tier has been checked
 
@@ -448,7 +452,7 @@ production bundle to `frontend/dist/`, and `npm run preview` serves that build.
 
 The map reads `frontend/public/data/bc_hex_r4.csv.gz` to `bc_hex_r7.csv.gz`,
 one per zoom tier, which are produced by
-`backend/pipeline/build_hex_aggregates.py` and committed. Nothing is fetched
+`backend/pipeline/gbif/build_hex_aggregates.py` and committed. Nothing is fetched
 from the backend at run time, so the front end works with no server behind it.
 
 **maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with

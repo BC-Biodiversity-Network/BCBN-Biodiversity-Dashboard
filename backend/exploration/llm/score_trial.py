@@ -1,7 +1,7 @@
 """
 Turn the model's facts into a yes or no, then score it against the labels.
 
-run_trial.py only collected facts. This applies the five criteria to those
+run_trial.py only collected facts. This applies the scope rules to those
 facts, which is where the biodiversity decision actually gets made. Keeping it
 here means a change to the criteria costs one edit and one rerun of this
 script, with no API calls at all.
@@ -36,17 +36,50 @@ KEPT_POOL = 18931
 DROPPED_POOL = 104548
 
 
+def out_as_whole_category(record):
+    """
+    Return True if the record falls in a category that is out of scope as a whole.
+
+    These are the two "whole category" rules in scope_criteria.md, agreed with
+    Evan on 2026-09-24. They apply whatever the topic is, so they are checked
+    before anything else can say yes.
+
+    Trial files from before prompt version 4 do not have these two columns at
+    all. For those the answer is simply False, so old files score exactly as
+    they did before.
+    """
+    # Whole category rule: experimental animals are out. Lab mice, fruit fly
+    # behaviour studies, experimental E. coli populations, and experiments run
+    # on farmed animals such as the broiler chicken leg health trial.
+    if record.get("experimental_animals") == "yes":
+        return True
+
+    # Whole category rule: extinct species are out, such as the ancient DNA
+    # study of Ice Age deer.
+    if record.get("extinct_only") == "yes":
+        return True
+
+    return False
+
+
 def decide(record):
     """
-    Apply the five criteria to one model answer and return "yes" or "no".
+    Apply the scope rules to one model answer and return "yes" or "no".
 
     This is the only place the biodiversity decision is made. Each block below
-    is one of the criteria, in the order they are checked. If Evan draws a line
-    somewhere else, this function is what changes, and nothing has to be asked
-    of the model again.
+    is one of the rules, in the order they are checked: the two whole category
+    rules first, then the five base criteria. If Evan draws a line somewhere
+    else, this function is what changes, and nothing has to be asked of the
+    model again.
     """
     topic = record.get("topic")
     alive = bool(record.get("concerns_living_things"))
+
+    # Whole category rules, experimental animals and extinct species. These
+    # come first because a broiler chicken trial would otherwise pass as
+    # agriculture about the organisms under criterion 2.
+    if out_as_whole_category(record):
+        return "no"
 
     # Criterion 5. Human health and biomedical records are out, unless the
     # subject is wild organisms, in which case the model would not have called
@@ -85,8 +118,11 @@ def decide_loose_rule3(record):
     Under this version a boundary or land cover record counts as biodiversity
     data whenever it concerns living things, whether or not it spells out an
     ecological purpose. This exists so the sensitivity of the result to that
-    one line can be reported rather than assumed away.
+    one line can be reported rather than assumed away. Only criterion 3 is
+    relaxed, so the whole category rules still apply first.
     """
+    if out_as_whole_category(record):
+        return "no"
     if record.get("topic") == "land_and_boundaries" and bool(record.get("concerns_living_things")):
         return "yes"
     return decide(record)

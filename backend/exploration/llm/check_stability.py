@@ -52,6 +52,8 @@ WATCHED = [
     "topic",
     "about_organisms_themselves",
     "ecological_purpose_stated",
+    "experimental_animals",
+    "extinct_only",
     "form",
 ]
 
@@ -74,7 +76,7 @@ def main():
     """Ask about a few records repeatedly and report what stayed the same."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", default="exploration/llm/test_set_labelled_fixed.csv")
-    parser.add_argument("--model", default="gemini-3.5-flash-lite")
+    parser.add_argument("--model", default="gemini-3.1-flash-lite")
     parser.add_argument("--repeats", type=int, default=5,
                         help="How many times to ask about each record")
     parser.add_argument("--row", action="append", type=int, default=[],

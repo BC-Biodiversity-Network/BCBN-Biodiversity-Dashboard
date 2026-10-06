@@ -3,7 +3,7 @@ Ask a model about each record in the test set, and save what it says.
 
 This script does NOT decide whether a record is biodiversity data. It only
 collects facts about each record. The yes or no decision is worked out
-afterwards, in code, by scoring_rules.py. The reason for splitting it that way:
+afterwards, in code, by score_trial.py. The reason for splitting it that way:
 the criteria are still being confirmed with Evan, and if the rules are baked
 into the prompt then every rule change means paying to run the whole thing
 again. Facts do not change when the rules do.
@@ -39,7 +39,7 @@ import pandas as pd
 # Bump this when the prompt or the schema changes. It is part of the cache key,
 # so raising it makes the script call the model again instead of reusing old
 # answers that were produced by a different question.
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 
 
 # What the model is allowed to put in the topic field. Keeping this to a fixed
@@ -90,12 +90,22 @@ RESPONSE_SCHEMA = {
         "about_organisms_themselves": {
             "type": "string",
             "enum": YES_NO_NA,
-            "description": "Only for forestry, agriculture or fisheries records. yes if about the organisms, no if about tenure, volumes, prices or licensing, not_applicable for every other kind of record.",
+            "description": "Only for forestry, agriculture or fisheries records. yes if about the organisms, including catch broken down by species, no if about tenure, volumes with no species breakdown, prices or licensing, not_applicable for every other kind of record.",
         },
         "ecological_purpose_stated": {
             "type": "string",
             "enum": YES_NO_NA,
             "description": "Only for boundaries, land cover or maps. yes if an ecological or conservation purpose is stated, no if not, not_applicable for every other kind of record.",
+        },
+        "experimental_animals": {
+            "type": "string",
+            "enum": ["yes", "no"],
+            "description": "yes if the organisms are laboratory animals or lab cultures, or the record is an experiment run on farmed animals. no otherwise.",
+        },
+        "extinct_only": {
+            "type": "string",
+            "enum": ["yes", "no"],
+            "description": "yes if the only organisms the record is about are extinct. no otherwise.",
         },
         "form": {"type": "string", "enum": FORM_VALUES},
         "language": {
@@ -114,6 +124,8 @@ RESPONSE_SCHEMA = {
         "topic",
         "about_organisms_themselves",
         "ecological_purpose_stated",
+        "experimental_animals",
+        "extinct_only",
         "form",
         "language",
         "reason",
@@ -159,12 +171,25 @@ temperature, bathymetry, weather, geophysical surveys.
 
 about_organisms_themselves: answer this ONLY when topic is forestry_agriculture_fisheries. yes \
 when the record is about the organisms, for example tree species composition, crop trials, fish \
-populations. no when it is about tenure boundaries, harvest volumes, farm income, prices or \
+populations. Catch or harvest statistics broken down by species or species group also count as \
+yes, because they say which organisms were taken and how many. no when it is about tenure \
+boundaries, harvest volumes or values with no breakdown by species, farm income, prices or \
 licensing. For every other topic answer not_applicable.
 
 ecological_purpose_stated: answer this ONLY when topic is land_and_boundaries. yes when the \
 record states an ecological or conservation purpose. no when it is a plain administrative or \
 cartographic product. For every other topic answer not_applicable.
+
+experimental_animals: yes when the organisms are laboratory animals or lab cultures, such as \
+lab mice, fruit flies kept for behaviour studies or experimental E. coli populations, or when \
+the record is an experiment run on farmed animals, such as a broiler chicken leg health trial. \
+no for wild organisms, field surveys, crop or plant variety trials, aquaculture stock and other \
+farmed organisms that are not the subject of an animal experiment. Answer yes or no for every \
+record.
+
+extinct_only: yes when the only organisms the record is about are extinct, such as fossils or \
+ancient DNA of extinct species or populations. no when any living species is part of the \
+subject, or when no organisms are named. Answer yes or no for every record.
 
 form: what the record itself is.
   dataset: data. This includes research data deposited alongside a published paper. Such a \
@@ -346,7 +371,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", default="exploration/llm/test_set_labelled_fixed.csv",
                         help="CSV holding the records to ask about")
-    parser.add_argument("--model", default="gemini-3.5-flash-lite",
+    parser.add_argument("--model", default="gemini-3.1-flash-lite",
                         help="Model name. Check AI Studio for what is currently available.")
     parser.add_argument("--cache", default="exploration/llm/cache",
                         help="Folder for the cached answers")
@@ -485,6 +510,8 @@ def main():
             "topic": answer["topic"],
             "about_organisms_themselves": answer["about_organisms_themselves"],
             "ecological_purpose_stated": answer["ecological_purpose_stated"],
+            "experimental_animals": answer["experimental_animals"],
+            "extinct_only": answer["extinct_only"],
             "form": answer["form"],
             "language": answer["language"],
             "model_reason": answer["reason"],

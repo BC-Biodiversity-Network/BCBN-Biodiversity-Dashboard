@@ -39,7 +39,7 @@ import pandas as pd
 # Bump this when the prompt or the schema changes. It is part of the cache key,
 # so raising it makes the script call the model again instead of reusing old
 # answers that were produced by a different question.
-PROMPT_VERSION = 4
+PROMPT_VERSION = 5
 
 
 # What the model is allowed to put in the topic field. Keeping this to a fixed
@@ -100,7 +100,7 @@ RESPONSE_SCHEMA = {
         "experimental_animals": {
             "type": "string",
             "enum": ["yes", "no"],
-            "description": "yes if the organisms are laboratory animals or lab cultures, or the record is an experiment run on farmed animals. no otherwise.",
+            "description": "yes only if the organisms are standard lab model organisms used as lab tools, or the record is an experiment run on farmed animals. no for lab experiments on wild or native species, and for everything else.",
         },
         "extinct_only": {
             "type": "string",
@@ -180,12 +180,15 @@ ecological_purpose_stated: answer this ONLY when topic is land_and_boundaries. y
 record states an ecological or conservation purpose. no when it is a plain administrative or \
 cartographic product. For every other topic answer not_applicable.
 
-experimental_animals: yes when the organisms are laboratory animals or lab cultures, such as \
-lab mice, fruit flies kept for behaviour studies or experimental E. coli populations, or when \
-the record is an experiment run on farmed animals, such as a broiler chicken leg health trial. \
-no for wild organisms, field surveys, crop or plant variety trials, aquaculture stock and other \
-farmed organisms that are not the subject of an animal experiment. Answer yes or no for every \
-record.
+experimental_animals: yes only in two cases. First, when the organisms are standard lab model \
+organisms used as lab tools: lab mice and rats, fruit flies, C. elegans, zebrafish lab lines, \
+and lab populations of E. coli or yeast. Second, when the record is an experiment run on farmed \
+animals, such as a broiler chicken leg health trial. no when the experiment is on a wild or \
+native species, even if it is done in a lab: cultures of wild algae, fish or invertebrates \
+exposed to a drug or pollutant, and other ecotoxicology or behaviour experiments on such species \
+are all no. Also no for wild organisms, field surveys, crop or plant variety trials, aquaculture \
+stock and other farmed organisms that are not the subject of an animal experiment. Answer yes or \
+no for every record.
 
 extinct_only: yes when the only organisms the record is about are extinct, such as fossils or \
 ancient DNA of extinct species or populations. no when any living species is part of the \

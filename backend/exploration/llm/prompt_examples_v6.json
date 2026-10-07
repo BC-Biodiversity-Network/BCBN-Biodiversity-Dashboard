@@ -1,0 +1,231 @@
+[
+  {
+    "slot": "a",
+    "row": 97,
+    "record_id": "oai:catalogue.cioos.ca:72871653-e8ca-4591-ac88-141f8e05e1be",
+    "title": "Boundary Pass Conductivity Temperature Depth Deployed 2018-03-26",
+    "subjects": "Ocean Networks Canada Society",
+    "abstract": "Ce Sea-Bird Microcat SBE37SMP-ODO 9537 a été déployé le 2018-03-26 au Boundary Pass. Boundary Pass est un détroit situé le long de la frontière entre l'État de Washington et la Colombie-Britannique. Il relie le Haro Strait au Strait of Georgia. Cet instrument est un Conductivité/Température/Profondeur.",
+    "answer": {
+      "reason": "An instrument deployment measuring conductivity, temperature and depth of seawater, with no living things mentioned.",
+      "concerns_living_things": false,
+      "organisms": [],
+      "organism_level": "none",
+      "topic": "physical_environment",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "french"
+    }
+  },
+  {
+    "slot": "c",
+    "row": 694,
+    "record_id": "oai:catalogue.data.gov.bc.ca:sh-sh-lh-bc-land-use-planning-boundary",
+    "title": "shíshálh-BC Land Use Planning Boundary",
+    "subjects": "shíshálh-BC Land Use Planning Boundary, shíshálh, Land Use Plan Administrative Boundary, LUP Boundary, Land Use Plan",
+    "abstract": "This spatial dataset represents the outer boundary of the shíshálh-B.C. Land Use Planning area. The boundary defines the extent of the land base covered under the shíshálh-B.C. Land Use Planning process.",
+    "answer": {
+      "reason": "The outer boundary of a land use planning area; it names no species and states no ecological purpose.",
+      "concerns_living_things": false,
+      "organisms": [],
+      "organism_level": "none",
+      "topic": "land_and_boundaries",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "no",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "d",
+    "row": 848,
+    "record_id": "oai:catalogue.data.gov.bc.ca:snowmobile-management-areas-access-management-areas-ama",
+    "title": "Snowmobile Management Areas - Access Management Areas (AMA)",
+    "subjects": "critical core habitat, BC, management area, recovery, snowmobile, mountain caribou",
+    "abstract": "Areas where access is controlled as to when and under what conditions they may be used by snowmobiles for recreation. These areas may be open with conditions or closed",
+    "answer": {
+      "reason": "Access management areas whose subjects tie them to mountain caribou critical habitat and recovery, an ecological purpose.",
+      "concerns_living_things": true,
+      "organisms": [
+        "mountain caribou"
+      ],
+      "organism_level": "species",
+      "topic": "land_and_boundaries",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "yes",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "e",
+    "row": 472,
+    "record_id": "oai:open.canada.ca:30e31f61-97a8-4e87-a339-87bf6f138428",
+    "title": "Maritimes Region Fisheries Atlas: Catch Weight Landings Mapping (2019–2023)",
+    "subjects": "nature_and_environment",
+    "abstract": "Ces couches de données montrent les débarquements par poids des prises issues de la pêche commerciale en tenant compte des pêches dirigées et des prises accessoires pour la plate-forme Néo-Écossaise, la baie de Fundy et le banc de Georges des divisions 4VWX de l'Organisation des pêches de l'Atlantique Nord-Ouest (OPANO) et les portions canadiennes des divisions 5Y et 5Z. [...] Les cartes incluent le poids des prises (en kilogrammes) par cellule de carte quadrillée hexagonale de 10 km2 pour les espèces ou les groupes d'espèces choisis et les types d'engins afin de cibler les zones de pêche importantes.",
+    "answer": {
+      "reason": "Commercial fishery landings mapped by catch weight for selected species or species groups, which says which organisms were taken and how many.",
+      "concerns_living_things": true,
+      "organisms": [
+        "espèces ou groupes d'espèces choisis"
+      ],
+      "organism_level": "group",
+      "topic": "forestry_agriculture_fisheries",
+      "about_organisms_themselves": "yes",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "french"
+    }
+  },
+  {
+    "slot": "f",
+    "row": 671,
+    "record_id": "oai:datadryad.org:doi:10.5061/dryad.86337",
+    "title": "Data from: Chemogenetic interrogation of a brain-wide fear memory network in mice",
+    "subjects": "reuniens thalamic nucleus, functional connectivity, laterodorsal thalamic nucleus, contextual fear conditioning, chemogenetics, Neocortex, Hippocampus, CA1, lateral septal nucleus",
+    "abstract": "Behavior depends on coordinated activity across multiple brain regions. Within such networks, highly connected hub regions are assumed to disproportionately influence behavioral output, although this hypothesis has not been systematically evaluated.",
+    "answer": {
+      "reason": "A laboratory neuroscience study of fear memory in mice, a standard lab model organism.",
+      "concerns_living_things": true,
+      "organisms": [
+        "mice"
+      ],
+      "organism_level": "species",
+      "topic": "organisms",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "yes",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "g",
+    "row": 300,
+    "record_id": "oai:pangaea.de:10.1594/pangaea.967652",
+    "title": "Seawater carbonate chemistry and freeze tolerant of subtidal Mytilus trossulus and subtidal M. galloprovincialis, and intertidal M. trossulus",
+    "subjects": "Acetate, per wet mass, pH, total scale, Mollusca, Taurine, Malonate, Mytilus trossulus, Experiment, Alanine, ...",
+    "abstract": "A full-factorial experiment was used to study whether ocean acidification increases mortality in subtidal Mytilus trossulus and subtidal M. galloprovincialis, and intertidal M. trossulus following sub-zero air temperature exposure.",
+    "answer": {
+      "reason": "A lab experiment on wild mussel species, which are not lab model organisms, so it is not an experimental animal study.",
+      "concerns_living_things": true,
+      "organisms": [
+        "Mytilus trossulus",
+        "M. galloprovincialis"
+      ],
+      "organism_level": "species",
+      "topic": "organisms",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "h",
+    "row": 890,
+    "record_id": "oai:datadryad.org:doi:10.5061/dryad.521ng",
+    "title": "Data from: Landscape connectivity predicts chronic wasting disease risk in Canada",
+    "subjects": "circuit theory, mule deer, Odocoileus hemionus, Euclidian distance, Odocoileus virginianus, movement modeling, step selection function",
+    "abstract": "Predicting the spatial pattern of disease risk in wild animal populations is important for implementing effective control programmes. We developed a risk model predicting the probability that a deer harvested in a wild population was chronic wasting disease positive (CWD+) and evaluated the importance of landscape connectivity based on deer movements.",
+    "answer": {
+      "reason": "Disease risk in wild deer populations, with the deer species named.",
+      "concerns_living_things": true,
+      "organisms": [
+        "deer",
+        "mule deer",
+        "Odocoileus hemionus",
+        "Odocoileus virginianus"
+      ],
+      "organism_level": "species",
+      "topic": "organisms",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "i",
+    "row": 252,
+    "record_id": "oai:open.canada.ca:ea19053d-95bb-4f34-b4bd-e9d29a46efe5",
+    "title": "Rocky Mountain Ridged Mussel Distribution Survey Data",
+    "subjects": "nature_and_environment, science_and_technology",
+    "abstract": "Données de relevés indiquant la présence de la gonidée des Rocheuses (Gonidea angulata), une espèce en voie de disparition, de 2008 à 2011. Les relevés ont été effectués par différents chercheurs à différents endroits.",
+    "answer": {
+      "reason": "Survey records of where an endangered mussel species was found.",
+      "concerns_living_things": true,
+      "organisms": [
+        "gonidée des Rocheuses",
+        "Gonidea angulata"
+      ],
+      "organism_level": "species",
+      "topic": "organisms",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "french"
+    }
+  },
+  {
+    "slot": "j",
+    "row": 554,
+    "record_id": "oai:catalogue-saintjohn.opendata.arcgis.com:a5c55a36da3447e8bf2607e6c9eb5936",
+    "title": "Tree Canopy",
+    "subjects": "Trees",
+    "abstract": "Tree canopy polygons, in the City of Saint John, derived from LiDAR data (2018).",
+    "answer": {
+      "reason": "Tree canopy polygons record where trees grow, which is information about plants rather than a plain boundary.",
+      "concerns_living_things": true,
+      "organisms": [
+        "Trees"
+      ],
+      "organism_level": "group",
+      "topic": "habitat_or_ecosystem",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "english"
+    }
+  },
+  {
+    "slot": "k",
+    "row": 468,
+    "record_id": "oai:open.canada.ca:c063969a-403c-4c13-85fc-2282c3c4e2d1",
+    "title": "Yoho National Park: Total GHG Emissions of Forested Ecosystems",
+    "subjects": "form_descriptors, nature_and_environment, science_and_technology",
+    "abstract": "L'ensemble de données « Parc national Yoho – Émissions totales de GES » consiste d'estimations des émissions de dioxyde de carbone (CO2), de méthane (CH4) et d'oxyde de diazote (N2O) exprimée en « équivalents de dioxyde de carbone » (éq. CO2) du Yoho entre 1990 et 2020 (tonnes d'équivalents en dioxyde de carbone par hectare).",
+    "answer": {
+      "reason": "Estimated greenhouse gas emissions for a park's forests; the data are carbon quantities, not information about the organisms.",
+      "concerns_living_things": false,
+      "organisms": [],
+      "organism_level": "none",
+      "topic": "physical_environment",
+      "about_organisms_themselves": "not_applicable",
+      "ecological_purpose_stated": "not_applicable",
+      "experimental_animals": "no",
+      "extinct_only": "no",
+      "form": "dataset",
+      "language": "french"
+    }
+  }
+]

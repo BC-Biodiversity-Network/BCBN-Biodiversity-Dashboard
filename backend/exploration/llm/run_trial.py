@@ -8,6 +8,14 @@ the criteria are still being confirmed with Evan, and if the rules are baked
 into the prompt then every rule change means paying to run the whole thing
 again. Facts do not change when the rules do.
 
+Prompt version 6 adds two things. First, a short set of worked examples, kept
+in prompt_examples_v6.json next to this script, shows the model a filled in
+answer for ten records of the kinds it got wrong before. Those records come
+only from the rows nobody reviewed by hand, never from the 259 the scores are
+measured on, so the answers being scored are not handed to the model. Second,
+the "reason" field now comes first, so the model says what the record is
+before it fills in the other fields, and the other fields follow from it.
+
 Every answer is written to its own small file in a cache folder. If the run
 stops half way, or the network drops, or you want to add more records later,
 just run it again. Records already in the cache are skipped and cost nothing.
@@ -39,7 +47,10 @@ import pandas as pd
 # Bump this when the prompt or the schema changes. It is part of the cache key,
 # so raising it makes the script call the model again instead of reusing old
 # answers that were produced by a different question.
-PROMPT_VERSION = 5
+#   v4 added experimental_animals and extinct_only
+#   v5 narrowed experimental_animals to lab model organisms and farmed animals
+#   v6 added the worked examples and moved reason to the front
+PROMPT_VERSION = 6
 
 
 # What the model is allowed to put in the topic field. Keeping this to a fixed
@@ -63,14 +74,40 @@ FORM_VALUES = ["dataset", "report", "policy", "other"]
 YES_NO_NA = ["yes", "no", "not_applicable"]
 
 
+# The order the fields come back in. reason is first on purpose: the model
+# writes its answer from left to right, so asking for the explanation first
+# means the other fields are filled in after it has said what the record is,
+# and can follow from that, rather than the reason being made up afterwards to
+# fit answers already given.
+FIELD_ORDER = [
+    "reason",
+    "concerns_living_things",
+    "organisms",
+    "organism_level",
+    "topic",
+    "about_organisms_themselves",
+    "ecological_purpose_stated",
+    "experimental_animals",
+    "extinct_only",
+    "form",
+    "language",
+]
+
 # The shape the answer has to come back in. The Gemini API enforces this, so
 # the reply is always valid JSON with these exact fields.
+#
+# propertyOrdering is what makes the API return the fields in FIELD_ORDER.
+# Without it the order is not guaranteed, and reason could land anywhere.
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
+        "reason": {
+            "type": "string",
+            "description": "Write this first. One short sentence saying what the record mainly contains and why the answers that follow are what they are.",
+        },
         "concerns_living_things": {
             "type": "boolean",
-            "description": "True if the record is about living organisms or the ecosystems they live in.",
+            "description": "True if the record is about living organisms or the ecosystems they live in. Physical and chemical measurements are false even if they mention an ecosystem, unless organisms are sampled or counted.",
         },
         "organisms": {
             "type": "array",
@@ -95,7 +132,7 @@ RESPONSE_SCHEMA = {
         "ecological_purpose_stated": {
             "type": "string",
             "enum": YES_NO_NA,
-            "description": "Only for boundaries, land cover or maps. yes if an ecological or conservation purpose is stated, no if not, not_applicable for every other kind of record.",
+            "description": "Only for boundaries, land use, zoning or maps. yes if an ecological or conservation purpose is stated, no if not, not_applicable for every other kind of record.",
         },
         "experimental_animals": {
             "type": "string",
@@ -112,39 +149,31 @@ RESPONSE_SCHEMA = {
             "type": "string",
             "description": "Main language of the record, for example english or french.",
         },
-        "reason": {
-            "type": "string",
-            "description": "One short sentence explaining the answers above.",
-        },
     },
-    "required": [
-        "concerns_living_things",
-        "organisms",
-        "organism_level",
-        "topic",
-        "about_organisms_themselves",
-        "ecological_purpose_stated",
-        "experimental_animals",
-        "extinct_only",
-        "form",
-        "language",
-        "reason",
-    ],
+    "required": FIELD_ORDER,
+    "propertyOrdering": FIELD_ORDER,
 }
 
 
-INSTRUCTIONS = """You are reading metadata records from a Canadian research data catalogue. \
+# The written instructions. The worked examples are added to the end of these
+# further down, once they have been loaded from their file.
+BASE_INSTRUCTIONS = """You are reading metadata records from a Canadian research data catalogue. \
 For each record, report facts about what it contains. Do not decide whether it belongs in a \
 biodiversity database, that decision is made separately.
 
 Answer only from what the record actually says. Do not use background knowledge to fill in \
 things the record does not state. Records may be in English or French.
 
-Field notes:
+Field notes, in the order the answer gives them:
+
+reason: write this first, before any other field. One short sentence saying what the record \
+mainly contains and why. Then fill in every other field so that it agrees with the reason.
 
 concerns_living_things: true if the record is about living organisms or the ecosystems they \
-live in. Physical measurements with no living subject, such as water temperature, bathymetry, \
-wave height or weather, are false unless the record itself mentions living things.
+live in. Physical and chemical measurements are false, such as water quality, weather, ocean \
+currents, temperature, conductivity, irradiance, bathymetry, wave height, and carbon or \
+greenhouse gas fluxes. They stay false even when the record mentions an ecosystem, a forest or \
+another living setting, unless the record actually samples or counts organisms.
 
 organisms: copy the names exactly as the record writes them, scientific or common, English or \
 French. If the record only says something broad like "fish" or "lichens", put that.
@@ -158,11 +187,13 @@ choose a category just because living things are mentioned somewhere.
   organisms: the subject is particular organisms, their populations, behaviour, diet, genetics \
 or distribution.
   habitat_or_ecosystem: the subject is a place, a water body or an ecosystem, and organisms are \
-part of the picture rather than the point. A study of a lake's ecology is this, not organisms.
+part of the picture rather than the point. A study of a lake's ecology is this, not organisms. \
+Vegetation cover, forest cover, tree canopy and similar maps or layers that describe living \
+plants also go here, not under land_and_boundaries.
   forestry_agriculture_fisheries: the subject is growing, harvesting or managing organisms as a \
 resource, including crops, timber and fish stocks.
-  land_and_boundaries: park and protected area boundaries, land cover, cadastral data, \
-topographic maps.
+  land_and_boundaries: park and protected area boundaries, general land use, zoning, parcel \
+and cadastral data, administrative boundaries, topographic maps.
   physical_environment: physical or chemical measurements with no living subject, such as water \
 temperature, bathymetry, weather, geophysical surveys.
   administrative: government records such as budgets, schedules, addresses, election boundaries.
@@ -206,6 +237,61 @@ government report.
   other: anything else."""
 
 
+# The worked examples live in their own file so they can be read and checked
+# without digging through this script. The file name carries the prompt
+# version, so a later version with different examples gets a new file and
+# this one stays as a record of exactly what v6 was shown.
+EXAMPLES_FILE = Path(__file__).with_name("prompt_examples_v6.json")
+
+
+def load_examples(path):
+    """
+    Read the worked examples and check each answer is a valid answer.
+
+    Every example answer has to have exactly the fields in FIELD_ORDER, in
+    that order, with values the schema allows. An example that breaks the
+    schema would teach the model to break it too, so a bad file stops the
+    script here rather than being sent.
+    """
+    examples = json.loads(Path(path).read_text(encoding="utf-8"))
+    properties = RESPONSE_SCHEMA["properties"]
+    for example in examples:
+        answer = example["answer"]
+        where = f"example row {example.get('row')} in {path}"
+        if list(answer) != FIELD_ORDER:
+            raise ValueError(f"{where}: fields must be exactly {FIELD_ORDER} in that order")
+        for field, value in answer.items():
+            allowed = properties[field].get("enum")
+            if allowed and value not in allowed:
+                raise ValueError(f"{where}: {field} = {value!r} is not one of {allowed}")
+    return examples
+
+
+def format_examples(examples):
+    """
+    Turn the worked examples into text to put after the instructions.
+
+    Each example is shown the same way a real record is, followed by the full
+    answer as JSON. The heading says plainly that these are examples and not
+    records to classify, so the model does not answer them again.
+    """
+    lines = [
+        "Worked examples. These show the kind of answer expected, with every field filled in "
+        "and the reason first. They are examples only and are not part of the records to classify.",
+    ]
+    for number, example in enumerate(examples, start=1):
+        lines += ["", f"Example {number}", "Record:"]
+        for label, key in [("Title", "title"), ("Subjects", "subjects"), ("Abstract", "abstract")]:
+            if example.get(key):
+                lines.append(f"{label}: {example[key]}")
+        lines.append("Answer: " + json.dumps(example["answer"], ensure_ascii=False))
+    lines += ["", "End of examples."]
+    return "\n".join(lines)
+
+
+INSTRUCTIONS = BASE_INSTRUCTIONS + "\n\n" + format_examples(load_examples(EXAMPLES_FILE))
+
+
 def tidy_list_field(text):
     """
     Clean up a field that was saved as a list and then written into a CSV.
@@ -237,8 +323,11 @@ def build_prompt(record):
     Only three fields go in: the title, the subject keywords and the abstract.
     Nothing about what the keyword filter decided is included, so the model
     cannot be influenced by it.
+
+    The record is headed "Record to classify" rather than plain "Record", so
+    it cannot be mistaken for one more of the worked examples above it.
     """
-    parts = [INSTRUCTIONS, "", "Record:", ""]
+    parts = [INSTRUCTIONS, "", "Record to classify:", ""]
     for label, column in [("Title", "title"), ("Subjects", "subjects"), ("Abstract", "abstract")]:
         value = record.get(column)
         if value is None or (isinstance(value, float) and pd.isna(value)):

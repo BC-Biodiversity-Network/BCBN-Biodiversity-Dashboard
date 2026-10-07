@@ -30,6 +30,30 @@ Usage:
 
     # The full test set
     python exploration/llm/run_trial.py --model gemini-3.5-flash-lite
+
+Running an open-source model through Ollama instead of Gemini:
+
+The same prompt, schema and cache work with a model served by Ollama, on this
+Mac or on a GPU node of the Digital Research Alliance cluster. Start the
+server first (the Ollama app, or "ollama serve"), pull the model once with
+"ollama pull qwen3.5:0.8b", then:
+
+    # Smoke test, 5 records, on the local server
+    python exploration/llm/run_trial.py --backend ollama --model qwen3.5:0.8b --limit 5
+
+    # A server somewhere else, for example on a cluster node
+    python exploration/llm/run_trial.py --backend ollama --model qwen3.5:0.8b \
+        --ollama-url http://localhost:11434
+
+Ollama has no quota and no per-minute limit, so there is no pacing. Every
+answer is checked against the schema before it is cached, because a small
+local model is more likely than Gemini to return something malformed. The
+summary at the end prints the average seconds per record, which is what is
+needed to estimate how long a full run takes on the cluster.
+
+Unless --out is given, the results go to trial_<model>_v<prompt version>.csv,
+with any character that is awkward in a file name, such as ":" or "/", turned
+into "-". qwen3.5:0.8b on prompt v6 becomes trial_qwen3.5-0.8b_v6.csv.
 """
 
 import argparse
@@ -39,6 +63,8 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
@@ -244,6 +270,46 @@ government report.
 EXAMPLES_FILE = Path(__file__).with_name("prompt_examples_v6.json")
 
 
+def check_answer(answer):
+    """
+    Check that an answer fits the schema. Return None if it does, or a short
+    description of the first problem found.
+
+    Gemini enforces the schema on its side, so its answers always pass. A
+    small local model can still slip, even with Ollama forcing the shape, so
+    every Ollama answer goes through this before it is cached. The worked
+    examples are checked with it too.
+
+    The checks are: every field is there and there are no extra ones,
+    concerns_living_things is true or false, organisms is a list of text, the
+    other fields are text, and every field with a fixed list of values uses one
+    of them.
+    """
+    if not isinstance(answer, dict):
+        return "the answer is not a JSON object"
+    missing = [field for field in FIELD_ORDER if field not in answer]
+    if missing:
+        return f"missing fields: {', '.join(missing)}"
+    extra = [field for field in answer if field not in FIELD_ORDER]
+    if extra:
+        return f"unexpected fields: {', '.join(extra)}"
+    properties = RESPONSE_SCHEMA["properties"]
+    for field in FIELD_ORDER:
+        value = answer[field]
+        kind = properties[field]["type"]
+        if kind == "boolean" and not isinstance(value, bool):
+            return f"{field} should be true or false, got {value!r}"
+        if kind == "array" and not (isinstance(value, list)
+                                    and all(isinstance(item, str) for item in value)):
+            return f"{field} should be a list of text, got {value!r}"
+        if kind == "string" and not isinstance(value, str):
+            return f"{field} should be text, got {value!r}"
+        allowed = properties[field].get("enum")
+        if allowed and value not in allowed:
+            return f"{field} = {value!r} is not one of {allowed}"
+    return None
+
+
 def load_examples(path):
     """
     Read the worked examples and check each answer is a valid answer.
@@ -254,16 +320,14 @@ def load_examples(path):
     script here rather than being sent.
     """
     examples = json.loads(Path(path).read_text(encoding="utf-8"))
-    properties = RESPONSE_SCHEMA["properties"]
     for example in examples:
         answer = example["answer"]
         where = f"example row {example.get('row')} in {path}"
         if list(answer) != FIELD_ORDER:
             raise ValueError(f"{where}: fields must be exactly {FIELD_ORDER} in that order")
-        for field, value in answer.items():
-            allowed = properties[field].get("enum")
-            if allowed and value not in allowed:
-                raise ValueError(f"{where}: {field} = {value!r} is not one of {allowed}")
+        problem = check_answer(answer)
+        if problem:
+            raise ValueError(f"{where}: {problem}")
     return examples
 
 
@@ -458,13 +522,163 @@ def ask_model(client, model, prompt):
     return {"error": f"gave up after 5 attempts: {last_error}"}
 
 
+# How much text Ollama is allowed to hold for one request, in tokens: the
+# prompt plus the answer. Ollama's own default is small and when a prompt is
+# longer it cuts it without any error, so the model would be answering about
+# half a record. The v6 instructions are about 3,500 tokens, and the longest
+# records in the test set add about 7,000 more, so 8,192 is not enough for
+# them. 16,384 leaves room for those and for the answer.
+OLLAMA_NUM_CTX = 16384
+
+# How long to wait for one answer before giving up on that call, in seconds.
+# A small model on a laptop answers in a few seconds. A large model on a busy
+# node can take much longer, so this is generous, and it can be raised with
+# --ollama-timeout.
+OLLAMA_TIMEOUT = 300
+
+
+class OllamaUnreachable(Exception):
+    """
+    Raised when nothing answers at the Ollama address.
+
+    That is not something a retry fixes. The server is not started, or the
+    address is wrong, so the run stops with a message saying so instead of
+    trying every record and failing each one.
+    """
+
+
+def plain_json_schema(schema):
+    """
+    Return a copy of the answer schema in plain JSON Schema, for Ollama.
+
+    RESPONSE_SCHEMA is written for Gemini. It can carry keys only Gemini
+    understands, such as propertyOrdering, and Gemini also accepts type names
+    in capitals such as "STRING". Ollama wants standard JSON Schema, so those
+    keys are dropped and type names are put in lower case. Everything else is
+    kept as it is, including the order of the properties, so "reason" stays
+    first. Ollama fills the fields in the order they appear here.
+    """
+    if isinstance(schema, dict):
+        plain = {}
+        for key, value in schema.items():
+            if key == "propertyOrdering":
+                continue
+            if key == "type" and isinstance(value, str):
+                plain[key] = value.lower()
+            else:
+                plain[key] = plain_json_schema(value)
+        return plain
+    if isinstance(schema, list):
+        return [plain_json_schema(item) for item in schema]
+    return schema
+
+
+def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT):
+    """
+    Send one prompt to an Ollama server and return the answer and token counts.
+
+    This plays the same part as ask_model does for Gemini and returns the same
+    shape, so the rest of the script does not care which one answered. Another
+    local server, such as vLLM, would be added as one more small function like
+    this one.
+
+    It uses Ollama's own chat endpoint, /api/chat, and asks for:
+      the same prompt text Gemini gets, as a single user message
+      format: the answer schema, so Ollama forces the reply into that shape
+      think: false, so a model with a thinking mode answers straight away
+          instead of first writing out long reasoning that is not wanted
+      temperature 0, the same as for Gemini
+      num_ctx: room for the whole prompt, see OLLAMA_NUM_CTX
+
+    A call that times out or fails is tried once more. If the server cannot be
+    reached at all, OllamaUnreachable is raised to stop the run. If the prompt
+    filled the whole context, Ollama may have cut it, so the answer is
+    returned as an error rather than trusted.
+    """
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "think": False,
+        "format": plain_json_schema(RESPONSE_SCHEMA),
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+    }
+    request = urllib.request.Request(
+        url.rstrip("/") + "/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            # The server is there but refused the request. A missing model is
+            # the common case, and retrying will not pull it.
+            detail = error.read().decode("utf-8", errors="replace")[:200]
+            return {"error": f"Ollama said {error.code}: {detail}"}
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (ConnectionRefusedError, FileNotFoundError)):
+                raise OllamaUnreachable(str(error.reason))
+            last_error = error
+        except (TimeoutError, OSError) as error:
+            last_error = error
+        if attempt == 0:
+            print(f"    call failed ({last_error}), trying once more")
+    else:
+        return {"error": f"gave up after 2 attempts: {last_error}"}
+
+    input_tokens = reply.get("prompt_eval_count")
+    if input_tokens and input_tokens >= num_ctx - 16:
+        return {"error": f"the prompt filled the whole context ({input_tokens} of "
+                         f"{num_ctx} tokens) and may have been cut, raise --num-ctx"}
+    content = reply.get("message", {}).get("content", "")
+    try:
+        answer = json.loads(content)
+    except json.JSONDecodeError as error:
+        return {"error": f"reply was not valid JSON: {error}"}
+    return {
+        "answer": answer,
+        "input_tokens": input_tokens,
+        "output_tokens": reply.get("eval_count"),
+        # Ollama does not count reasoning separately. With think set to false
+        # there should be none, so this is recorded as 0.
+        "thinking_tokens": 0,
+    }
+
+
+def safe_file_name(text):
+    """
+    Turn a model name into something safe to put in a file name.
+
+    Model names like qwen3.5:0.8b or a name with a slash in it would break a
+    file name or put the file in another folder. Anything other than letters,
+    digits, dots, dashes and underscores becomes a dash.
+    """
+    return re.sub(r"[^A-Za-z0-9._-]", "-", text)
+
+
 def main():
     """Run the model over the test set, caching every answer to disk."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", default="exploration/llm/test_set_labelled_fixed.csv",
                         help="CSV holding the records to ask about")
+    parser.add_argument("--backend", choices=["gemini", "ollama"], default="gemini",
+                        help="Where the model runs. gemini is Google's API. ollama is an "
+                             "Ollama server, on this machine or on a cluster node.")
     parser.add_argument("--model", default="gemini-3.1-flash-lite",
-                        help="Model name. Check AI Studio for what is currently available.")
+                        help="Model name. For gemini, check AI Studio for what is currently "
+                             "available. For ollama, the name as pulled, for example qwen3.5:0.8b.")
+    parser.add_argument("--ollama-url", default="http://localhost:11434",
+                        help="Address of the Ollama server. Only used with --backend ollama.")
+    parser.add_argument("--num-ctx", type=int, default=OLLAMA_NUM_CTX,
+                        help="Ollama context size in tokens, prompt plus answer. Only used "
+                             "with --backend ollama.")
+    parser.add_argument("--ollama-timeout", type=int, default=OLLAMA_TIMEOUT,
+                        help="Seconds to wait for one Ollama answer before trying again.")
     parser.add_argument("--cache", default="exploration/llm/cache",
                         help="Folder for the cached answers")
     parser.add_argument("--out", default=None,
@@ -481,7 +695,7 @@ def main():
                         help="Output price per million tokens, for the cost line at the end")
     parser.add_argument("--rpm", type=int, default=14,
                         help="Requests per minute to stay under. The free tier allows 15, "
-                             "so the default leaves a little room.")
+                             "so the default leaves a little room. Only used with --backend gemini.")
     args = parser.parse_args()
 
     records = load_records(args.records, args.limit, args.id)
@@ -499,32 +713,54 @@ def main():
     cache_dir = Path(args.cache)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # The client is only imported here so that --dry-run works without the
-    # package installed and without a key.
-    try:
-        from google import genai
-    except ImportError:
-        print("ERROR: the SDK is missing. Install it with:  pip install google-genai")
-        return 1
-    # Read the key out of the .env file. find_dotenv walks up the folder tree
-    # from this script, so the file can sit in exploration/llm, in backend, or
-    # at the top of the repo.
-    try:
-        from dotenv import find_dotenv, load_dotenv
-        found = find_dotenv()
-        if found:
-            load_dotenv(found)
-            print(f"read {found}")
-    except ImportError:
-        pass
+    if args.backend == "ollama":
+        # Nothing to install and no key. Ask the server for its version first,
+        # so a server that is not running is caught before the first record.
+        try:
+            with urllib.request.urlopen(args.ollama_url.rstrip("/") + "/api/version",
+                                        timeout=10) as response:
+                version = json.loads(response.read().decode("utf-8")).get("version")
+            print(f"Ollama {version} at {args.ollama_url}")
+        except (urllib.error.URLError, OSError) as error:
+            print(f"ERROR: could not reach Ollama ({error}).")
+            print(f"Is Ollama running at {args.ollama_url}?")
+            return 1
 
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
-        print("ERROR: no API key found.")
-        print("Put a line like this in backend/.env:")
-        print("    GEMINI_API_KEY=your-key-here")
-        print("If python-dotenv is not installed:  pip install python-dotenv")
-        return 1
-    client = genai.Client()
+        def ask(prompt):
+            """Ask the Ollama server about one prompt."""
+            return ask_ollama(args.ollama_url, args.model, prompt,
+                              num_ctx=args.num_ctx, timeout=args.ollama_timeout)
+    else:
+        # The client is only imported here so that --dry-run works without the
+        # package installed and without a key.
+        try:
+            from google import genai
+        except ImportError:
+            print("ERROR: the SDK is missing. Install it with:  pip install google-genai")
+            return 1
+        # Read the key out of the .env file. find_dotenv walks up the folder tree
+        # from this script, so the file can sit in exploration/llm, in backend, or
+        # at the top of the repo.
+        try:
+            from dotenv import find_dotenv, load_dotenv
+            found = find_dotenv()
+            if found:
+                load_dotenv(found)
+                print(f"read {found}")
+        except ImportError:
+            pass
+
+        if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+            print("ERROR: no API key found.")
+            print("Put a line like this in backend/.env:")
+            print("    GEMINI_API_KEY=your-key-here")
+            print("If python-dotenv is not installed:  pip install python-dotenv")
+            return 1
+        client = genai.Client()
+
+        def ask(prompt):
+            """Ask Gemini about one prompt."""
+            return ask_model(client, args.model, prompt)
 
     rows = []
     fresh_calls = 0
@@ -533,9 +769,13 @@ def main():
     total_thinking = 0
     failures = 0
     stopped_early = False
+    # Seconds each fresh call took, to report an average at the end.
+    call_seconds = []
 
-    pacer = Pacer(args.rpm)
-    if args.rpm:
+    # The pacer exists for Gemini's free tier limit of 15 requests a minute. A
+    # local Ollama server has no such limit, so there it does nothing.
+    pacer = Pacer(args.rpm if args.backend == "gemini" else 0)
+    if args.backend == "gemini" and args.rpm:
         minutes = len(records) / args.rpm
         print(f"pacing at {args.rpm} requests a minute, so a full pass takes "
               f"about {minutes:.1f} minutes if nothing is cached yet")
@@ -553,8 +793,17 @@ def main():
             cached = json.loads(path.read_text(encoding="utf-8"))
         else:
             pacer.wait()
+            started = time.monotonic()
             try:
-                result = ask_model(client, args.model, build_prompt(record))
+                result = ask(build_prompt(record))
+            except OllamaUnreachable as stop:
+                print()
+                print(f"ERROR: Ollama stopped answering at record {position:,} ({stop}).")
+                print(f"Is Ollama running at {args.ollama_url}?")
+                print("Everything done so far is cached. Run the same command again")
+                print("once the server is back and it will carry on from here.")
+                stopped_early = True
+                break
             except DailyQuotaReached as stop:
                 # The free tier allows a fixed number of requests a day. Nothing
                 # is lost: everything done so far is already in the cache, and
@@ -566,6 +815,16 @@ def main():
                 print("tomorrow and it will carry on from here without repeating anything.")
                 stopped_early = True
                 break
+            call_seconds.append(time.monotonic() - started)
+            # A local model can return JSON that does not fit the schema, so
+            # its answers are checked before they can be cached. Gemini
+            # enforces the schema itself, so its answers are left as they were.
+            if args.backend == "ollama" and "answer" in result:
+                problem = check_answer(result["answer"])
+                if problem:
+                    result = {"error": f"answer does not fit the schema: {problem}"}
+            if "error" in result:
+                print(f"    {record_id}: {result['error'][:150]}")
             cached = {"record_id": record_id, "model": args.model,
                       "prompt_version": PROMPT_VERSION, **result}
             # Only a real answer goes in the cache. A failure is usually
@@ -612,7 +871,8 @@ def main():
             "thinking_tokens": cached.get("thinking_tokens"),
         })
 
-    out_path = args.out or f"exploration/llm/trial_{args.model.replace('/', '_')}.csv"
+    out_path = args.out or (f"exploration/llm/trial_{safe_file_name(args.model)}"
+                            f"_v{PROMPT_VERSION}.csv")
     pd.DataFrame(rows).to_csv(out_path, index=False, encoding="utf-8-sig")
 
     print()
@@ -631,6 +891,11 @@ def main():
             print(f"  of which thinking: {total_thinking:,}  ({share:.0f}% of output)")
         print(f"average per record: {total_in / fresh_calls:.0f} in, "
               f"{total_out / fresh_calls:.0f} out")
+        seconds = sum(call_seconds) / len(call_seconds)
+        print(f"time per record:  {seconds:.1f} seconds on average, "
+              f"{min(call_seconds):.1f} to {max(call_seconds):.1f}")
+        print(f"  at that pace, 900 records take about {seconds * 900 / 60:.0f} minutes "
+              f"and 123,479 about {seconds * 123479 / 3600:.0f} hours, one at a time")
         if args.in_price or args.out_price:
             cost = total_in / 1e6 * args.in_price + total_out / 1e6 * args.out_price
             per_record = cost / fresh_calls

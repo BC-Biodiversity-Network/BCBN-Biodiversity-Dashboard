@@ -12,16 +12,20 @@ reports. If a rule changes, both have to change.
 
 ## The five base criteria
 
-1. **Purely physical environmental data is NO** unless the record itself
-   mentions living things. CTD casts, bathymetry, wave height, seismic
-   surveys, weather.
+1. **Purely physical environmental data is NO** unless the record actually
+   samples or counts organisms. CTD casts, bathymetry, wave height, seismic
+   surveys, weather, water quality, ocean currents, irradiance, soil carbon
+   and nitrogen, carbon and greenhouse gas fluxes. Mentioning an ecosystem,
+   a forest or other living setting is not enough.
 
 2. **Forestry, agriculture and fisheries data is YES only when the record is
    about the organisms themselves.** Tenure boundaries, harvest volumes, farm
    income and licensing are NO.
 
-3. **Park and protected area boundaries, land cover and topographic maps are
-   YES only when an ecological or conservation purpose is stated.**
+3. **Park and protected area boundaries, general land use, zoning, parcel,
+   administrative and topographic maps are YES only when an ecological or
+   conservation purpose is stated.** Vegetation cover, forest cover and tree
+   canopy are not in this group, see "In scope" below.
 
 4. **Government administrative records are NO.**
 
@@ -29,7 +33,8 @@ reports. If a rule changes, both have to change.
    organisms or ecosystems.
 
 *Set before the labelling round. Applied by Claude Opus 5 to all 900 records
-in the test set.*
+in the test set. Criteria 1 and 3 were reworded by Lucia on 2026-10-07 to
+say what the hand labels already did, see the notes under "Whole categories".*
 
 ---
 
@@ -41,6 +46,16 @@ in the test set.*
   experimental E. coli populations. This also covers a record that is an
   experiment run *on* farmed animals, see the note under farmed organisms.
 - **Extinct species.** This took out an ancient DNA study of Ice Age deer.
+- **Physical environment data.** Physical and chemical measurements are not
+  about living things even when the record mentions an ecosystem or a forest,
+  unless organisms are sampled or counted. This is criterion 1 and boundary
+  question 4 below, applied as a whole category: in `decide()`, a record the
+  model files under the `physical_environment` topic is NO, checked together
+  with the experimental animal and extinct species rules, before any rule
+  that can say yes. Two permafrost records measuring soil carbon, nitrogen,
+  water content and active layer thickness (rows 283 and 451) were relabelled
+  NO on this basis, matching the NO on a forest greenhouse gas record (row
+  439).
 
 **In scope**
 
@@ -48,6 +63,18 @@ in the test set.*
   Being farmed rather than wild does not by itself put a record out of scope.
 - **Microbes.** Soil microbial communities, cyanobacterial blooms in a
   eutrophic lake, litter decomposition.
+- **Vegetation and forest cover.** Vegetation cover, forest cover, tree
+  canopy and similar maps or layers describe living plants, so they count as
+  habitat or ecosystem data and are YES without a stated purpose. This matches
+  the hand labels on a vegetation layer and a forest biodiversity assessment
+  (rows 165 and 95). Criterion 3 covers only general land use, zoning,
+  parcels, administrative and topographic maps.
+- **Lab experiments on wild or native species.** These are not experimental
+  animals. Algae cultures of wild species, behaviour of wild fish after drug
+  exposure, and ecotoxicology studies on fish or invertebrates stay in scope.
+  "Experimental animals" means standard lab model organisms used as lab tools
+  (lab mice and rats, fruit flies, C. elegans, zebrafish lab lines, lab E. coli
+  and yeast populations) and experiments run on farmed animals.
 
 **The line between farmed organisms and experimental animals.** A record about
 farmed organisms is in scope, but a record that is an experiment on those
@@ -55,7 +82,10 @@ animals is not. A broiler chicken walking-ability trial reads as an
 experimental animal study, not as agriculture. Evan: *"i think fine for now"*.
 
 *Lucia proposed these lines in Slack, Evan agreed 2026-09-24. The broiler
-chicken exception was raised by Evan the same day and agreed by both.*
+chicken exception was raised by Evan the same day and agreed by both. Lucia
+narrowed experimental animals to lab model organisms and farmed animals on
+2026-10-06, and added the physical environment and vegetation cover lines on
+2026-10-07.*
 
 ---
 
@@ -171,6 +201,12 @@ disagrees with one of the seven answers above, the answer wins.
   video changes, these come back.
 - **Records that metadata cannot settle.** 12 flagged. No filter reading title,
   subjects and abstract can reach them.
+- **Wildlife management boundaries whose text states a conservation
+  purpose.** For example hunting and trapping closures that say they exist to
+  conserve certain species. Boundary question 1 says wildlife management
+  boundaries that name no species are NO, but criterion 3 says a stated
+  conservation purpose makes a boundary YES. Not decided. Kept out of the
+  prompt examples until it is.
 - **Why aquaculture leases are in and the beekeeper registry is out.** Both are
   licensing records that name a location and an organism. Criterion 2 explains
   the split, but it is worth confirming with Evan that the split is intended

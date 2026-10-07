@@ -40,13 +40,18 @@ def out_as_whole_category(record):
     """
     Return True if the record falls in a category that is out of scope as a whole.
 
-    These are the two "whole category" rules in scope_criteria.md, agreed with
-    Evan on 2026-09-24. They apply whatever the topic is, so they are checked
-    before anything else can say yes.
+    Three rules live here, and they are checked before anything else can say
+    yes:
 
-    Trial files from before prompt version 4 do not have these two columns at
-    all. For those the answer is simply False, so old files score exactly as
-    they did before.
+      experimental animals and extinct species, the two "whole category"
+      rules in scope_criteria.md agreed with Evan on 2026-09-24
+
+      physical environment data, from criterion 1 and boundary question 4
+
+    Trial files from before prompt version 4 do not have the experimental
+    animals and extinct species columns at all. For those, those two rules
+    simply never fire. The physical environment rule uses the topic column,
+    which every trial file has, so it does change the scores of older files.
     """
     # Whole category rule: experimental animals are out. Lab mice, fruit fly
     # behaviour studies, experimental E. coli populations, and experiments run
@@ -59,6 +64,19 @@ def out_as_whole_category(record):
     if record.get("extinct_only") == "yes":
         return True
 
+    # Physical environment data is out: water quality, currents, temperature,
+    # conductivity, weather, irradiance, carbon and gas fluxes. This is
+    # criterion 1 and boundary question 4, "environmental data not ecological".
+    # The model often files such a record under physical_environment and still
+    # says it concerns living things, because it mentions an ecosystem or a
+    # forest. Going by the topic catches those. It was checked on the 259
+    # reviewed records before being added: it fixed 6 errors for 3.5 and 11 for
+    # 3.1. The only reviewed yes records it turned to no were rows 283 and 451,
+    # permafrost soil measurements the review had marked UNSURE, and those were
+    # then relabelled no on 2026-10-07 under the same reading of criterion 1.
+    if record.get("topic") == "physical_environment":
+        return True
+
     return False
 
 
@@ -67,17 +85,20 @@ def decide(record):
     Apply the scope rules to one model answer and return "yes" or "no".
 
     This is the only place the biodiversity decision is made. Each block below
-    is one of the rules, in the order they are checked: the two whole category
-    rules first, then the five base criteria. If Evan draws a line somewhere
+    is one of the rules, in the order they are checked: the whole category
+    rules first (experimental animals, extinct species, physical environment
+    data), then the five base criteria. If Evan draws a line somewhere
     else, this function is what changes, and nothing has to be asked of the
     model again.
     """
     topic = record.get("topic")
     alive = bool(record.get("concerns_living_things"))
 
-    # Whole category rules, experimental animals and extinct species. These
-    # come first because a broiler chicken trial would otherwise pass as
-    # agriculture about the organisms under criterion 2.
+    # Whole category rules: experimental animals, extinct species and physical
+    # environment data. These come first because a broiler chicken trial would
+    # otherwise pass as agriculture about the organisms under criterion 2, and
+    # a water quality record that mentions an ecosystem would otherwise pass
+    # as concerning living things.
     if out_as_whole_category(record):
         return "no"
 
@@ -91,9 +112,9 @@ def decide(record):
     if topic == "administrative":
         return "no"
 
-    # Criterion 1. Nothing living in it, nothing to index. This also covers
-    # purely physical measurements, which the model marks as not concerning
-    # living things unless the record itself mentions them.
+    # Criterion 1. Nothing living in it, nothing to index. Purely physical
+    # measurements are mostly caught already by the physical environment rule
+    # above. This catches the rest.
     if not alive:
         return "no"
 

@@ -28,3 +28,5 @@ data/
 backend/exploration/llm/cache/
 backend/exploration/llm/for_evan_disagreements.csv
 backend/exploration/lunaris/harvest/
+backend/exploration/lunaris/harvest_test/
+backend/exploration/lunaris/harvest_2026_10/

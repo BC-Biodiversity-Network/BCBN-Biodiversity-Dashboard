@@ -20,7 +20,11 @@ Output, all in --outdir:
     bc_datasets.parquet       one row per dataset in the archive: title,
                               citation, license, DOI, publisher and how many
                               records it has in bc_occurrence.
-    bc_species_image.parquet  one openly licensed image per species.
+    bc_species_image.parquet  one image per species, picked by license:
+                              CC0 or Public Domain Mark first, then each CC
+                              BY license down to CC BY-NC-ND, then Beaty
+                              Biodiversity Museum images with no license.
+                              license_rank and license_source say which.
     download_info.json        download key, DOI, date and query.
 
 How the occurrence table is built:
@@ -434,30 +438,63 @@ def write_empty_multimedia(out_path):
     pq.write_table(pa.schema(list(zip(names, types))).empty_table(), out_path)
 
 
+# License values read as the Public Domain Mark when they are the whole
+# value. Case, punctuation and extra spaces don't matter ("Public Domain."
+# matches "public domain"). A value that only mentions the public domain,
+# such as "Not in the public domain", is not read as PDM. Add forms here.
+PUBLIC_DOMAIN_MARK_TEXTS = [
+    "public domain",
+    "public domain mark",
+    "public domain mark 1.0",
+    "pdm",
+    "pdm 1.0",
+    "cc pdm",
+    "cc pdm 1.0",
+]
+
+
+def normalise_license_text(value):
+    """Return value lowercased, with every run of characters other than
+    letters and digits turned into one space, and trimmed."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value.lower()).split())
+
+
 def parse_license_code(value):
     """Return a short standard code (CC0_1_0, CC_BY_4_0, CC_BY_NC_SA_3_0,
     PDM_1_0, ...) for a license value, or None if it can't be read.
 
     Reads Creative Commons URLs ("http://creativecommons.org/licenses/by/4.0/"),
     short forms anywhere in free text ("Anna Feng (cc-by-sa)",
-    "CC BY-NC 4.0") and spelled-out names ("Creative Commons Attribution
-    NonCommercial 4.0"). When the value names no version, as in
-    "(cc-by-sa)", the code has no version either (CC_BY_SA), rather than
-    guessing one.
+    "CC BY-NC 4.0"), GBIF's underscore codes ("CC_BY_NC_4_0", "CC0_1_0") and
+    spelled-out names ("Creative Commons Attribution NonCommercial 4.0").
+    When the value names no version, as in "(cc-by-sa)", the code has no
+    version either (CC_BY_SA), rather than guessing one.
+
+    A value that is exactly one of PUBLIC_DOMAIN_MARK_TEXTS ("Public
+    Domain", "CC PDM 1.0") is read as the Public Domain Mark.
     """
     if not value:
         return None
     text = value.strip().lower()
 
+    # Word edges are written as "no letter or digit next to it" rather
+    # than \b, because \b treats "_" as part of a word, so it would never
+    # find the end of "by" in "cc_by_4_0".
     # CC0 and the Public Domain Mark have a single version, 1.0.
-    if "publicdomain/zero" in text or re.search(r"\bcc[\s_-]?0\b", text):
+    if "publicdomain/zero" in text or re.search(
+        r"(?<![a-z0-9])cc[\s_-]?0(?![a-z0-9])", text
+    ):
         return "CC0_1_0"
-    if "publicdomain/mark" in text:
+    if "publicdomain/mark" in text or normalise_license_text(text) in {
+        normalise_license_text(t) for t in PUBLIC_DOMAIN_MARK_TEXTS
+    }:
         return "PDM_1_0"
 
     url = re.search(r"creativecommons\.org/licenses/([a-z-]+)/(\d+(?:\.\d+)?)", text)
     short = re.search(
-        r"\bcc[\s_-]+(by(?:[\s_-]+(?:nc|sa|nd))*)\b(?:[\s_-]+v?(\d+(?:\.\d+)?))?", text
+        r"(?<![a-z0-9])cc[\s_-]+(by(?:[\s_-]+(?:nc|sa|nd))*)(?![a-z0-9])"
+        r"(?:[\s_-]+v?(\d+(?:[._]\d+)?))?",
+        text,
     )
     if url:
         parts = url.group(1).split("-")
@@ -487,6 +524,7 @@ def parse_license_code(value):
     # Write the parts in the standard order (BY_NC_SA, not BY_SA_NC).
     code = "CC_" + "_".join(["BY"] + [p.upper() for p in ("nc", "sa", "nd") if p in parts])
     if version:
+        version = version.replace("_", ".")
         if "." not in version:
             version += ".0"
         code += "_" + version.replace(".", "_")
@@ -671,30 +709,102 @@ def build_datasets(con, archive, staged_path, occurrence_path, out_path):
     ).fetchall()
 
 
-# The licenses an image may have to be chosen as a species image, best
-# first. Any version counts, including no stated version.
-SPECIES_IMAGE_LICENSES_SQL = """
-    CASE
-        WHEN regexp_full_match(m.license_code, 'CC0(_[0-9]+_[0-9]+)?') THEN 1
-        WHEN regexp_full_match(m.license_code, 'CC_BY(_[0-9]+_[0-9]+)?') THEN 2
-        WHEN regexp_full_match(m.license_code, 'CC_BY_NC(_[0-9]+_[0-9]+)?') THEN 3
-    END
-"""
+# A dataset counts as the Beaty Biodiversity Museum's when its publisher
+# (in bc_datasets) matches this. Its curator confirmed (email, 2026-10-08)
+# that their records are mostly public domain and they would like
+# attribution, so their images with no license can be used.
+BEATY_PUBLISHER_PATTERN = "%beaty%"
+
+# Datasets not counted as Beaty but whose title or publisher matches this
+# are printed too, in case one of the museum's collections is published
+# under another name.
+BEATY_NEAR_MISS_PATTERN = "university of british columbia|\\bubc\\b|cowan|herbarium"
+
+# Which images may be a species image, best first. Any version counts,
+# including no stated version. Images in neither list are never used.
+SPECIES_IMAGE_LICENSE_RANKS = [
+    (1, "(CC0|PDM)"),
+    (2, "CC_BY"),
+    (3, "CC_BY_SA"),
+    (4, "CC_BY_ND"),
+    (5, "CC_BY_NC"),
+    (6, "CC_BY_NC_SA"),
+    (7, "CC_BY_NC_ND"),
+]
+# Rank for an image with no license at all (NULL or only spaces) from a
+# Beaty dataset. An image whose license is filled in but can't be read,
+# such as "Copyright ...", is not used, Beaty or not.
+BEATY_BLANK_LICENSE_RANK = 8
+
+# The rank as SQL, for a media row m (bc_media) joined to the datasets in
+# beaty_datasets as b (b.datasetkey is NULL for any other dataset).
+SPECIES_IMAGE_LICENSES_SQL = (
+    "CASE\n"
+    + "".join(
+        f"        WHEN regexp_full_match(m.license_code, '{code}(_[0-9]+_[0-9]+)?') "
+        f"THEN {rank}\n"
+        for rank, code in SPECIES_IMAGE_LICENSE_RANKS
+    )
+    + "        WHEN nullif(trim(m.license), '') IS NULL AND b.datasetkey IS NOT NULL "
+    f"THEN {BEATY_BLANK_LICENSE_RANK}\n"
+    + "    END"
+)
+
+
+def find_beaty_datasets(con, datasets_path):
+    """Make the temp table beaty_datasets: the datasets in bc_datasets that
+    count as the Beaty Biodiversity Museum's. Returns them, and the near
+    misses (see BEATY_NEAR_MISS_PATTERN), as lists of (datasetkey, title,
+    publisher, bc_record_count) so they can be printed and checked."""
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE beaty_datasets AS
+        SELECT datasetkey, title, publisher, bc_record_count
+        FROM read_parquet('{datasets_path}')
+        WHERE publisher ILIKE '{BEATY_PUBLISHER_PATTERN}'
+        """
+    )
+    beaty = con.execute(
+        "SELECT * FROM beaty_datasets ORDER BY bc_record_count DESC, datasetkey"
+    ).fetchall()
+    near_misses = con.execute(
+        f"""
+        SELECT datasetkey, title, publisher, bc_record_count
+        FROM read_parquet('{datasets_path}')
+        WHERE datasetkey NOT IN (SELECT datasetkey FROM beaty_datasets)
+          AND (regexp_matches(lower(coalesce(title, '')), '{BEATY_NEAR_MISS_PATTERN}')
+               OR regexp_matches(lower(coalesce(publisher, '')),
+                                 '{BEATY_NEAR_MISS_PATTERN}'))
+        ORDER BY bc_record_count DESC, datasetkey
+        """
+    ).fetchall()
+    return beaty, near_misses
 
 
 def build_species_image(con, occurrence_path, media_path, out_path):
     """Write bc_species_image.parquet: for each specieskey, one StillImage
-    licensed CC0, CC BY or CC BY-NC.
+    chosen by license. Needs the beaty_datasets table (find_beaty_datasets).
 
-    Prefers CC0, then CC BY, then CC BY-NC; among those, the record with
-    the most recent eventdate (records with no date last), then the lowest
-    gbifid and media_order.
+    The license order, best first, is in SPECIES_IMAGE_LICENSE_RANKS: CC0
+    or Public Domain Mark, CC BY, CC BY-SA, CC BY-ND, CC BY-NC, CC BY-NC-SA,
+    CC BY-NC-ND, then (rank 8) an image with no license from a Beaty
+    dataset. Among images of the same rank, the record with the most recent
+    eventdate wins (records with no date last), then the lowest gbifid and
+    media_order.
+
+    license_rank is that rank, so the dashboard knows the tier (it may, for
+    example, show ND images uncropped). license_source is "media" when the
+    image's own license was used, or "beaty_blank_public_domain" for rank 8.
     """
     con.execute(
         f"""
         COPY (
             SELECT specieskey, species, gbifid, media_order, identifier,
-                   "references", creator, rightsholder, license_code, datasetkey
+                   "references", creator, rightsholder, license_code, datasetkey,
+                   license_rank,
+                   CASE WHEN license_rank = {BEATY_BLANK_LICENSE_RANK}
+                        THEN 'beaty_blank_public_domain' ELSE 'media'
+                   END AS license_source
             FROM (
                 SELECT o.specieskey, o.species, m.gbifid, m.media_order,
                        m.identifier, m."references", m.creator, m.rightsholder,
@@ -702,6 +812,7 @@ def build_species_image(con, occurrence_path, media_path, out_path):
                        {SPECIES_IMAGE_LICENSES_SQL} AS license_rank
                 FROM read_parquet('{media_path}') AS m
                 JOIN read_parquet('{occurrence_path}') AS o USING (gbifid)
+                LEFT JOIN beaty_datasets AS b ON b.datasetkey = o.datasetkey
                 WHERE m.type = 'StillImage' AND o.specieskey IS NOT NULL
             )
             WHERE license_rank IS NOT NULL
@@ -717,27 +828,40 @@ def build_species_image(con, occurrence_path, media_path, out_path):
 
 
 def species_without_image(con, occurrence_path, media_path, species_image_path):
-    """Return how many species with records got no image, split by why:
-    no StillImage at all, or only StillImages with other (or no)
-    licenses."""
+    """Return how many species with records got no image, split by why.
+
+    Every license parse_license_code can read is ranked, so a species with
+    StillImages but no image only has images with no license (outside the
+    Beaty datasets, whose blank ones are used) or with a license that
+    could not be read, such as "Copyright ...", or both."""
     return con.execute(
         f"""
         WITH species AS (
             SELECT DISTINCT specieskey FROM read_parquet('{occurrence_path}')
             WHERE specieskey IS NOT NULL
         ),
-        has_still AS (
-            SELECT DISTINCT o.specieskey
+        still AS (
+            SELECT o.specieskey,
+                   bool_or(nullif(trim(m.license), '') IS NULL) AS any_blank,
+                   bool_or(nullif(trim(m.license), '') IS NOT NULL
+                           AND m.license_code IS NULL) AS any_unread
             FROM read_parquet('{media_path}') AS m
             JOIN read_parquet('{occurrence_path}') AS o USING (gbifid)
             WHERE m.type = 'StillImage'
+            GROUP BY o.specieskey
         )
         SELECT
-            CASE WHEN h.specieskey IS NULL THEN 'no images at all'
-                 ELSE 'only images with other or no licenses' END AS reason,
+            CASE WHEN st.specieskey IS NULL THEN 'no still images at all'
+                 WHEN st.any_blank AND st.any_unread
+                     THEN 'only images with no license or one that could not be read'
+                 WHEN st.any_blank
+                     THEN 'only images with no license, outside the Beaty datasets'
+                 WHEN st.any_unread
+                     THEN 'only images with a license that could not be read'
+                 ELSE 'other (check SPECIES_IMAGE_LICENSE_RANKS)' END AS reason,
             count(*)
         FROM species AS s
-        LEFT JOIN has_still AS h USING (specieskey)
+        LEFT JOIN still AS st USING (specieskey)
         WHERE s.specieskey NOT IN (
             SELECT specieskey FROM read_parquet('{species_image_path}'))
         GROUP BY reason
@@ -952,6 +1076,7 @@ def main():
         )
 
         log(t_all, "Building bc_species_image...")
+        beaty, beaty_near_misses = find_beaty_datasets(con, datasets_path)
         build_species_image(con, occurrence_path, media_path, species_image_path)
 
         log(t_all, "Writing download_info.json...")
@@ -982,6 +1107,23 @@ def main():
             con, occurrence_path, media_path, species_image_path
         ):
             print(f"  no image, {reason}: {n:,}")
+        print("  species by license_rank:")
+        for rank, source, n in con.execute(
+            f"""SELECT license_rank, license_source, count(*)
+                FROM read_parquet('{species_image_path}') GROUP BY ALL ORDER BY 1"""
+        ).fetchall():
+            print(f"    {rank}  {source:<26} {n:>10,}")
+
+        print(f"\nDatasets treated as Beaty Biodiversity Museum ({len(beaty)}), "
+              f"whose images with no license are used (rank {BEATY_BLANK_LICENSE_RANK}):")
+        for datasetkey, title, publisher, n in beaty:
+            print(f"  {datasetkey}  {n:>9,} records  {title}  [{publisher}]")
+        if not beaty:
+            print(f"  WARNING: no dataset's publisher matches "
+                  f"'{BEATY_PUBLISHER_PATTERN}'")
+        print(f"Not treated as Beaty but possibly related ({len(beaty_near_misses)}):")
+        for datasetkey, title, publisher, n in beaty_near_misses:
+            print(f"  {datasetkey}  {n:>9,} records  {title}  [{publisher}]")
 
         print_media_licenses(con, media_path)
 

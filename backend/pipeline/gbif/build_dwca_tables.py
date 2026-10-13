@@ -709,15 +709,25 @@ def build_datasets(con, archive, staged_path, occurrence_path, out_path):
     ).fetchall()
 
 
-# A dataset counts as the Beaty Biodiversity Museum's when its publisher
-# (in bc_datasets) matches this. Its curator confirmed (email, 2026-10-08)
-# that their records are mostly public domain and they would like
-# attribution, so their images with no license can be used.
-BEATY_PUBLISHER_PATTERN = "%beaty%"
+# The Beaty Biodiversity Museum's datasets on GBIF. Their curator confirmed
+# (email, 2026-10-08) that their records are mostly public domain and they
+# would like attribution, so their images with no license can be used. They
+# are listed by key because GBIF names the publisher "University of British
+# Columbia", not the museum, so no publisher name picks out just these.
+BEATY_DATASET_KEYS = [
+    "07fd0d79-4883-435f-bba1-58fef110cd13",  # UBC Herbarium - Vascular Plant Collection
+    "4edd9396-59df-4b01-9e29-dc21a59f9963",  # UBC Herbarium - Bryophytes Collection
+    "628abbe5-dc8d-41e9-a0c7-f05efe282649",  # UBC Herbarium - Lichen Collection
+    "90302970-1bc6-4865-be76-9aef1dd707f9",  # UBC Herbarium - Algae Collection
+    "ca1bcd7e-7387-42f9-81ba-1470db55e3e8",  # UBC Herbarium - Fungi Collection
+    "9c45867f-f77d-42f3-9751-ae16bb7c9bc8",  # UBC - Spencer Entomological Collection
+    "4caf2040-83ad-4fa7-ba13-005bced721eb",  # Beaty Biodiversity Museum Fish Collection
+    "ba0c046d-52bb-4262-a495-652988c9f3f7",  # Cowan Tetrapod Collection - Birds
+    "3ad882bb-cd21-4201-8b83-3684bfc6d830",  # Cowan Tetrapod Collection - Mammals
+]
 
-# Datasets not counted as Beaty but whose title or publisher matches this
-# are printed too, in case one of the museum's collections is published
-# under another name.
+# Datasets not in BEATY_DATASET_KEYS but whose title or publisher matches
+# this are printed too, in case the museum has a collection not on the list.
 BEATY_NEAR_MISS_PATTERN = "university of british columbia|\\bubc\\b|cowan|herbarium"
 
 # Which images may be a species image, best first. Any version counts,
@@ -752,21 +762,33 @@ SPECIES_IMAGE_LICENSES_SQL = (
 
 
 def find_beaty_datasets(con, datasets_path):
-    """Make the temp table beaty_datasets: the datasets in bc_datasets that
-    count as the Beaty Biodiversity Museum's. Returns them, and the near
-    misses (see BEATY_NEAR_MISS_PATTERN), as lists of (datasetkey, title,
-    publisher, bc_record_count) so they can be printed and checked."""
+    """Make the temp table beaty_datasets, holding BEATY_DATASET_KEYS.
+
+    Returns three lists, so they can be printed and checked:
+      the listed datasets found in bc_datasets, as (datasetkey, title,
+          publisher, bc_record_count);
+      the listed keys not in bc_datasets (a typo, or a dataset with no
+          records in this download);
+      the near misses (see BEATY_NEAR_MISS_PATTERN), in the same form as
+          the first list.
+    """
+    keys = ", ".join(f"'{key}'" for key in BEATY_DATASET_KEYS)
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE beaty_datasets AS
-        SELECT datasetkey, title, publisher, bc_record_count
-        FROM read_parquet('{datasets_path}')
-        WHERE publisher ILIKE '{BEATY_PUBLISHER_PATTERN}'
+        SELECT unnest([{keys}]) AS datasetkey
         """
     )
     beaty = con.execute(
-        "SELECT * FROM beaty_datasets ORDER BY bc_record_count DESC, datasetkey"
+        f"""
+        SELECT d.datasetkey, d.title, d.publisher, d.bc_record_count
+        FROM read_parquet('{datasets_path}') AS d
+        WHERE d.datasetkey IN (SELECT datasetkey FROM beaty_datasets)
+        ORDER BY d.bc_record_count DESC, d.datasetkey
+        """
     ).fetchall()
+    found = {row[0] for row in beaty}
+    missing = [key for key in BEATY_DATASET_KEYS if key not in found]
     near_misses = con.execute(
         f"""
         SELECT datasetkey, title, publisher, bc_record_count
@@ -778,7 +800,47 @@ def find_beaty_datasets(con, datasets_path):
         ORDER BY bc_record_count DESC, datasetkey
         """
     ).fetchall()
-    return beaty, near_misses
+    return beaty, missing, near_misses
+
+
+def beaty_blank_license_counts(con, occurrence_path, media_path, species_image_path):
+    """Return, for each dataset in beaty_datasets, (datasetkey, media items,
+    media items with a blank license, of those how many are StillImages,
+    species whose picture came from this dataset through the blank-license
+    rank). This shows which of the museum's datasets actually add pictures."""
+    return dict(
+        (row[0], row[1:])
+        for row in con.execute(
+            f"""
+            WITH media AS (
+                SELECT o.datasetkey, m.type,
+                       nullif(trim(m.license), '') IS NULL AS blank
+                FROM read_parquet('{media_path}') AS m
+                JOIN read_parquet('{occurrence_path}') AS o USING (gbifid)
+                WHERE o.datasetkey IN (SELECT datasetkey FROM beaty_datasets)
+            ),
+            counts AS (
+                SELECT datasetkey, count(*) AS n_media,
+                       count(*) FILTER (WHERE blank) AS n_blank,
+                       count(*) FILTER (WHERE blank AND type = 'StillImage')
+                           AS n_blank_still
+                FROM media
+                GROUP BY datasetkey
+            ),
+            pictures AS (
+                SELECT datasetkey, count(*) AS n_species
+                FROM read_parquet('{species_image_path}')
+                WHERE license_rank = {BEATY_BLANK_LICENSE_RANK}
+                GROUP BY datasetkey
+            )
+            SELECT b.datasetkey, coalesce(c.n_media, 0), coalesce(c.n_blank, 0),
+                   coalesce(c.n_blank_still, 0), coalesce(p.n_species, 0)
+            FROM beaty_datasets AS b
+            LEFT JOIN counts AS c ON c.datasetkey = b.datasetkey
+            LEFT JOIN pictures AS p ON p.datasetkey = b.datasetkey
+            """
+        ).fetchall()
+    )
 
 
 def build_species_image(con, occurrence_path, media_path, out_path):
@@ -1076,7 +1138,7 @@ def main():
         )
 
         log(t_all, "Building bc_species_image...")
-        beaty, beaty_near_misses = find_beaty_datasets(con, datasets_path)
+        beaty, beaty_missing, beaty_near_misses = find_beaty_datasets(con, datasets_path)
         build_species_image(con, occurrence_path, media_path, species_image_path)
 
         log(t_all, "Writing download_info.json...")
@@ -1114,14 +1176,20 @@ def main():
         ).fetchall():
             print(f"    {rank}  {source:<26} {n:>10,}")
 
-        print(f"\nDatasets treated as Beaty Biodiversity Museum ({len(beaty)}), "
-              f"whose images with no license are used (rank {BEATY_BLANK_LICENSE_RANK}):")
+        blank_counts = beaty_blank_license_counts(
+            con, occurrence_path, media_path, species_image_path
+        )
+        print(f"\nBeaty Biodiversity Museum datasets ({len(beaty)} of "
+              f"{len(BEATY_DATASET_KEYS)} listed), whose images with no license "
+              f"are used (rank {BEATY_BLANK_LICENSE_RANK}). Columns: records, media "
+              f"items, blank license, of those StillImages, species pictures from it:")
         for datasetkey, title, publisher, n in beaty:
-            print(f"  {datasetkey}  {n:>9,} records  {title}  [{publisher}]")
-        if not beaty:
-            print(f"  WARNING: no dataset's publisher matches "
-                  f"'{BEATY_PUBLISHER_PATTERN}'")
-        print(f"Not treated as Beaty but possibly related ({len(beaty_near_misses)}):")
+            n_media, n_blank, n_blank_still, n_species = blank_counts[datasetkey]
+            print(f"  {datasetkey}  {n:>9,} {n_media:>9,} {n_blank:>9,} "
+                  f"{n_blank_still:>9,} {n_species:>7,}  {title}  [{publisher}]")
+        for datasetkey in beaty_missing:
+            print(f"  WARNING: listed Beaty dataset {datasetkey} is not in bc_datasets")
+        print(f"Not on the Beaty list but possibly related ({len(beaty_near_misses)}):")
         for datasetkey, title, publisher, n in beaty_near_misses:
             print(f"  {datasetkey}  {n:>9,} records  {title}  [{publisher}]")
 

@@ -24,23 +24,29 @@ A pair is merged automatically only if all of these hold:
   2. Both keys were found in the Catalogue of Life.
   3. Same kingdom, and same phylum. A missing phylum on either key counts
      as the same when the family is the same.
-  4. At least one author in common, after normalising the spelling: case,
-     accents ("Müller" = "Muller" = "Mueller"), spaces and punctuation
-     ("DeGeer" = "De Geer"), initials before a surname ("O. F. Müller" =
-     "Muller") or after it ("Herbst, J.F.W." = "Herbst"), years and brackets
-     are ignored, an abbreviation matches the full name ("Kütz." =
-     "Kuetzing", "L." = "Linnaeus"), and a name of several words matches
-     its first word ("Nees von Esenbeck" = "Nees"). Authors in brackets and
-     on both sides of "ex" all count, so "Parry ex Engelm." and "Engelm."
-     share an author.
-     If either key has no authorship, there is nothing to compare, and the
-     pair is merged when the genus and the family are the same instead.
-  The reason column says which of these let the pair through: "same
-  author", "same author after normalising" (every author matches), "shares
-  an author" (only some do), or "one authorship empty, same genus and
-  family", with "; phylum missing, same family" added when rule 3 needed
-  it. Pairs that only match after normalising are printed, so they can be
-  checked.
+  4. Both keys have an authorship, and their validly publishing authors are
+     the same:
+       - In "A ex B" only B counts (the author after the last "ex"), both
+         inside and outside brackets; in "A in B" only A counts.
+       - The authors outside the brackets must all match, one to one.
+       - The bracketed (basionym) authors must also all match when both
+         sides have brackets; when only one side has them, they are not
+         compared. A zoological name written entirely in brackets, like
+         "(Linnaeus, 1758)", has no separate basionym: its bracketed authors
+         are its main authors, so it matches "Linnaeus, 1758".
+       - Spelling is normalised: case, accents ("Müller" = "Muller" =
+         "Mueller"), spaces and punctuation ("DeGeer" = "De Geer"),
+         initials before a surname ("O. F. Müller" = "Muller") or after it
+         ("Herbst, J.F.W." = "Herbst"), an abbreviation matches the full
+         name ("Kütz." = "Kuetzing", "L." = "Linnaeus"), and a name of
+         several words matches its first word ("Nees von Esenbeck" =
+         "Nees").
+  5. Years: if both authorships give a year and the years differ, the pair
+     stays apart. A year on only one side is fine.
+  The reason column says "same author" (written identically) or "same
+  author after normalising", with "; phylum missing, same family" added
+  when rule 3 needed it. Pairs that only match after normalising are
+  printed, so they can be checked.
 
 Which key is kept: the accepted one over a provisionally accepted one; if
 both have the same status, the one whose genus is the first word of the
@@ -90,8 +96,11 @@ AUTHOR_ABBREVIATIONS = {
 # so "Kütz." matches "Kuetzing" and "Brightw." matches "Brightwell".
 MIN_PREFIX = 4
 
-# Words that join authors rather than being part of a name.
-JOINING_WORDS = r"\s*(?:,|&|\bet\b|\band\b|\bex\b|\bin\b)\s*"
+# Words and marks that separate authors within one part of an authorship.
+JOINING_WORDS = r"\s*(?:,|&|\bet\b|\band\b)\s*"
+
+# A year in an authorship.
+YEAR = re.compile(r"\b(1[5-9]\d\d|20\d\d)\b")
 
 # Small words at the start of a surname that are not the name itself, so
 # the first real word of "De Geer" is "geer", not "de".
@@ -139,14 +148,21 @@ def one_author(text):
     return "".join(words), first, abbreviated
 
 
-def author_list(authorship):
-    """Return the authors in an authorship as a list of (name, first word,
-    abbreviated), ignoring years and brackets, and counting authors in
-    brackets and on both sides of "ex". Initials written after a surname
-    ("Herbst, J.F.W.", "Linnaeus, C.") are given names and are dropped; an
-    authorship made only of initials ("L.") is kept."""
-    text = re.sub(r"\d+", " ", authorship or "")
-    text = text.replace("(", ",").replace(")", ",")
+def publishing_part(text):
+    """Return the validly publishing part of one piece of an authorship:
+    what follows the last "ex" ("Douglas ex Hook." gives "Hook."), and
+    what comes before "in" ("Smith in Jones" gives "Smith")."""
+    text = re.split(r"\bex\b", text, flags=re.IGNORECASE)[-1]
+    return re.split(r"\bin\b", text, flags=re.IGNORECASE)[0]
+
+
+def author_list(text):
+    """Return the authors in one piece of an authorship (no brackets) as a
+    list of (name, first word, abbreviated). Years are ignored. Initials
+    written after a surname ("Herbst, J.F.W.", "Linnaeus, C.") are given
+    names and are dropped; an author made only of initials ("L.") is
+    kept."""
+    text = YEAR.sub(" ", publishing_part(text or ""))
     parts = [p for p in re.split(JOINING_WORDS, text, flags=re.IGNORECASE)
              if p and p.strip(" ,.")]
     authors = []
@@ -157,6 +173,25 @@ def author_list(authorship):
         if author[0]:
             authors.append(author)
     return authors
+
+
+def parse_authorship(authorship):
+    """Split an authorship into (main authors, basionym authors, years).
+
+    The basionym authors are the ones in brackets, the main authors the ones
+    after them: "(Mill.) Britton" gives main [Britton], basionym [Mill.].
+    A name written entirely in brackets, as zoological names often are
+    ("(Stephens, 1836)"), has its bracketed authors as main authors and no
+    basionym. basionym is None when there are no brackets to compare.
+    years is the set of years written anywhere in the authorship."""
+    text = authorship or ""
+    years = set(YEAR.findall(text))
+    inside = " , ".join(re.findall(r"\(([^()]*)\)", text))
+    outside = re.sub(r"\([^()]*\)", " ", text)
+    main, basionym = author_list(outside), author_list(inside)
+    if not main:
+        main, basionym = basionym, []
+    return main, (basionym or None), years
 
 
 def full_name(name):
@@ -195,11 +230,6 @@ def all_authors_match(left, right):
             return False
         unused.remove(match)
     return True
-
-
-def shares_an_author(left, right):
-    """Say whether two author lists have at least one author in common."""
-    return any(same_author(a, b) for a in left for b in right)
 
 
 def is_v_key(key):
@@ -278,31 +308,42 @@ def decide(species, keys):
                 f"{a['phylum'] or '(no phylum)'} {a['family']} vs {b['specieskey']} "
                 f"{b['kingdom']}/{b['phylum'] or '(no phylum)'} {b['family']}", False)
 
-    left, right = author_list(a["authorship"]), author_list(b["authorship"])
-    normalised = False
-    if not left or not right:
-        if not (a["genus"] and a["genus"] == b["genus"]
-                and a["family"] and a["family"] == b["family"]):
-            return ("separate", None, None,
-                    f"one authorship empty and genus or family differ: {a['specieskey']} "
-                    f"{a['genus']}/{a['family']} vs {b['specieskey']} {b['genus']}/{b['family']}",
-                    False)
-        match = "one authorship empty, same genus and family"
-    elif a["authorship"].strip() == b["authorship"].strip():
-        match = "same author"
-    elif all_authors_match(left, right):
-        match = "same author after normalising"
-        normalised = True
-    elif shares_an_author(left, right):
-        match = "shares an author"
-    else:
-        return ("separate", None, None,
-                f"no author in common: {a['specieskey']} '{a['authorship']}' vs "
-                f"{b['specieskey']} '{b['authorship']}'", False)
+    main_a, basionym_a, years_a = parse_authorship(a["authorship"])
+    main_b, basionym_b, years_b = parse_authorship(b["authorship"])
+    pair_text = (f"{a['specieskey']} '{a['authorship']}' vs "
+                 f"{b['specieskey']} '{b['authorship']}'")
+    if not main_a or not main_b:
+        return ("separate", None, None, f"no authorship to compare: {pair_text}", False)
+    if years_a and years_b and years_a != years_b:
+        return ("separate", None, None, f"years differ: {pair_text}", False)
+    if not all_authors_match(main_a, main_b):
+        return ("separate", None, None, f"authors differ: {pair_text}", False)
+    if basionym_a and basionym_b and not all_authors_match(basionym_a, basionym_b):
+        return ("separate", None, None, f"basionym authors differ: {pair_text}", False)
+    normalised = a["authorship"].strip() != b["authorship"].strip()
+    match = "same author after normalising" if normalised else "same author"
     if place_note:
         match += f"; {place_note}"
     kept, old, why = choose_kept(keys, species)
     return ("merge", kept, old, f"{match}; {why}", normalised)
+
+
+# Columns of species_key_not_merged.csv. A name with more than two keys
+# lists the rest in more_keys, as "key: authorship" joined with " | ".
+SEPARATE_COLUMNS = ["species", "key_1", "authorship_1", "kingdom_1", "phylum_1",
+                    "key_2", "authorship_2", "kingdom_2", "phylum_2", "more_keys", "reason"]
+
+
+def separate_row(species, keys, reason):
+    """Return one row of species_key_not_merged.csv for a name kept apart."""
+    row = {"species": species, "reason": reason, "more_keys": ""}
+    for number, key in enumerate(keys[:2], start=1):
+        row[f"key_{number}"] = key["specieskey"]
+        row[f"authorship_{number}"] = key["authorship"]
+        row[f"kingdom_{number}"] = key["kingdom"]
+        row[f"phylum_{number}"] = key["phylum"]
+    row["more_keys"] = " | ".join(f"{k['specieskey']}: {k['authorship']}" for k in keys[2:])
+    return row
 
 
 def read_previous(path):
@@ -362,9 +403,7 @@ def main():
             if after_normalising:
                 normalised.append((species, kept, old))
         else:
-            separate.append({"species": species,
-                             "keys": ", ".join(r["specieskey"] for r in keys),
-                             "reason": reason})
+            separate.append(separate_row(species, keys, reason))
 
     # Hand-checked pairs replace any automatic decision on the same key.
     manual = read_manual(args.manual)
@@ -387,7 +426,7 @@ def main():
         writer.writerows(sorted(merge, key=lambda m: (m["species"], m["old_key"])))
     separate_path = os.path.join(folder, NOT_MERGED_NAME)
     with open(separate_path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["species", "keys", "reason"])
+        writer = csv.DictWriter(handle, fieldnames=SEPARATE_COLUMNS)
         writer.writeheader()
         writer.writerows(separate)
 
@@ -434,7 +473,8 @@ def main():
                   f"{m['kept_key']} '{kept.get('authorship', '')}'  [{m['reason']}]")
         print(f"No longer merged ({len(gone)}):")
         for old_key, kept_key, species, reason in gone:
-            print(f"  {species}: {old_key} -> {kept_key}  (was: {reason})")
+            print(f"  {species}: {old_key} '{by_old.get(old_key, {}).get('authorship', '')}' -> "
+                  f"{kept_key} '{by_old.get(kept_key, {}).get('authorship', '')}'  (was: {reason})")
     else:
         print(f"\nNo earlier {MERGE_NAME} to compare with.")
 

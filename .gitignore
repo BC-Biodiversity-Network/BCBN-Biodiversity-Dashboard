@@ -30,3 +30,10 @@ backend/exploration/llm/for_evan_disagreements.csv
 backend/exploration/lunaris/harvest/
 backend/exploration/lunaris/harvest_test/
 backend/exploration/lunaris/harvest_2026_10/
+
+# API answers saved by fetch_key_evidence.py
+backend/exploration/species_keys/cache/
+
+# LLM test caches and logs (do not commit)
+backend/exploration/llm/cache_harvest_2026_10/
+backend/exploration/llm/*.log

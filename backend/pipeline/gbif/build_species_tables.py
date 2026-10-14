@@ -11,7 +11,7 @@ Input, all in --tables (written by build_dwca_tables.py):
 and, for a check only, in --hex-dir (default: the --tables folder):
     bc_hex_r4.parquet ... bc_hex_r7.parquet  (from build_hex_aggregates.py)
 and, only with --key-merge:
-    species_key_merge.csv     old_key, kept_key, species, reason (from
+    species_key_merge.csv     old_key, kept_key, species, ... (from
                               make_species_key_merge.py)
 
 Output, in --outdir:
@@ -30,7 +30,10 @@ Output, in --outdir:
 Merging keys (--key-merge):
   Some species names have two specieskeys in the Catalogue of Life, often
   the same species entered twice. make_species_key_merge.py lists the pairs
-  that are surely the same species. With --key-merge, every record of an
+  to merge. As a safety check, every row is refused unless both of its keys
+  have records in bc_occurrence under exactly one species name, and it is
+  the same name for both keys; any refused row stops the run before
+  anything is built. With --key-merge, every record of an
   old_key is counted under its kept_key before anything is built, so a
   merged species has one row in the card, one set of hexagons and its
   records summed. The card takes the kept key's own taxonomy and
@@ -147,7 +150,8 @@ def read_key_merge(path):
     missing = {"old_key", "kept_key"} - set(rows[0]) if rows else set()
     if missing:
         raise SystemExit(f"{path} has no column(s) {sorted(missing)}")
-    pairs = [(r["old_key"].strip(), r["kept_key"].strip(), r.get("reason", ""))
+    pairs = [(r["old_key"].strip(), r["kept_key"].strip(),
+              r.get("merge_reason") or r.get("reason") or "")
              for r in rows]
     olds = [old for old, _, _ in pairs]
     twice = sorted({k for k in olds if olds.count(k) > 1})
@@ -156,6 +160,40 @@ def read_key_merge(path):
         raise SystemExit(f"{path} is not a one-step merge: mapped twice {twice}, "
                          f"mapped onto a key that is also mapped away {chained}")
     return pairs
+
+
+def check_merge_species(con, occurrence_path, merge_pairs, path):
+    """Stop the run, listing every bad row, unless each merge row's two keys
+    have records in bc_occurrence under exactly one species name each, and
+    the two names are exactly the same. A key with no records, or with more
+    than one species name, makes its row bad too, because the names cannot
+    be confirmed."""
+    keys = sorted({k for old, kept, _ in merge_pairs for k in (old, kept)})
+    if not keys:
+        return
+    listed = ", ".join(f"'{k}'" for k in keys)
+    names = {
+        key: found
+        for key, found in con.execute(
+            f"""SELECT specieskey, list(DISTINCT coalesce(species, '(no species name)'))
+                FROM read_parquet('{occurrence_path}')
+                WHERE specieskey IN ({listed})
+                GROUP BY specieskey"""
+        ).fetchall()
+    }
+    bad = []
+    for old, kept, _ in merge_pairs:
+        problems = [f"{key} has no records in bc_occurrence" for key in (old, kept)
+                    if key not in names]
+        problems += [f"{key} has {len(names[key])} species names {sorted(names[key])}"
+                     for key in (old, kept) if key in names and len(names[key]) != 1]
+        if not problems and names[old] != names[kept]:
+            problems.append(f"species names differ: '{names[old][0]}' vs '{names[kept][0]}'")
+        if problems:
+            bad.append(f"{old} -> {kept}: " + "; ".join(problems))
+    if bad:
+        raise SystemExit(f"{path}: {len(bad)} merge row(s) refused, the two keys of a merge "
+                         f"must have exactly the same species name:\n  " + "\n  ".join(bad))
 
 
 def register_records(con, occurrence_path, merge_pairs):
@@ -542,6 +580,7 @@ def main():
     con = connect(args.threads, args.memory_limit, args.temp_dir)
     check_inputs(con, occurrence_path, image_path, datasets_path)
     merge_pairs = read_key_merge(args.key_merge) if args.key_merge else []
+    check_merge_species(con, occurrence_path, merge_pairs, args.key_merge)
     register_records(con, occurrence_path, merge_pairs)
     os.makedirs(args.outdir, exist_ok=True)
 

@@ -29,10 +29,11 @@ Where the answers come from:
   "merge" for names added from another checklist to fill gaps) and a source
   checklist, whose title is looked up too.
 
-  Keys starting with "V" are the ones the question is about: on the examples
-  checked by hand (VL2GD) they are names merged in from another checklist,
-  marked provisionally accepted. The summary reports what the "V" keys and
-  the other keys actually are, so that is checked rather than assumed.
+  The summary also counts keys starting with "V", because the question
+  started from pairs of one V key and one other key. Where V keys come from
+  is not assumed: the summary reports their status, sector mode and source
+  checklist, and those vary. The merge itself no longer looks at the V
+  pattern (see backend/pipeline/gbif/make_species_key_merge.py).
 
 Being gentle with the APIs: one request at a time with a short pause
 between them, and a failed request is tried again a few times, waiting

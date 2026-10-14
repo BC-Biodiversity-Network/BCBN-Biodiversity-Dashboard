@@ -3,60 +3,73 @@ make_species_key_merge.py
 
 Decide which pairs of specieskeys that share a species name are the same
 species, and write them as a merge list for build_species_tables.py
-(--key-merge). Only pairs we are sure about are merged; anything uncertain
+(--key-merge). Only pairs that pass every rule are merged; anything else
 stays as two separate species.
 
 Input:  duplicate_species_lookup.csv, from
         backend/exploration/gbif/lookup_duplicate_species_keys.py: one row per
-        key, with the Catalogue of Life status and authorship of each key.
-        species_key_merge_manual.csv (optional, next to this script): pairs
-        checked by hand, with columns old_key, kept_key, species, evidence.
+        key, with its classification (kingdom to species), record count, and
+        the Catalogue of Life status and authorship.
+        species_key_merge_manual.csv (next to this script): pairs checked by
+        hand, with columns old_key, kept_key, species, evidence. It may be
+        empty (header only).
 Output, next to the input:
-        species_key_merge.csv       old_key, kept_key, species, reason
-        species_key_not_merged.csv  species, keys, reason (kept separate)
+        species_key_merge.csv       one row per merged pair: old_key (the key
+                                    not kept), kept_key, species, the status,
+                                    record count and authorship of both keys,
+                                    author_match, year_match, kept_reason and
+                                    merge_reason, so a merge can be switched
+                                    or undone later
+        species_key_not_merged.csv  one row per pair kept apart: both keys,
+                                    the rule that stopped it and, for a
+                                    conflict, the levels and the two values
 If species_key_merge.csv is already there from an earlier run, it is read
-first and the pairs newly merged (or no longer merged) are printed.
+first, and the pairs newly merged, no longer merged, or merged with the
+other key kept are printed.
 
-A pair is merged automatically only if all of these hold:
-  1. The name has exactly two keys, one starting with "V" and one not. (The
-     V keys are names the Catalogue of Life merged in from another checklist
-     to fill gaps.)
-  2. Both keys were found in the Catalogue of Life.
-  3. Same kingdom, and same phylum. A missing phylum on either key counts
-     as the same when the family is the same.
-  4. Both keys have an authorship, and their validly publishing authors are
-     the same:
-       - In "A ex B" only B counts (the author after the last "ex"), both
-         inside and outside brackets; in "A in B" only A counts.
-       - The authors outside the brackets must all match, one to one.
-       - The bracketed (basionym) authors must also all match when both
-         sides have brackets; when only one side has them, they are not
-         compared. A zoological name written entirely in brackets, like
-         "(Linnaeus, 1758)", has no separate basionym: its bracketed authors
-         are its main authors, so it matches "Linnaeus, 1758".
-       - Spelling is normalised: case, accents ("Müller" = "Muller" =
-         "Mueller"), spaces and punctuation ("DeGeer" = "De Geer"),
-         initials before a surname ("O. F. Müller" = "Muller") or after it
-         ("Herbst, J.F.W." = "Herbst"), an abbreviation matches the full
-         name ("Kütz." = "Kuetzing", "L." = "Linnaeus"), and a name of
-         several words matches its first word ("Nees von Esenbeck" =
-         "Nees").
-  5. Years: if both authorships give a year and the years differ, the pair
-     stays apart. A year on only one side is fine.
-  The reason column says "same author" (written identically) or "same
-  author after normalising", with "; phylum missing, same family" added
-  when rule 3 needed it. Pairs that only match after normalising are
-  printed, so they can be checked.
+A pair of keys is merged automatically only if all of these hold:
+  1. Iron rule: kingdom, phylum, class, order, family, genus and species
+     match letter for letter wherever both keys have a value. The species
+     name must always match exactly.
+  2. Empty values: taking the two keys together, at most one of those seven
+     levels has an empty value (on one side or both), and that level is not
+     genus or species. A key with no order and the other with no family is
+     two levels, so that pair is not merged.
+  3. Both keys were found in the lookup (no lookup error).
+  The checks run in the order lookup, iron rule, empty values; a pair kept
+  apart is reported under the first rule it fails.
+Authors and years are not used to decide anything. Two columns record them
+for review: author_match (yes when the validly publishing authors match
+after normalising the spelling, see below; no otherwise, including when
+either authorship is empty) and year_match (yes when both authorships give
+the same year, no when both give a year and the years differ, empty when
+either gives none).
 
-Which key is kept: the accepted one over a provisionally accepted one; if
-both have the same status, the one whose genus is the first word of the
-species name; if still tied, the one with more records; then the key that
-does not start with "V".
+Which key is kept: the accepted one over any other status; then the one
+with more records; then the key that sorts first alphabetically, only so
+that every run gives the same answer.
 
-Pairs checked by hand go in species_key_merge_manual.csv and are added with
-reason "manual". A manual row replaces an automatic decision on the same
-key. The script stops if the list would map a key twice, or map a key onto
-a key that is itself mapped away, so the merge is always one step.
+Pairs checked by hand go in species_key_merge_manual.csv. A manual row may
+skip the iron rule and the empty-values rule, and its kept_key is used as
+given, but both of its keys must be in the lookup with exactly the same
+species name as each other and as the row's species column, or the script
+stops with an error. A manual row replaces an automatic decision on the same
+keys. The script also stops if the list would map a key twice, or map a key
+onto a key that is itself mapped away, so the merge is always one step.
+
+How author_match normalises the authors (the same normalising used before):
+  - In "A ex B" only B counts (the author after the last "ex"), inside and
+    outside brackets; in "A in B" only A counts.
+  - The authors outside the brackets must all match, one to one; the
+    bracketed (basionym) authors too when both sides have brackets. A
+    zoological name written entirely in brackets, like "(Linnaeus, 1758)",
+    has its bracketed authors as its main authors.
+  - Case, accents ("Müller" = "Muller" = "Mueller"), spaces and punctuation
+    ("DeGeer" = "De Geer"), initials before a surname ("O. F. Müller" =
+    "Muller") or after it ("Herbst, J.F.W." = "Herbst") and years are
+    ignored, an abbreviation matches the full name ("Kütz." = "Kuetzing",
+    "L." = "Linnaeus"), and a name of several words matches its first word
+    ("Nees von Esenbeck" = "Nees").
 
 Run (from backend/):
     python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
@@ -68,7 +81,7 @@ import os
 import re
 import sys
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 DEFAULT_LOOKUP = "~/bcbn/data/gbif_tables/duplicate_species_lookup.csv"
 DEFAULT_MANUAL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -76,8 +89,20 @@ DEFAULT_MANUAL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MERGE_NAME = "species_key_merge.csv"
 NOT_MERGED_NAME = "species_key_not_merged.csv"
 
-# Statuses in order of preference for the key that is kept.
-STATUS_ORDER = {"accepted": 0, "provisionally accepted": 1}
+# The seven levels the iron rule compares, from the top down.
+LEVELS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
+
+# Levels that may never be empty on either key of a merged pair.
+NEVER_EMPTY = {"genus", "species"}
+
+# How many of the seven levels may be empty, taking both keys together.
+MAX_EMPTY_LEVELS = 1
+
+# The rules a pair can be stopped by, as written in species_key_not_merged.csv.
+RULE_NOT_A_PAIR = "not exactly two keys"
+RULE_LOOKUP = "lookup failed"
+RULE_IRON = "iron rule"
+RULE_EMPTY = "empty values"
 
 # Standard author abbreviations too short to match by their first letters
 # alone ("L." would otherwise also match "Lamarck"). Written as the full
@@ -232,40 +257,97 @@ def all_authors_match(left, right):
     return True
 
 
-def is_v_key(key):
-    """Return True for a key starting with "V"."""
-    return key.upper().startswith("V")
+def is_empty(value):
+    """Say whether a classification value is empty (missing or only spaces)."""
+    return not (value or "").strip()
 
 
-def choose_kept(pair, species):
-    """Return (kept row, old row, why) for a pair of key rows."""
-    genus = species.split()[0] if species else ""
+def iron_rule_conflicts(a, b):
+    """Return the levels where both keys have a value and the values differ,
+    as (level, value of a, value of b). The comparison is letter for letter."""
+    return [(level, a[level], b[level]) for level in LEVELS
+            if not is_empty(a[level]) and not is_empty(b[level]) and a[level] != b[level]]
 
+
+def empty_levels(a, b):
+    """Return the levels that are empty on either key (or both)."""
+    return [level for level in LEVELS if is_empty(a[level]) or is_empty(b[level])]
+
+
+def author_match(a, b):
+    """Return "yes" if the two keys' validly publishing authors match after
+    normalising (years ignored), otherwise "no". An empty authorship on
+    either side gives "no"."""
+    main_a, basionym_a, _ = parse_authorship(a["authorship"])
+    main_b, basionym_b, _ = parse_authorship(b["authorship"])
+    if not main_a or not main_b or not all_authors_match(main_a, main_b):
+        return "no"
+    if basionym_a and basionym_b and not all_authors_match(basionym_a, basionym_b):
+        return "no"
+    return "yes"
+
+
+def year_match(a, b):
+    """Return "yes" if both authorships give the same year(s), "no" if both
+    give a year and they differ, and "" if either gives none."""
+    years_a = parse_authorship(a["authorship"])[2]
+    years_b = parse_authorship(b["authorship"])[2]
+    if not years_a or not years_b:
+        return ""
+    return "yes" if years_a == years_b else "no"
+
+
+def choose_kept(a, b):
+    """Return (kept row, old row, kept_reason) for the two key rows of a pair:
+    the accepted key first, then the one with more records, then the key that
+    sorts first alphabetically."""
     def preference(row):
-        return (STATUS_ORDER.get(row["status"], 2),
-                0 if row["genus"] == genus else 1,
-                -row["record_count"],
-                1 if is_v_key(row["specieskey"]) else 0,
-                row["specieskey"])
+        """Sort order: accepted first, more records first, then the key."""
+        return (0 if row["status"] == "accepted" else 1, -row["record_count"], row["specieskey"])
 
-    kept, old = sorted(pair, key=preference)
-    if STATUS_ORDER.get(kept["status"], 2) != STATUS_ORDER.get(old["status"], 2):
-        why = f"kept the {kept['status']} key"
-    elif (kept["genus"] == genus) != (old["genus"] == genus):
-        why = "kept the key whose genus matches the name"
+    kept, old = sorted([a, b], key=preference)
+    if (kept["status"] == "accepted") != (old["status"] == "accepted"):
+        why = "accepted status"
     elif kept["record_count"] != old["record_count"]:
-        why = "kept the key with more records"
+        why = "more records"
     else:
-        why = "kept the key that does not start with V"
+        why = "same status and record count; first alphabetically"
     return kept, old, why
 
 
+def decide(keys):
+    """Decide one species name. Returns ("merge", details) with details
+    {"merge_reason"}, or ("separate", details) with details {"rule",
+    "reason", "conflicts", "empty"}."""
+    if len(keys) != 2:
+        return "separate", {"rule": RULE_NOT_A_PAIR, "conflicts": [], "empty": [],
+                            "reason": f"{len(keys)} keys: " + ", ".join(k["specieskey"] for k in keys)}
+    a, b = keys
+    failed = [k for k in keys if k["error"]]
+    if failed:
+        return "separate", {"rule": RULE_LOOKUP, "conflicts": [], "empty": [],
+                            "reason": "; ".join(f"{k['specieskey']}: {k['error']}" for k in failed)}
+    conflicts = iron_rule_conflicts(a, b)
+    if conflicts:
+        return "separate", {"rule": RULE_IRON, "conflicts": conflicts, "empty": empty_levels(a, b),
+                            "reason": "; ".join(f"{level} '{va}' vs '{vb}'"
+                                                for level, va, vb in conflicts)}
+    empty = empty_levels(a, b)
+    if len(empty) > MAX_EMPTY_LEVELS or set(empty) & NEVER_EMPTY:
+        why = (f"{len(empty)} levels empty" if len(empty) > MAX_EMPTY_LEVELS
+               else f"{', '.join(sorted(set(empty) & NEVER_EMPTY))} empty")
+        return "separate", {"rule": RULE_EMPTY, "conflicts": [], "empty": empty,
+                            "reason": f"{why}: {', '.join(empty)}"}
+    reason = "all seven levels match" if not empty else f"all levels match except {empty[0]}, empty"
+    return "merge", {"merge_reason": f"automatic: {reason}"}
+
+
 def read_lookup(path):
-    """Read the lookup CSV and return its rows grouped by species name."""
+    """Read the lookup CSV and return (rows grouped by species name, rows by
+    key). Stops if a needed column is missing."""
     with open(path, newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
-    needed = {"species", "specieskey", "kingdom", "phylum", "genus",
-              "record_count", "status", "authorship", "error"}
+    needed = set(LEVELS) | {"specieskey", "record_count", "status", "authorship", "error"}
     missing = needed - set(rows[0]) if rows else set()
     if missing:
         raise SystemExit(f"{path} has no column(s) {sorted(missing)}")
@@ -273,99 +355,87 @@ def read_lookup(path):
     for row in rows:
         row["record_count"] = int(float(row["record_count"] or 0))
         names[row["species"]].append(row)
-    return names
+    return names, {row["specieskey"]: row for row in rows}
 
 
-def same_place(a, b):
-    """Return (same, note): whether two keys are in the same kingdom and
-    phylum, and a note when a missing phylum was let through because the
-    family is the same."""
-    if a["kingdom"] != b["kingdom"]:
-        return False, ""
-    if a["phylum"] == b["phylum"]:
-        return True, ""
-    if (not a["phylum"] or not b["phylum"]) and a["family"] and a["family"] == b["family"]:
-        return True, "phylum missing, same family"
-    return False, ""
+MERGE_COLUMNS = [
+    "old_key", "kept_key", "species",
+    "old_status", "kept_status", "old_record_count", "kept_record_count",
+    "old_authorship", "kept_authorship", "author_match", "year_match",
+    "kept_reason", "merge_reason",
+]
+
+NOT_MERGED_COLUMNS = [
+    "species", "key_1", "status_1", "record_count_1", "authorship_1",
+    "key_2", "status_2", "record_count_2", "authorship_2",
+    "rule", "conflict_levels", "conflict_values_1", "conflict_values_2",
+    "empty_levels", "author_match", "year_match", "reason",
+]
 
 
-def decide(species, keys):
-    """Decide one name. Returns ("merge", kept, old, reason, normalised) or
-    ("separate", None, None, reason, False). normalised is True when the
-    authorships are written differently but every author matches."""
-    keys_text = ", ".join(r["specieskey"] for r in keys)
-    if len(keys) != 2 or sum(is_v_key(r["specieskey"]) for r in keys) != 1:
-        return ("separate", None, None,
-                f"not one V key and one other key ({keys_text})", False)
-    if any(r["error"] for r in keys):
-        return ("separate", None, None, "lookup failed: " + "; ".join(
-            f"{r['specieskey']} {r['error']}" for r in keys if r["error"]), False)
-    a, b = keys
-    same, place_note = same_place(a, b)
-    if not same:
-        return ("separate", None, None,
-                f"different kingdom or phylum: {a['specieskey']} {a['kingdom']}/"
-                f"{a['phylum'] or '(no phylum)'} {a['family']} vs {b['specieskey']} "
-                f"{b['kingdom']}/{b['phylum'] or '(no phylum)'} {b['family']}", False)
-
-    main_a, basionym_a, years_a = parse_authorship(a["authorship"])
-    main_b, basionym_b, years_b = parse_authorship(b["authorship"])
-    pair_text = (f"{a['specieskey']} '{a['authorship']}' vs "
-                 f"{b['specieskey']} '{b['authorship']}'")
-    if not main_a or not main_b:
-        return ("separate", None, None, f"no authorship to compare: {pair_text}", False)
-    if years_a and years_b and years_a != years_b:
-        return ("separate", None, None, f"years differ: {pair_text}", False)
-    if not all_authors_match(main_a, main_b):
-        return ("separate", None, None, f"authors differ: {pair_text}", False)
-    if basionym_a and basionym_b and not all_authors_match(basionym_a, basionym_b):
-        return ("separate", None, None, f"basionym authors differ: {pair_text}", False)
-    normalised = a["authorship"].strip() != b["authorship"].strip()
-    match = "same author after normalising" if normalised else "same author"
-    if place_note:
-        match += f"; {place_note}"
-    kept, old, why = choose_kept(keys, species)
-    return ("merge", kept, old, f"{match}; {why}", normalised)
+def merge_row(kept, old, species, kept_reason, merge_reason):
+    """Return one row of species_key_merge.csv."""
+    return {
+        "old_key": old["specieskey"], "kept_key": kept["specieskey"], "species": species,
+        "old_status": old["status"], "kept_status": kept["status"],
+        "old_record_count": old["record_count"], "kept_record_count": kept["record_count"],
+        "old_authorship": old["authorship"], "kept_authorship": kept["authorship"],
+        "author_match": author_match(old, kept), "year_match": year_match(old, kept),
+        "kept_reason": kept_reason, "merge_reason": merge_reason,
+    }
 
 
-# Columns of species_key_not_merged.csv. A name with more than two keys
-# lists the rest in more_keys, as "key: authorship" joined with " | ".
-SEPARATE_COLUMNS = ["species", "key_1", "authorship_1", "kingdom_1", "phylum_1",
-                    "key_2", "authorship_2", "kingdom_2", "phylum_2", "more_keys", "reason"]
-
-
-def separate_row(species, keys, reason):
-    """Return one row of species_key_not_merged.csv for a name kept apart."""
-    row = {"species": species, "reason": reason, "more_keys": ""}
+def not_merged_row(species, keys, details):
+    """Return one row of species_key_not_merged.csv. For a conflict, the
+    levels and the two keys' values are listed in the same order, joined
+    with " | "."""
+    row = {"species": species, "rule": details["rule"], "reason": details["reason"],
+           "conflict_levels": " | ".join(c[0] for c in details["conflicts"]),
+           "conflict_values_1": " | ".join(c[1] for c in details["conflicts"]),
+           "conflict_values_2": " | ".join(c[2] for c in details["conflicts"]),
+           "empty_levels": ", ".join(details["empty"])}
     for number, key in enumerate(keys[:2], start=1):
         row[f"key_{number}"] = key["specieskey"]
+        row[f"status_{number}"] = key["status"]
+        row[f"record_count_{number}"] = key["record_count"]
         row[f"authorship_{number}"] = key["authorship"]
-        row[f"kingdom_{number}"] = key["kingdom"]
-        row[f"phylum_{number}"] = key["phylum"]
-    row["more_keys"] = " | ".join(f"{k['specieskey']}: {k['authorship']}" for k in keys[2:])
+    if len(keys) == 2:
+        row["author_match"] = author_match(*keys)
+        row["year_match"] = year_match(*keys)
     return row
 
 
-def read_previous(path):
-    """Return the pairs in an existing merge list as {old_key: (kept_key,
-    species, reason)}, or None if there is no file yet."""
-    if not os.path.exists(path):
-        return None
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        return {r["old_key"]: (r["kept_key"], r["species"], r["reason"])
-                for r in csv.DictReader(handle)}
-
-
 def read_manual(path):
-    """Read the hand-checked pairs, if the file exists, as a list of dicts."""
+    """Read the hand-checked pairs, if the file exists, as a list of dicts.
+    A file with only its header row gives an empty list."""
     if not os.path.exists(path):
         return []
     with open(path, newline="", encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle))
-    missing = {"old_key", "kept_key", "species", "evidence"} - set(rows[0]) if rows else set()
-    if missing:
-        raise SystemExit(f"{path} has no column(s) {sorted(missing)}")
-    return rows
+        reader = csv.DictReader(handle)
+        missing = {"old_key", "kept_key", "species", "evidence"} - set(reader.fieldnames or [])
+        if missing:
+            raise SystemExit(f"{path} has no column(s) {sorted(missing)}")
+        return [row for row in reader if any((v or "").strip() for v in row.values())]
+
+
+def check_manual(manual, by_key, path):
+    """Stop with a clear error if a manual row's keys are not both in the
+    lookup, or their species names are not exactly the same as each other
+    and as the row's species column."""
+    problems = []
+    for row in manual:
+        old, kept = by_key.get(row["old_key"]), by_key.get(row["kept_key"])
+        if old is None or kept is None:
+            absent = [k for k in (row["old_key"], row["kept_key"]) if k not in by_key]
+            problems.append(f"{row['old_key']} -> {row['kept_key']}: key(s) {absent} not in "
+                            f"the lookup, so the species names cannot be checked")
+        elif not (old["species"] == kept["species"] == row["species"]):
+            problems.append(f"{row['old_key']} -> {row['kept_key']}: species names differ: "
+                            f"'{old['species']}' vs '{kept['species']}' (row says "
+                            f"'{row['species']}')")
+    if problems:
+        raise SystemExit(f"{path}: manual rows refused, a manual merge must join two keys with "
+                         f"exactly the same species name:\n  " + "\n  ".join(problems))
 
 
 def check_one_step(merge):
@@ -379,8 +449,27 @@ def check_one_step(merge):
                          f"mapped onto a key that is also mapped away {chained}")
 
 
+def read_previous(path):
+    """Return the pairs in an existing merge list as {species: row}, or None
+    if there is no file yet. Works with the older files too, which had a
+    single "reason" column."""
+    if not os.path.exists(path):
+        return None
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return {r["species"]: r for r in csv.DictReader(handle)}
+
+
+def write_csv(path, columns, rows):
+    """Write rows (dicts) to a CSV with the given columns."""
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main():
-    """Write the merge list and the list of names kept separate."""
+    """Write the merge list and the list of pairs kept apart, and print a
+    summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--lookup", default=DEFAULT_LOOKUP,
                         help=f"duplicate_species_lookup.csv (default {DEFAULT_LOOKUP})")
@@ -391,106 +480,87 @@ def main():
 
     lookup_path = os.path.expanduser(args.lookup)
     folder = os.path.dirname(os.path.abspath(lookup_path))
-    names = read_lookup(lookup_path)
+    names, by_key = read_lookup(lookup_path)
+    manual = read_manual(args.manual)
+    check_manual(manual, by_key, args.manual)
 
-    merge, separate, normalised = [], [], []
+    merge, separate = [], []
     for species in sorted(names):
         keys = names[species]
-        verdict, kept, old, reason, after_normalising = decide(species, keys)
+        verdict, details = decide(keys)
         if verdict == "merge":
-            merge.append({"old_key": old["specieskey"], "kept_key": kept["specieskey"],
-                          "species": species, "reason": reason})
-            if after_normalising:
-                normalised.append((species, kept, old))
+            kept, old, kept_reason = choose_kept(*keys)
+            merge.append(merge_row(kept, old, species, kept_reason, details["merge_reason"]))
         else:
-            separate.append(separate_row(species, keys, reason))
+            separate.append(not_merged_row(species, keys, details))
 
-    # Hand-checked pairs replace any automatic decision on the same key.
-    manual = read_manual(args.manual)
+    # Hand-checked pairs replace any automatic decision on the same keys.
     for row in manual:
-        replaced = [m for m in merge if m["old_key"] in (row["old_key"], row["kept_key"])]
+        pair = {row["old_key"], row["kept_key"]}
+        replaced = [m for m in merge if {m["old_key"], m["kept_key"]} & pair]
         merge = [m for m in merge if m not in replaced]
-        separate = [s for s in separate if s["species"] != row["species"]]
-        merge.append({"old_key": row["old_key"], "kept_key": row["kept_key"],
-                      "species": row["species"], "reason": "manual"})
+        separate = [s for s in separate if not ({s.get("key_1"), s.get("key_2")} & pair)]
+        merge.append(merge_row(by_key[row["kept_key"]], by_key[row["old_key"]], row["species"],
+                               "chosen by hand", f"manual: {row['evidence']}"))
         for m in replaced:
             print(f"NOTE: manual row {row['old_key']} -> {row['kept_key']} replaces "
-                  f"{m['old_key']} -> {m['kept_key']} ({m['reason']})")
+                  f"{m['old_key']} -> {m['kept_key']} ({m['merge_reason']})")
     check_one_step(merge)
 
     merge_path = os.path.join(folder, MERGE_NAME)
-    previous = read_previous(merge_path)
-    with open(merge_path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["old_key", "kept_key", "species", "reason"])
-        writer.writeheader()
-        writer.writerows(sorted(merge, key=lambda m: (m["species"], m["old_key"])))
     separate_path = os.path.join(folder, NOT_MERGED_NAME)
-    with open(separate_path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=SEPARATE_COLUMNS)
-        writer.writeheader()
-        writer.writerows(separate)
+    previous = read_previous(merge_path)
+    merge.sort(key=lambda m: (m["species"], m["old_key"]))
+    write_csv(merge_path, MERGE_COLUMNS, merge)
+    write_csv(separate_path, NOT_MERGED_COLUMNS, separate)
 
     # Summary.
-    records = {r["specieskey"]: r["record_count"] for keys in names.values() for r in keys}
-    moved = sum(records.get(m["old_key"], 0) for m in merge)
-    auto = [m for m in merge if m["reason"] != "manual"]
-    print(f"Lookup:  {lookup_path} ({len(names):,} names)")
+    auto = [m for m in merge if m["merge_reason"].startswith("automatic")]
+    moved = sum(m["old_record_count"] for m in merge)
+    print(f"Lookup:  {lookup_path} ({len(names):,} names, {len(by_key):,} keys)")
     print(f"Manual:  {args.manual} ({len(manual)} rows)")
     print(f"Written: {merge_path}")
     print(f"         {separate_path}\n")
     print(f"Merged: {len(merge):,} pairs ({len(auto):,} automatic, {len(manual)} manual), "
           f"{moved:,} records move to the kept key")
-    kept_v = sum(is_v_key(m["kept_key"]) for m in auto)
-    print(f"  the V key is the one kept in {kept_v:,} of the automatic pairs")
-    matches, keeps = defaultdict(int), defaultdict(int)
-    for m in auto:
-        parts = m["reason"].split("; ")
-        matches["; ".join(parts[:-1])] += 1
-        keeps[parts[-1]] += 1
-    print("  why merged:")
-    for why, n in sorted(matches.items(), key=lambda kv: -kv[1]):
-        print(f"    {why}: {n:,}")
-    print("  which key was kept:")
-    for why, n in sorted(keeps.items(), key=lambda kv: -kv[1]):
-        print(f"    {why}: {n:,}")
+    for label, column in [("why merged", "merge_reason"), ("which key was kept", "kept_reason"),
+                          ("author_match", "author_match"), ("year_match", "year_match")]:
+        counts = Counter(m[column] or "(empty)" for m in auto)
+        print(f"  {label}: " + "; ".join(f"{k} {n:,}" for k, n in counts.most_common()))
 
-    print(f"\nMerged only after normalising the authors ({len(normalised)}), please check:")
-    for species, kept, old in normalised:
-        print(f"  {species}: {old['specieskey']} '{old['authorship']}' -> "
-              f"{kept['specieskey']} '{kept['authorship']}'")
-
-    if previous is not None:
-        now = {m["old_key"]: m for m in merge}
-        new = [now[k] for k in sorted(now, key=lambda k: now[k]["species"]) if k not in previous]
-        gone = [(k, *previous[k]) for k in sorted(previous, key=lambda k: previous[k][1])
-                if k not in now]
-        print(f"\nNewly merged compared with the previous {MERGE_NAME} ({len(new)}), "
-              f"please check:")
-        by_old = {r["specieskey"]: r for keys in names.values() for r in keys}
-        for m in new:
-            old, kept = by_old.get(m["old_key"], {}), by_old.get(m["kept_key"], {})
-            print(f"  {m['species']}: {m['old_key']} '{old.get('authorship', '')}' -> "
-                  f"{m['kept_key']} '{kept.get('authorship', '')}'  [{m['reason']}]")
-        print(f"No longer merged ({len(gone)}):")
-        for old_key, kept_key, species, reason in gone:
-            print(f"  {species}: {old_key} '{by_old.get(old_key, {}).get('authorship', '')}' -> "
-                  f"{kept_key} '{by_old.get(kept_key, {}).get('authorship', '')}'  (was: {reason})")
-    else:
-        print(f"\nNo earlier {MERGE_NAME} to compare with.")
-
-    print(f"\nKept separate ({len(separate):,}):")
-    kinds = defaultdict(list)
+    print(f"\nKept apart: {len(separate):,} pairs")
+    by_rule = defaultdict(list)
     for s in separate:
-        kinds[s["reason"].split(":")[0].split(" (")[0]].append(s)
-    for kind, rows in sorted(kinds.items(), key=lambda kv: -len(kv[1])):
-        print(f"  {kind}: {len(rows):,}")
-        for s in rows:
-            print(f"    {s['species']}: {s['reason']}")
+        by_rule[s["rule"]].append(s)
+    for rule in [RULE_NOT_A_PAIR, RULE_LOOKUP, RULE_IRON, RULE_EMPTY]:
+        print(f"  {rule}: {len(by_rule[rule]):,}")
+    for rule in [RULE_NOT_A_PAIR, RULE_LOOKUP, RULE_IRON, RULE_EMPTY]:
+        if by_rule[rule]:
+            print(f"\n{rule} ({len(by_rule[rule])}):")
+            for s in by_rule[rule]:
+                print(f"  {s['species']}: {s['key_1']} vs {s['key_2']}: {s['reason']}")
 
-    if manual:
-        print(f"\nManual rows ({len(manual)}):")
-        for row in manual:
-            print(f"  {row['species']}: {row['old_key']} -> {row['kept_key']}  ({row['evidence']})")
+    if previous is None:
+        print(f"\nNo earlier {MERGE_NAME} to compare with.")
+        return 0
+    now = {m["species"]: m for m in merge}
+    new = [now[s] for s in sorted(now) if s not in previous]
+    gone = [previous[s] for s in sorted(previous) if s not in now]
+    switched = [(previous[s], now[s]) for s in sorted(now)
+                if s in previous and previous[s]["kept_key"] != now[s]["kept_key"]]
+    print(f"\nCompared with the previous {MERGE_NAME} ({len(previous)} pairs):")
+    print(f"  newly merged ({len(new)}):")
+    for m in new:
+        print(f"    {m['species']}: {m['old_key']} -> {m['kept_key']}  [{m['merge_reason']}; "
+              f"author_match {m['author_match']}, year_match {m['year_match'] or '-'}]")
+    print(f"  no longer merged ({len(gone)}):")
+    for p in gone:
+        why = next((s["rule"] + ": " + s["reason"] for s in separate if s["species"] == p["species"]), "")
+        print(f"    {p['species']}: {p['old_key']} -> {p['kept_key']}  "
+              f"(was: {p.get('merge_reason') or p.get('reason')}; now: {why})")
+    print(f"  merged both times but the other key kept now ({len(switched)}):")
+    for p, m in switched:
+        print(f"    {m['species']}: kept {p['kept_key']} before, {m['kept_key']} now ({m['kept_reason']})")
     return 0
 
 

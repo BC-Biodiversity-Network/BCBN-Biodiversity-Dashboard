@@ -171,6 +171,40 @@ cd backend
 python pipeline/gbif/build_hex_aggregates.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --outdir ~/bcbn/data
 ```
 
+**`backend/pipeline/gbif/make_species_key_merge.py` -> `species_key_merge.csv`, `species_key_not_merged.csv`**
+Some species names have two specieskeys in the Catalogue of Life. This script
+reads `duplicate_species_lookup.csv` (from
+`backend/exploration/gbif/lookup_duplicate_species_keys.py`) and decides
+which pairs are merged. A pair merges automatically only if:
+
+1. Iron rule: kingdom, phylum, class, order, family, genus and species match
+   letter for letter wherever both keys have a value. The species name must
+   always match exactly.
+2. Empty values: taking both keys together, at most one of those seven
+   levels is empty (on one side or both), and never genus or species.
+3. Both keys were found in the lookup.
+
+Authors and years are not used to decide anything; `author_match` and
+`year_match` columns record them for review. The key kept is the accepted
+one, then the one with more records, then the one that sorts first
+alphabetically. Pairs checked by hand go in
+`backend/pipeline/gbif/species_key_merge_manual.csv` (empty for now): a
+manual row may skip rules 1 and 2, but the script refuses one whose two keys
+do not have exactly the same species name. `species_key_merge.csv` keeps the
+status, record count and authorship of both keys, so a merge can be switched
+or undone; `species_key_not_merged.csv` says which rule stopped each pair
+and, for a conflict, the level and the two values.
+
+`build_species_tables.py --key-merge species_key_merge.csv` then counts each
+old key's records under its kept key in `species_hex` and the species card.
+As a safety check it stops, before building anything, if a row's two keys do
+not have exactly one and the same species name in `bc_occurrence`.
+
+```
+cd backend
+python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
+```
+
 ## Validation
 
 The clean product holds **38,739,753 records** and **38,218 distinct

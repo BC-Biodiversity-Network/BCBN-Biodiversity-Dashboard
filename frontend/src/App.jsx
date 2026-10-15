@@ -9,6 +9,8 @@ import { getHexagonEdgeLengthAvg } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { loadHexData } from './loadHexData'
+import SearchBox from './SearchBox'
+import SelectedSpecies from './SelectedSpecies'
 
 // The basemap style. Swap this one line to change providers.
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/bright'
@@ -473,6 +475,10 @@ export default function App() {
     pickResolution(INITIAL_VIEW_STATE.zoom, null),
   )
   const [variableName, setVariableName] = useState(DEFAULT_VARIABLE)
+  // The species picked in the search box, as the API's search result, or null.
+  // For now it only fills the placeholder; the card (step 6) and the species
+  // map (step 7) will use it.
+  const [selectedSpecies, setSelectedSpecies] = useState(null)
   const [error, setError] = useState(null)
 
   // Download all three files once, when the page first appears.
@@ -541,6 +547,16 @@ export default function App() {
       {!stillLoading && !error && (
         <Legend variable={COLOUR_VARIABLES[variableName]} />
       )}
+
+      <div className="top-right-controls">
+        <SearchBox onSelect={setSelectedSpecies} />
+        {selectedSpecies && (
+          <SelectedSpecies
+            species={selectedSpecies}
+            onClear={() => setSelectedSpecies(null)}
+          />
+        )}
+      </div>
 
       <Map
         initialViewState={INITIAL_VIEW_STATE}

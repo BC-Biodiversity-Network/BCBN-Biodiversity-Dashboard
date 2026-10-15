@@ -136,3 +136,162 @@ body {
   line-height: 1.35;
   color: #777;
 }
+
+/* The search box and the selected species, top right. The top left holds the
+   map controls and the bottom left the legend, so this corner is free. The
+   width shrinks on a narrow screen so the box never runs off the side. */
+.top-right-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(380px, calc(100vw - 24px));
+}
+
+.search-box {
+  position: relative;
+}
+
+.search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-family: inherit;
+  font-size: 14px;
+  color: #1a1a1a;
+}
+
+.search-input:focus {
+  outline: 2px solid #3987e5;
+  outline-offset: 0;
+}
+
+/* The drop-down under the box: a message, the results and the source note.
+   It scrolls on its own if the results do not fit. */
+.search-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+}
+
+.search-message {
+  padding: 8px 10px;
+  color: #555;
+}
+
+.search-message.error {
+  color: #a3261b;
+}
+
+.search-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-result {
+  padding: 7px 10px;
+  border-top: 1px solid #eee;
+  cursor: pointer;
+}
+
+.search-result:first-child {
+  border-top: 0;
+}
+
+/* The highlighted result, by mouse or arrow keys. */
+.search-result.active {
+  background: #e8f1fc;
+}
+
+/* Scientific names are written in italics, as is the convention. */
+.scientific-name {
+  font-style: italic;
+}
+
+.result-name {
+  font-size: 14px;
+}
+
+.result-authorship,
+.result-details,
+.selected-key {
+  color: #666;
+}
+
+.result-line {
+  margin-top: 1px;
+}
+
+/* The small label after a name saying what kind of name it is and where it
+   comes from, so an English name is never taken for BCBN's own. */
+.result-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #777;
+}
+
+.result-details {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.search-sources {
+  padding: 6px 10px 8px;
+  border-top: 1px solid #eee;
+  font-size: 11px;
+  color: #777;
+}
+
+/* The placeholder for the selected species, until the card (step 6). */
+.selected-species {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+}
+
+.selected-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #777;
+}
+
+.selected-clear {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #777;
+  cursor: pointer;
+}
+
+.selected-clear:hover {
+  color: #1a1a1a;
+}
+
+.selected-note {
+  margin-top: 4px;
+  color: #555;
+}

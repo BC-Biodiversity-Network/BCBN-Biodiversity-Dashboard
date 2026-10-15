@@ -1,0 +1,90 @@
+// Everything the front end needs to talk to the species API (backend/api/).
+//
+// The API's address is set here, and only here. By default it is "/api" on the
+// same site as the page: in development the Vite dev server passes /api on to
+// the local API server (see vite.config.js), and in production the site can
+// serve the API under /api too. If the API ends up somewhere else, set
+// VITE_API_BASE when building, for example
+//   VITE_API_BASE=https://api.example.org/api npm run build
+// and nothing else needs to change.
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+
+// The shortest search the API accepts: 2 letters or digits. The same rule as
+// MIN_QUERY_LENGTH in backend/api/search.py.
+export const MIN_SEARCH_CHARACTERS = 2
+
+// How a request to the API went wrong, so the page can say something useful:
+//   'unreachable'  the API did not answer (not running, or no network)
+//   'rejected'     the API answered that the request was wrong (a 4xx)
+//   'failed'       the API answered with an error of its own (a 5xx)
+export class ApiError extends Error {
+  constructor(kind, message, status = null) {
+    super(message)
+    this.kind = kind
+    this.status = status
+  }
+}
+
+// Counts the letters and digits in a search the way the API does: accents
+// removed, apostrophes dropped, everything that is not a letter or digit
+// treated as a gap, and a lone "x" (a hybrid sign) ignored. So "x", " - " and
+// "é" are all too short, exactly as the API decides.
+export function searchableLength(text) {
+  const words = text
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/['’‘`]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((word) => word !== '' && word !== 'x')
+
+  return words.join('').length
+}
+
+// Fetches one API path and returns its JSON. Turns every way it can fail into
+// an ApiError. signal lets the caller cancel the request (an AbortError is
+// passed through untouched, so the caller can ignore it).
+async function fetchJson(path, signal) {
+  let response
+  try {
+    response = await fetch(`${API_BASE}${path}`, { signal })
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw error
+    }
+    throw new ApiError('unreachable', 'The species API could not be reached.')
+  }
+
+  // When the API server is not running, the Vite dev server answers in its
+  // place with a gateway error, so those count as "could not be reached" too.
+  if ([502, 503, 504].includes(response.status)) {
+    throw new ApiError('unreachable', 'The species API could not be reached.', response.status)
+  }
+
+  let body = null
+  try {
+    body = await response.json()
+  } catch {
+    // Not JSON: an error page from something other than the API.
+    throw new ApiError(
+      response.ok ? 'failed' : 'unreachable',
+      'The species API sent an answer that could not be read.',
+      response.status,
+    )
+  }
+
+  if (!response.ok) {
+    const detail = typeof body?.detail === 'string' ? body.detail : `Error ${response.status}`
+    throw new ApiError(response.status < 500 ? 'rejected' : 'failed', detail, response.status)
+  }
+
+  return body
+}
+
+// Searches the species. Returns the API's answer: { query, normalised_query,
+// results }, best match first.
+export function searchSpecies(query, { limit = 20, signal } = {}) {
+  const params = new URLSearchParams({ q: query, limit: String(limit) })
+  return fetchJson(`/search?${params}`, signal)
+}

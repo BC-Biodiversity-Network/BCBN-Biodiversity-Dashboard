@@ -746,22 +746,47 @@ map at res 7 is 355 KB, 63 KB gzipped.
 ## Running the front end
 
 The map lives in `frontend/`. It is a Vite + React app that draws the hexagon
-aggregates over an OpenFreeMap basemap with deck.gl.
+aggregates over an OpenFreeMap basemap with deck.gl, with a species search box
+that calls the species API.
+
+Two terminals, the API first:
 
 ```
+# terminal 1: the species API (see "Running the species API")
+cd backend
+../.venv/bin/python -m uvicorn api.main:app --reload --port 8000
+
+# terminal 2: the front end
 cd frontend
-npm install
+npm install        # only the first time, or after package.json changes
 npm run dev
 ```
 
-That serves the app at `http://localhost:5173`. `npm run build` writes a
-production bundle to `frontend/dist/`, and `npm run preview` serves that build.
+Then open `http://localhost:5173`. The dev server passes every request for
+`/api` on to the API at `http://127.0.0.1:8000` (`frontend/vite.config.js`; set
+`BCBN_API_DEV_URL` for another address). `npm run build` writes a production
+bundle to `frontend/dist/`, and `npm run preview` serves that build. The built
+site calls the API at `/api` on its own address; where the API will run in
+production is not decided yet, so that one setting is in `frontend/src/api.js`
+(`VITE_API_BASE` when building).
 
-The map reads `frontend/public/data/bc_hex_r4.csv.gz` to `bc_hex_r7.csv.gz`,
-one per zoom tier, which are produced on the server by
+The overview map reads `frontend/public/data/bc_hex_r4.csv.gz` to
+`bc_hex_r7.csv.gz`, one per zoom tier, which are produced on the server by
 `backend/pipeline/gbif/build_hex_aggregates.py`, copied to the Mac by hand and
-committed. Nothing is fetched
-from the backend at run time, so the front end works with no server behind it.
+committed. They are plain files, so the overview map works with no API behind
+it; only the species search needs the API, and says so if it cannot reach it.
+
+The search box (`frontend/src/SearchBox.jsx`) searches a quarter of a second
+after the last key press, and only once there are at least 2 letters or
+digits, the API's own rule. The arrow keys move through the results, Enter
+picks one and Escape closes the list. Each result shows the scientific name
+first, with its authorship, then the BCSEE English name (labelled as BCSEE),
+then any BCSEE entry name that matched (labelled as an entry name, never as the
+species' English name), then the family and record count, which tell apart two
+cards with the same scientific name. No conservation status is shown in the
+list. Picking a species shows a small placeholder with its name and key
+(`SelectedSpecies.jsx`), until the species card is built; an old merged key
+selects the kept key and the placeholder says which key was typed.
 
 **maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with
 `react-map-gl` 8.1.3: the basemap style never finishes loading, so no tiles are

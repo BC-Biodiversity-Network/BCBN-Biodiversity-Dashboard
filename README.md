@@ -296,17 +296,30 @@ tables.
 
 ## BCSEE statuses on the species cards
 
-`backend/pipeline/bcsee/build_bcsee_status_display.py` gathers the BC
-statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the
-same species key into `bcsee_status_by_gbif_species.parquet`, one row per
-species key. Run it with the same species key merge as
+`backend/pipeline/bcsee/build_bcsee_status_display.py` gathers every BCSEE
+entry that points to the same species key into
+`bcsee_status_by_gbif_species.parquet`, one row per species key: entries with
+a shown status (Red, Blue, Yellow, Exotic) and entries that are in BCSEE
+without one (Not Reviewed, Unknown, Accidental, No Status), so the site can
+tell "in BCSEE but no status" from "not in BCSEE". Extinct entries are left
+out, as the GBIF cleaning leaves out extinct taxa, and so is the one Other
+entry for now; the run lists them. `statuses` holds only the shown statuses
+(empty for a species without one), and every entry keeps its own BCSEE value
+as its `status`, so a Not Reviewed subspecies is never mixed up with its
+species' status. Run it with the same species key merge as
 `build_species_tables.py`, so the statuses join to the species cards:
 
 ```
 cd backend
 python pipeline/bcsee/build_bcsee_status_display.py --data-dir ~/bcbn/data \
-    --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv
+    --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv --col-release 315557
 ```
+
+The species names come from GBIF's saved answers; a name not saved yet is
+looked up with GBIF's API. `--col-release` is only needed then: before any
+lookup, the run checks that GBIF's Catalogue of Life checklist still points
+at that release (the one the rest of the data uses), and stops without
+asking or writing anything if not.
 
 With `--key-merge` (off by default), every entry matched to an old key is
 moved to its kept key, right after the hand-checked overrides, so it covers
@@ -358,7 +371,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/` | The production pipeline, one folder per data source (below). These are what runs to produce the dashboard's data. Run them from `backend/`, e.g. `python pipeline/gbif/build_dwca_tables.py`. A script that needs another folder's code adds that folder to its import path itself. |
 | `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `make_species_key_merge.py` decides which duplicate species keys to merge, `build_species_tables.py` builds `species_hex` and the species cards with that merge applied, and `build_hex_aggregates.py` builds the map's hexagon tables from `species_hex`. `build_species_summary.py` (Layer 3) builds the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
-| `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
+| `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
 | `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/tests/` | Tests for the API. `conftest.py` writes a tiny copy of the data files, so the tests never need the real data. |
@@ -368,6 +381,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/exploration/llm/` | The trial that measures the keyword filter against a model, not part of the product build. `build_test_set.py` draws the labelling sample, `fix_stratum.py` repairs the labelled sheet, `test_key.py` checks the API key, `run_trial.py` runs the model and caches its answers, `check_stability.py` tests reproducibility and `cost_estimate.py` projects the cost of a full pass (described below). |
 | `backend/exploration/bcdc/` | Survey of the BC Data Catalogue, not part of the product build. `survey_bcdc.py` downloads the whole BC Data Catalogue once and sorts every package by licence and by whether it has anything to download. |
 | `backend/exploration/bcsee/` | Finding the BCSEE and Conservation Data Centre sources, not part of the product build. `find_cdc.py` finds Conservation Data Centre and BCSEE packages in that cached catalogue; `probe_bcsee.py` is an earlier keyword search of the live catalogue for BCSEE packages. |
+| `backend/exploration/images/` | Checking the species card images, not part of the product build. `count_passing_images.py` (read-only, runs on the server's DuckDB 0.10.3) counts how many species would have a card photo if the image were picked only among images with a URL, a link to the original, a creator and a readable licence, what a rights-holder or GBIF-record-page fallback would add, and where the species with only failing images get their images from. |
 | `backend/exploration/archive/` | Superseded early attempts, kept for history: `gbif_bc_boundingBox.py` (bounding box only, the first feasibility check) and `gbif_bc_polygon.py` (first exact-polygon version). Not maintained - read them for context, don't run them. |
 
 ## The Lunaris keyword filter
@@ -649,11 +663,12 @@ including a species BCSEE lists but with no records in BC, gives 404.
   `status_source`, `status_source_date` and `status_pulled_on`. The English
   name is the species-level BCSEE common name, with `english_name_source`.
   The block's `state` is `listed`, `in_bcsee_no_status`, `not_in_bcsee` or
-  `unknown`. `build_bcsee_status_display.py` only writes species with a Red,
-  Blue, Yellow or Exotic status, so with today's file a species without
-  one is `unknown` (it may be in BCSEE as Not Reviewed, Unknown, ...).
-  `not_in_bcsee` and `in_bcsee_no_status` only appear once that file also
-  lists species without a shown status (`/api/meta` says whether it does).
+  `unknown`. `unknown` only comes from a BCSEE file built before
+  `build_bcsee_status_display.py` kept species without a shown status (it
+  then cannot tell the two cases apart); `/api/meta` says which kind of
+  file it has (`includes_species_without_status`), and counts
+  `species_in_bcsee` and `species_with_status` (Red, Blue, Yellow or Exotic
+  only) separately.
 - An image is returned only with its URL, a link to the original, a
   creator and a readable licence (code, label and link); otherwise `image`
   is null. So Beaty Museum images without a licence are picked by

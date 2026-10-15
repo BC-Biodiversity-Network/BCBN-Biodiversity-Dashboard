@@ -8,8 +8,6 @@ Input, all in --tables (written by build_dwca_tables.py):
     bc_occurrence.parquet     one row per record, with its H3 cells
     bc_species_image.parquet  one image per species
     bc_datasets.parquet       one row per dataset, with its title
-and, for a check only, in --hex-dir (default: the --tables folder):
-    bc_hex_r4.parquet ... bc_hex_r7.parquet  (from build_hex_aggregates.py)
 and, only with --key-merge:
     species_key_merge.csv     old_key, kept_key, species, ... (from
                               make_species_key_merge.py)
@@ -51,9 +49,11 @@ How species_hex is meant to be read:
   - Records with no year have year = NULL. Any year filter leaves them out.
   - Every record is in it. Records with no specieskey (identified only to
     genus or above) have specieskey = NULL, so the overview map counts
-    every record, as bc_hex_r* does. count(DISTINCT specieskey) ignores
-    NULL, so the species counts are not affected, and neither is a query
-    for one species.
+    every record. count(DISTINCT specieskey) ignores NULL, so the species
+    counts are not affected, and neither is a query for one species.
+  - build_hex_aggregates.py builds the overview map (bc_hex_r4 to r7) from
+    this file, so every species count on the site is distinct specieskey
+    after the merge, and the merge happens in this script only.
   - The file is sorted by specieskey (NULL last) and then year, so the
     parquet row groups each hold a narrow range of species and a query for
     one species only reads a small part of the file.
@@ -64,21 +64,24 @@ coordinates, and H3 cells only nest approximately, so records in the same
 h3_r7 cell can fall in different h3_r5 cells. Grouping by all four keeps
 every resolution exactly as in bc_occurrence.
 
-Checks, printed at the end (the script exits with status 1 if one fails):
+Checks, printed at the end (they are never written into the tables):
   - species_hex's occurrences add up to the records in bc_occurrence, and
     species_card_gbif's record counts to the records with a specieskey.
   - The card has one row per species (after the merge, if any).
-  - For each of h3_r4 to h3_r7, grouping species_hex by that column gives
-    the same per-hexagon occurrences as bc_hex_rN.
-  - The distinct species per hexagon are compared with bc_hex_rN's
-    distinct_species. bc_hex counts distinct species names, not keys, so a
-    name with two keys counts once there and twice here (when both keys
-    are in the hexagon). That difference is expected: the check works out,
-    for each hexagon, how much it should be from the names that still have
-    more than one key, and reports EXPECTED if every hexagon matches that.
-    It also says how much bigger the difference would be without the merge.
-  If the bc_hex files are not found, the hexagon checks are skipped with a
-  warning.
+  - For each of h3_r4 to h3_r7, the per-hexagon occurrences and distinct
+    specieskey (after the merge) worked out straight from the records equal
+    species_hex grouped the same way.
+
+Outputs are only replaced when every check passes: both tables are written
+to temporary names first (species_hex.tmp.parquet,
+species_card_gbif.tmp.parquet), checked there, and moved onto the real names
+only if nothing failed. If a check fails, the previous real files are left
+untouched, the temporary files stay for inspection, and the script exits
+with status 1.
+
+Run order:
+    build_dwca_tables.py -> make_species_key_merge.py
+        -> build_species_tables.py --key-merge -> build_hex_aggregates.py
 
 Only plain SQL is used, so this runs on the cluster's DuckDB 0.10.3.
 
@@ -95,6 +98,9 @@ import sys
 import time
 
 import duckdb
+
+from safe_outputs import (clear_temporary, replace_outputs, report_not_replaced,
+                          temporary_path)
 
 # The H3 resolutions stored on every record in bc_occurrence.
 RESOLUTIONS = [4, 5, 6, 7]
@@ -407,101 +413,68 @@ def check_totals(con, species_hex_path, card_path):
     ]
 
 
-def check_hex(con, species_hex_path, hex_path, resolution):
-    """Compare species_hex grouped by h3_r{resolution} with bc_hex_r{resolution}.
+def check_hex_against_records(con, species_hex_path, resolution):
+    """Check species_hex against the records for one resolution.
 
-    For the distinct species, bc_hex counts names and species_hex counts
-    keys, so in each hexagon the expected difference (ours - bc_hex) is:
-    for each name, its number of keys in the hexagon minus 1 (or -1 for a
-    name whose records there all lack a key), plus the keys whose records
-    have no name. The same sum over the keys before the merge says how big
-    the difference would be without it.
-
-    Returns a dict with: cells; occ_bad (hexagons whose occurrences
-    differ); species_bad (hexagons whose distinct species differ);
-    unexplained (hexagons whose difference is not the expected one);
-    extra (total difference, ours - bc_hex, over all hexagons);
-    extra_unmerged (the same without the merge); examples (up to EXAMPLES
-    rows of h3_cell, our and bc_hex's occurrences, our and bc_hex's
-    distinct species, the expected difference).
+    For each h3_r{resolution} hexagon, the occurrences and the distinct
+    specieskey (after the merge) are worked out twice: straight from the
+    records, and from species_hex grouped by that column. Records with no
+    cell are compared as one group of their own. Returns (hexagons,
+    hexagons whose occurrences differ, hexagons whose species differ,
+    examples), where examples are up to EXAMPLES rows of (cell, occurrences
+    from the records, from species_hex, species from the records, from
+    species_hex).
     """
     col = f"h3_r{resolution}"
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE hex_compare AS
-        WITH ours AS (
-            SELECT {col} AS h3_cell, sum(occurrences) AS occurrences,
+        WITH from_records AS (
+            SELECT coalesce({col}, '(no cell)') AS h3_cell, count(*) AS occurrences,
+                   count(DISTINCT specieskey) AS n_species
+            FROM records
+            GROUP BY 1
+        ),
+        from_species_hex AS (
+            SELECT coalesce({col}, '(no cell)') AS h3_cell, sum(occurrences) AS occurrences,
                    count(DISTINCT specieskey) AS n_species
             FROM read_parquet('{species_hex_path}')
-            WHERE {col} IS NOT NULL
-            GROUP BY {col}
-        ),
-        theirs AS (
-            SELECT h3_cell, occurrences, distinct_species
-            FROM read_parquet('{hex_path}')
-        ),
-        per_name AS (
-            SELECT {col} AS h3_cell, species,
-                   count(DISTINCT specieskey) AS k,
-                   count(DISTINCT original_specieskey) AS k_unmerged
-            FROM records
-            WHERE {col} IS NOT NULL
-            GROUP BY {col}, species
-        ),
-        expected AS (
-            SELECT h3_cell,
-                   sum(CASE WHEN species IS NULL THEN k
-                            WHEN k = 0 THEN -1 ELSE k - 1 END) AS extra,
-                   sum(CASE WHEN species IS NULL THEN k_unmerged
-                            WHEN k_unmerged = 0 THEN -1
-                            ELSE k_unmerged - 1 END) AS extra_unmerged
-            FROM per_name
-            GROUP BY h3_cell
+            GROUP BY 1
         ),
         cells AS (
-            SELECT h3_cell FROM ours
-            UNION SELECT h3_cell FROM theirs
+            SELECT h3_cell FROM from_records
+            UNION SELECT h3_cell FROM from_species_hex
         )
         SELECT c.h3_cell,
-               coalesce(o.occurrences, 0) AS our_occurrences,
-               coalesce(t.occurrences, 0) AS their_occurrences,
-               coalesce(o.n_species, 0) AS our_species,
-               coalesce(t.distinct_species, 0) AS their_species,
-               coalesce(e.extra, 0) AS expected_extra,
-               coalesce(e.extra_unmerged, 0) AS expected_extra_unmerged
+               coalesce(r.occurrences, 0) AS record_occurrences,
+               coalesce(h.occurrences, 0) AS hex_occurrences,
+               coalesce(r.n_species, 0) AS record_species,
+               coalesce(h.n_species, 0) AS hex_species
         FROM cells AS c
-        LEFT JOIN ours AS o ON o.h3_cell = c.h3_cell
-        LEFT JOIN theirs AS t ON t.h3_cell = c.h3_cell
-        LEFT JOIN expected AS e ON e.h3_cell = c.h3_cell
+        LEFT JOIN from_records AS r ON r.h3_cell = c.h3_cell
+        LEFT JOIN from_species_hex AS h ON h.h3_cell = c.h3_cell
         """
     )
-    row = con.execute(
+    cells, occ_bad, species_bad = con.execute(
         """SELECT count(*),
-                  count(*) FILTER (WHERE our_occurrences <> their_occurrences),
-                  count(*) FILTER (WHERE our_species <> their_species),
-                  count(*) FILTER (WHERE our_species - their_species <> expected_extra),
-                  coalesce(sum(our_species - their_species), 0),
-                  coalesce(sum(expected_extra_unmerged), 0)
+                  count(*) FILTER (WHERE record_occurrences <> hex_occurrences),
+                  count(*) FILTER (WHERE record_species <> hex_species)
            FROM hex_compare"""
     ).fetchone()
     examples = con.execute(
-        f"""SELECT h3_cell, our_occurrences, their_occurrences, our_species,
-                   their_species, expected_extra
-            FROM hex_compare
-            WHERE our_occurrences <> their_occurrences
-               OR our_species - their_species <> expected_extra
+        f"""SELECT * FROM hex_compare
+            WHERE record_occurrences <> hex_occurrences OR record_species <> hex_species
             ORDER BY h3_cell LIMIT {EXAMPLES}"""
     ).fetchall()
     con.execute("DROP TABLE hex_compare")
-    keys = ["cells", "occ_bad", "species_bad", "unexplained", "extra", "extra_unmerged"]
-    return {**dict(zip(keys, row)), "examples": examples}
+    return cells, occ_bad, species_bad, examples
 
 
 def names_with_several_keys(con):
     """Return species names that still have more than one specieskey (after
     the merge, if any), or keys with more than one name, as (species,
-    specieskeys) and (specieskey, names). Either one makes distinct
-    specieskey differ from bc_hex's distinct species names in a hexagon."""
+    specieskeys) and (specieskey, names). Printed as a note only: these are
+    the names the site shows as more than one species."""
     names = con.execute(
         """SELECT species, list(DISTINCT specieskey)
            FROM records
@@ -529,8 +502,8 @@ def file_size(path):
 
 
 def main():
-    """Build species_hex and species_card_gbif, check them and print a
-    summary."""
+    """Build species_hex and species_card_gbif under temporary names, check
+    them, and replace the real files only if every check passes."""
     parser = argparse.ArgumentParser(
         description="Build the species search and species card tables from "
         "the tables build_dwca_tables.py writes."
@@ -542,13 +515,6 @@ def main():
         "bc_datasets.parquet.",
     )
     parser.add_argument("--outdir", required=True, help="Folder to write the tables into.")
-    parser.add_argument(
-        "--hex-dir",
-        default=None,
-        help="Folder with bc_hex_r4.parquet to bc_hex_r7.parquet from "
-        "build_hex_aggregates.py, used only for a check (default: --tables). "
-        "If they are not there, the check is skipped.",
-    )
     parser.add_argument(
         "--key-merge",
         default=None,
@@ -570,12 +536,15 @@ def main():
     )
     args = parser.parse_args()
 
-    hex_dir = args.hex_dir or args.tables
     occurrence_path = os.path.join(args.tables, "bc_occurrence.parquet")
     image_path = os.path.join(args.tables, "bc_species_image.parquet")
     datasets_path = os.path.join(args.tables, "bc_datasets.parquet")
     species_hex_path = os.path.join(args.outdir, "species_hex.parquet")
     card_path = os.path.join(args.outdir, "species_card_gbif.parquet")
+    outputs = [species_hex_path, card_path]
+    # Everything is built and checked under the temporary names; the real
+    # files are only touched at the very end, if every check passed.
+    hex_tmp, card_tmp = temporary_path(species_hex_path), temporary_path(card_path)
 
     con = connect(args.threads, args.memory_limit, args.temp_dir)
     check_inputs(con, occurrence_path, image_path, datasets_path)
@@ -583,61 +552,41 @@ def main():
     check_merge_species(con, occurrence_path, merge_pairs, args.key_merge)
     register_records(con, occurrence_path, merge_pairs)
     os.makedirs(args.outdir, exist_ok=True)
+    clear_temporary(outputs)
 
     print(f"Tables:    {args.tables}")
-    print(f"Hex dir:   {hex_dir}")
     print(f"Key merge: {args.key_merge or 'none (every key is its own species)'}")
     print(f"Output:    {args.outdir}\n")
     t_all = time.time()
 
     t = time.time()
-    build_species_hex(con, species_hex_path)
+    build_species_hex(con, hex_tmp)
     print(f"species_hex built in {time.time() - t:.1f}s")
     t = time.time()
-    build_species_card(con, image_path, datasets_path, card_path)
+    build_species_card(con, image_path, datasets_path, card_tmp)
     print(f"species_card_gbif built in {time.time() - t:.1f}s")
 
-    # Checks.
-    results = check_totals(con, species_hex_path, card_path)
+    # Checks, all on the temporary files.
+    results = check_totals(con, hex_tmp, card_tmp)
     hex_lines = []
-    extra_lines = []
-    missing_hex = [
-        r for r in RESOLUTIONS
-        if not os.path.exists(os.path.join(hex_dir, f"bc_hex_r{r}.parquet"))
-    ]
     for r in RESOLUTIONS:
-        hex_path = os.path.join(hex_dir, f"bc_hex_r{r}.parquet")
-        if r in missing_hex:
-            continue
-        c = check_hex(con, species_hex_path, hex_path, r)
-        results.append((f"h3_r{r} occurrences per hexagon = bc_hex_r{r}",
-                        "PASS" if c["occ_bad"] == 0 else "FAIL",
-                        f"{c['occ_bad']:,} of {c['cells']:,} hexagons differ"))
-        if c["species_bad"] == 0:
-            status = "PASS"
-        elif c["unexplained"] == 0:
-            status = "EXPECTED"
-        else:
-            status = "FAIL"
-        results.append((f"h3_r{r} distinct species per hexagon vs bc_hex_r{r}", status,
-                        f"{c['species_bad']:,} of {c['cells']:,} hexagons differ, "
-                        f"{c['extra']:+,} species in total; "
-                        f"{c['unexplained']:,} not explained by names with several keys"))
-        extra_lines.append(
-            f"    r{r}: {c['extra']:+,} with the merge, {c['extra_unmerged']:+,} without it"
-        )
-        for row in c["examples"]:
-            hex_lines.append(
-                f"    r{r} {row[0]}: occurrences {row[1]:,} vs {row[2]:,}, "
-                f"species {row[3]:,} vs {row[4]:,} (expected difference {row[5]:+,})"
-            )
+        cells, occ_bad, species_bad, examples = check_hex_against_records(con, hex_tmp, r)
+        results.append((f"h3_r{r} occurrences per hexagon: records = species_hex",
+                        "PASS" if occ_bad == 0 else "FAIL",
+                        f"{occ_bad:,} of {cells:,} hexagons differ"))
+        results.append((f"h3_r{r} distinct specieskey per hexagon: records = species_hex",
+                        "PASS" if species_bad == 0 else "FAIL",
+                        f"{species_bad:,} of {cells:,} hexagons differ"))
+        for row in examples:
+            hex_lines.append(f"    r{r} {row[0]}: occurrences {row[1]:,} vs {row[2]:,}, "
+                             f"species {row[3]:,} vs {row[4]:,}")
 
     # Summary.
     hex_rows, hex_no_year, hex_no_key, hex_species = con.execute(
         f"""SELECT count(*), count(*) FILTER (WHERE year IS NULL),
                    count(*) FILTER (WHERE specieskey IS NULL),
                    count(DISTINCT specieskey)
-            FROM read_parquet('{species_hex_path}')"""
+            FROM read_parquet('{hex_tmp}')"""
     ).fetchone()
     card_rows, with_image, ranks, merged_rows, image_from_old = con.execute(
         f"""SELECT count(*), count(image_identifier),
@@ -645,13 +594,13 @@ def main():
                        FILTER (WHERE image_license_rank IS NOT NULL),
                    count(*) FILTER (WHERE merged_keys IS NOT NULL),
                    count(*) FILTER (WHERE image_specieskey <> specieskey)
-            FROM read_parquet('{card_path}')"""
+            FROM read_parquet('{card_tmp}')"""
     ).fetchone()
 
-    print(f"\nspecies_hex.parquet:       {hex_rows:>12,} rows  {file_size(species_hex_path):>10}"
+    print(f"\nspecies_hex.parquet:       {hex_rows:>12,} rows  {file_size(hex_tmp):>10}"
           f"  ({hex_species:,} species; {hex_no_year:,} rows with no year, "
           f"{hex_no_key:,} with no specieskey)")
-    print(f"species_card_gbif.parquet: {card_rows:>12,} rows  {file_size(card_path):>10}")
+    print(f"species_card_gbif.parquet: {card_rows:>12,} rows  {file_size(card_tmp):>10}")
     pct = 100 * with_image / card_rows if card_rows else 0
     print(f"  species with an image:   {with_image:>12,} ({pct:.1f}%), "
           f"license ranks used: {ranks}")
@@ -665,35 +614,30 @@ def main():
 
     print("\nChecks:")
     for name, status, detail in results:
-        print(f"  {status:<8}  {name}: {detail}")
-    if missing_hex:
-        print(f"  WARNING: skipped the bc_hex check for resolution(s) "
-              f"{missing_hex}: bc_hex_rN.parquet not found in {hex_dir}. "
-              f"Pass --hex-dir to point at them.")
-    if extra_lines:
-        print("  bc_hex counts species names and species_hex counts keys, so a name "
-              "with two keys")
-        print("  counts once in bc_hex and twice here. Extra species over all hexagons:")
-        print("\n".join(extra_lines))
+        print(f"  {status:<4}  {name}: {detail}")
     if hex_lines:
-        print("  Hexagons whose occurrences differ, or whose species differ by more "
-              "than expected (ours vs bc_hex):")
+        print("  Hexagons that differ (from the records vs from species_hex):")
         print("\n".join(hex_lines))
-        print("  If the occurrences differ, the bc_hex files were probably built "
-              "from a different bc_occurrence.")
     names, keys = names_with_several_keys(con)
     if names or keys:
         print(f"  Note: {len(names):,} species name(s) still have more than one "
-              f"specieskey and {len(keys):,} specieskey(s) have no single name.")
+              f"specieskey and {len(keys):,} specieskey(s) have no single name; the site "
+              f"counts each key as a species.")
         for species, specieskeys in names[:EXAMPLES]:
             print(f"    {species}: {specieskeys}")
         for specieskey, species in keys[:EXAMPLES]:
             print(f"    {specieskey}: {species}")
-
-    print(f"\nDone in {time.time() - t_all:.1f}s")
     con.close()
+
     if any(status == "FAIL" for _, status, _ in results):
+        report_not_replaced(outputs)
+        print(f"\nDone in {time.time() - t_all:.1f}s, with a FAILED check")
         sys.exit(1)
+    replace_outputs(outputs)
+    print("\nAll checks passed; replaced:")
+    for path in outputs:
+        print(f"  {path}")
+    print(f"\nDone in {time.time() - t_all:.1f}s")
 
 
 if __name__ == "__main__":

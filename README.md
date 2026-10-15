@@ -113,8 +113,8 @@ metadata of every dataset.
   names and types, plus `references` (the link to the original record) and
   `h3_r4` to `h3_r7`, each record's H3 cell, binned straight from the
   coordinates at each resolution (never rolled up from a finer cell).
-  `build_hex_aggregates.py` groups by these columns to make the map's hexagon
-  tables.
+  `build_species_tables.py` groups by these columns to make `species_hex`,
+  from which `build_hex_aggregates.py` makes the map's hexagon tables.
 - `bc_media.parquet`: one row per media item (images, sound, video) of a kept
   record, numbered within the record by `media_order` in file order, with a
   short `license_code` (`CC0_1_0`, `CC_BY_4_0`, `CC_BY_NC_4_0`, ...) parsed
@@ -152,24 +152,20 @@ For a full BC download (about 43M records, `occurrence.txt` about 50 GB):
 ```
 cd backend
 python pipeline/gbif/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
-    --workdir /scratch/$USER --memory-limit 8GB --threads 8
+    --workdir ~/bcbn/data/tmp_dwca --memory-limit 8GB --threads 8
 ```
 
-**`backend/pipeline/gbif/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `frontend/public/data/bc_hex_r{4..7}.csv.gz`**
-Counts the records and distinct species in each hexagon at resolutions 4 to
-7, by grouping `bc_occurrence.parquet` on its `h3_r4` to `h3_r7` columns. It
-computes no H3 itself, so it runs on DuckDB 0.10.3 and needs no h3 package.
-The gzipped CSVs are what the map loads, and they are committed. Their
-columns are `h3_cell`, `occurrences` and `distinct_species`, and the same
-data always gives the same bytes. It also writes resolution 5 and 6 tables
-for one species (American robin) as a test of filtering by species.
-Resolution 3 is no longer built: `bc_occurrence` has no `h3_r3` column, and
-the map never used it.
+After `build_dwca_tables.py`, the steps run in this order:
 
 ```
-cd backend
-python pipeline/gbif/build_hex_aggregates.py --occurrence ~/bcbn/data/dwca/bc_occurrence.parquet --outdir ~/bcbn/data
+build_dwca_tables.py -> make_species_key_merge.py
+    -> build_species_tables.py --key-merge -> build_hex_aggregates.py
 ```
+
+The key merge is applied in one place only, `build_species_tables.py`, and
+the overview map is built from its output, so every species count on the
+site (overview hexagons and species cards) is distinct specieskey after the
+merge.
 
 **`backend/pipeline/gbif/make_species_key_merge.py` -> `species_key_merge.csv`, `species_key_not_merged.csv`**
 Some species names have two specieskeys in the Catalogue of Life. This script
@@ -195,15 +191,70 @@ status, record count and authorship of both keys, so a merge can be switched
 or undone; `species_key_not_merged.csv` says which rule stopped each pair
 and, for a conflict, the level and the two values.
 
-`build_species_tables.py --key-merge species_key_merge.csv` then counts each
-old key's records under its kept key in `species_hex` and the species card.
-As a safety check it stops, before building anything, if a row's two keys do
-not have exactly one and the same species name in `bc_occurrence`.
-
 ```
 cd backend
 python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
 ```
+
+**`backend/pipeline/gbif/build_species_tables.py` -> `species_hex.parquet`, `species_card_gbif.parquet`**
+`species_hex` holds the records per species, year and hexagon (h3_r4 to
+h3_r7), including records with no specieskey; `species_card_gbif` holds one
+row per species for the species card. With `--key-merge
+species_key_merge.csv`, each old key's records are counted under its kept
+key. As a safety check it stops, before building anything, if a merge row's
+two keys do not have exactly one and the same species name in
+`bc_occurrence`. Its checks compare the totals with `bc_occurrence`, and, for
+each resolution, the per-hexagon occurrences and distinct specieskey worked
+out straight from the records with `species_hex` grouped the same way.
+
+```
+cd backend
+python pipeline/gbif/build_species_tables.py --tables ~/bcbn/data/gbif_tables \
+    --outdir ~/bcbn/data/gbif_tables/species_merged \
+    --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv \
+    --memory-limit 8GB --threads 8 --temp-dir ~/tmp/duckdb_species
+```
+
+**`backend/pipeline/gbif/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `bc_hex_r{4..7}.csv.gz`**
+Counts the records and distinct species in each hexagon at resolutions 4 to
+7 for the overview map, by grouping `species_hex.parquet` on its `h3_r4` to
+`h3_r7` columns: `occurrences` is the sum of the records (including records
+with no specieskey) and `distinct_species` is the number of distinct
+specieskey, after the merge. It computes no H3 itself, so it runs on DuckDB
+0.10.3 and needs no h3 package. The gzipped CSVs are what the map loads.
+Their columns are `h3_cell`, `occurrences` and `distinct_species`, and the
+same data always gives the same bytes. Its checks: each resolution's total
+occurrences equal the total in `species_hex`, one row per hexagon, and each
+CSV holds exactly its parquet's rows.
+
+The pipeline runs on the server, so `--frontend-dir` there is a folder
+outside the repository. The CSVs are copied by hand to the Mac, compared with
+the committed ones, copied into `frontend/public/data` and committed from the
+Mac.
+
+```
+cd backend
+python pipeline/gbif/build_hex_aggregates.py \
+    --species-hex ~/bcbn/data/gbif_tables/species_merged/species_hex.parquet \
+    --outdir ~/bcbn/data/gbif_tables/hex \
+    --frontend-dir ~/bcbn/data/gbif_tables/hex_frontend_csv
+```
+
+On the server, `~/bcbn/data/gbif_tables/hex/` already holds the bc_hex parquet
+files and the two robin test files (`bc_hex_r5_turdus_migratorius.parquet`,
+`bc_hex_r6_turdus_migratorius.parquet`) from the old version of this script.
+`bc_hex_r4.parquet` to `bc_hex_r7.parquet` there are replaced after the checks
+pass. The script no longer writes the robin files, so those two stay there
+until they are deleted by hand.
+
+**Outputs are only replaced when every check passes.** `build_species_tables.py`
+and `build_hex_aggregates.py` write each output under a temporary name in the
+same folder first (`species_hex.tmp.parquet`, `bc_hex_r5.tmp.csv.gz`, ...),
+run all their checks on those, and only then move them onto the real names.
+If a check fails, the previous files are left untouched, the temporary files
+stay for inspection, the script says which files were not replaced, and it
+exits with status 1. The checks are only printed, never written into the
+tables.
 
 ## Validation
 
@@ -232,7 +283,7 @@ running them from anywhere else quietly writes to the wrong place.
 | Folder | Contents |
 | --- | --- |
 | `backend/pipeline/` | The production pipeline, one folder per data source (below). These are what runs to produce the dashboard's data. Run them from `backend/`, e.g. `python pipeline/gbif/build_dwca_tables.py`. A script that needs another folder's code adds that folder to its import path itself. |
-| `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `build_hex_aggregates.py` and `build_species_summary.py` (Layer 3) build the map's hexagon tables and the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
+| `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `make_species_key_merge.py` decides which duplicate species keys to merge, `build_species_tables.py` builds `species_hex` and the species cards with that merge applied, and `build_hex_aggregates.py` builds the map's hexagon tables from `species_hex`. `build_species_summary.py` (Layer 3) builds the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
@@ -465,8 +516,9 @@ the cluster run will fail even though it works locally.
 DuckDB's h3 extension only exists from DuckDB 1.0 on, so
 `build_dwca_tables.py` computes H3 cells with the `h3` Python package
 instead. It wraps the same H3 library, and the cells came out identical on
-the test download. `build_hex_aggregates.py` only groups by those stored
-cells, so it needs neither the extension nor the package.
+the test download. `build_species_tables.py` and `build_hex_aggregates.py`
+only group by those stored cells, so they need neither the extension nor the
+package.
 
 Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`, `pyarrow`, `h3`.
 
@@ -485,8 +537,9 @@ That serves the app at `http://localhost:5173`. `npm run build` writes a
 production bundle to `frontend/dist/`, and `npm run preview` serves that build.
 
 The map reads `frontend/public/data/bc_hex_r4.csv.gz` to `bc_hex_r7.csv.gz`,
-one per zoom tier, which are produced by
-`backend/pipeline/gbif/build_hex_aggregates.py` and committed. Nothing is fetched
+one per zoom tier, which are produced on the server by
+`backend/pipeline/gbif/build_hex_aggregates.py`, copied to the Mac by hand and
+committed. Nothing is fetched
 from the backend at run time, so the front end works with no server behind it.
 
 **maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with

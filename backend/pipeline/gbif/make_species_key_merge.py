@@ -71,6 +71,10 @@ How author_match normalises the authors (the same normalising used before):
     "L." = "Linnaeus"), and a name of several words matches its first word
     ("Nees von Esenbeck" = "Nees").
 
+Run order:
+    build_dwca_tables.py -> make_species_key_merge.py
+        -> build_species_tables.py --key-merge -> build_hex_aggregates.py
+
 Run (from backend/):
     python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
 """

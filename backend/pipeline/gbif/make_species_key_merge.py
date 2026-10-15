@@ -72,8 +72,11 @@ How author_match normalises the authors (the same normalising used before):
     ("Nees von Esenbeck" = "Nees").
 
 Run order:
-    build_dwca_tables.py -> make_species_key_merge.py
-        -> build_species_tables.py --key-merge -> build_hex_aggregates.py
+    request_gbif_download.py -> build_dwca_tables.py
+        -> fetch_col_names.py (once per Catalogue of Life release)
+        -> make_species_key_merge.py
+        -> build_species_tables.py --key-merge --col-names
+        -> build_hex_aggregates.py
 
 Run (from backend/):
     python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv

@@ -971,10 +971,23 @@ def fetch_download_api(key):
         return None
 
 
+def read_col_release(zip_path, key):
+    """Return the col_release that request_gbif_download.py recorded in
+    <key>.download.json next to the zip, or None if there is none."""
+    path = os.path.join(os.path.dirname(os.path.abspath(zip_path)), f"{key}.download.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f).get("col_release")
+
+
 def write_download_info(archive, key, zip_path, out_path):
-    """Write download_info.json: the download key, DOI, date and query.
-    The DOI comes from the archive if it has one, otherwise from the GBIF
-    download API. Returns the dict written."""
+    """Write download_info.json: the download key, DOI, date, query and the
+    Catalogue of Life release. The DOI comes from the archive if it has one,
+    otherwise from the GBIF download API. The release (col_release) is
+    copied from <key>.download.json next to the zip, where
+    request_gbif_download.py recorded it; it is null if that file or the
+    value is missing. Returns the dict written."""
     date, query, doi = read_download_metadata(archive)
     doi_source = "archive" if doi else None
 
@@ -998,6 +1011,8 @@ def write_download_info(archive, key, zip_path, out_path):
         "total_records": (api or {}).get("totalRecords"),
         "license": (api or {}).get("license"),
         "source_zip": os.path.basename(zip_path),
+        # Which Catalogue of Life release the specieskeys are ids in.
+        "col_release": read_col_release(zip_path, key),
     }
     if doi:
         info["citation"] = (
@@ -1199,6 +1214,13 @@ def main():
             print(f"WARNING: dataset {datasetkey} has several publishers: {publishers}")
 
         print(f"\nDOI: {info['doi']} (from {info['doi_source']})")
+        release = info.get("col_release")
+        if release:
+            print(f"Catalogue of Life release: {release['checklistbank_key']} "
+                  f"{release.get('alias')} (looked up {release.get('when')})")
+        else:
+            print(f"Catalogue of Life release: not recorded ({key}.download.json next to "
+                  f"the zip has none); pass it to build_species_tables.py --col-release")
         print(f"Temporary space used: about {peak_tmp / 1e9:,.1f} GB at most "
               f"(not counting DuckDB's spill files)")
         print(f"\nDone in {time.time() - t_all:.1f}s")

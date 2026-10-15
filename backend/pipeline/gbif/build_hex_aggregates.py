@@ -63,8 +63,11 @@ fails, the previous files are left untouched, the temporary files stay for
 inspection, and the script exits with status 1.
 
 Run order:
-    build_dwca_tables.py -> make_species_key_merge.py
-        -> build_species_tables.py --key-merge -> build_hex_aggregates.py
+    request_gbif_download.py -> build_dwca_tables.py
+        -> fetch_col_names.py (once per Catalogue of Life release)
+        -> make_species_key_merge.py
+        -> build_species_tables.py --key-merge --col-names
+        -> build_hex_aggregates.py
 
 Run (from backend/):
     python pipeline/gbif/build_hex_aggregates.py \\

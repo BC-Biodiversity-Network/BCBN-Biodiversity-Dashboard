@@ -81,7 +81,8 @@ the download key as soon as GBIF returns it, checks the status every
 `--poll-minutes` (default 5) until the download is ready, which can take
 hours for all of BC, and then downloads the zip. `<key>.download.json`, saved
 next to the zip, holds the key, the DOI, the record count and the request
-sent. `--dry-run` only prints the request. `--key <key>` picks up an existing
+sent, and the Catalogue of Life release (`col_release`) GBIF tied to the
+checklist at submission. `--dry-run` only prints the request. `--key <key>` picks up an existing
 download (no new request, just wait and download), so a stopped run can
 continue. It doesn't download a zip that is already complete.
 
@@ -155,17 +156,41 @@ python pipeline/gbif/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip -
     --workdir ~/bcbn/data/tmp_dwca --memory-limit 8GB --threads 8
 ```
 
-After `build_dwca_tables.py`, the steps run in this order:
+The steps run in this order:
 
 ```
-build_dwca_tables.py -> make_species_key_merge.py
-    -> build_species_tables.py --key-merge -> build_hex_aggregates.py
+request_gbif_download.py -> build_dwca_tables.py
+    -> fetch_col_names.py (once per Catalogue of Life release)
+    -> make_species_key_merge.py
+    -> build_species_tables.py --key-merge --col-names
+    -> build_hex_aggregates.py
 ```
 
 The key merge is applied in one place only, `build_species_tables.py`, and
 the overview map is built from its output, so every species count on the
 site (overview hexagons and species cards) is distinct specieskey after the
 merge.
+
+**`backend/pipeline/gbif/fetch_col_names.py` -> `col_names_<release>.parquet`, `col_release.json`**
+Our specieskeys are Catalogue of Life ids, because the download is made with
+the Catalogue of Life checklist. GBIF ties that checklist to one ChecklistBank
+release at a time; `request_gbif_download.py` records which one in
+`<key>.download.json` when it submits the request, and `build_dwca_tables.py`
+copies it into `download_info.json` as `col_release`. The current download
+was made before that was recorded; it used release **315557** (COL26.6 XR,
+2026-06-19), checked by finding the download's keys in that release and not
+in the ones before or after it. This script downloads that release's flat
+ColDP export from ChecklistBank (133 MB,
+`https://api.checklistbank.org/dataset/315557/export.zip?format=ColDP`), reads
+its one table straight out of the zip and keeps every name's id, status,
+rank, name, authorship and classification (about 8 million names, a 145 MB
+parquet). It is only needed again when the download uses a new release. The
+download and the parquet are not committed.
+
+```
+cd backend
+python pipeline/gbif/fetch_col_names.py --release 315557 --outdir ~/bcbn/data/col
+```
 
 **`backend/pipeline/gbif/make_species_key_merge.py` -> `species_key_merge.csv`, `species_key_not_merged.csv`**
 Some species names have two specieskeys in the Catalogue of Life. This script
@@ -201,7 +226,12 @@ python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/
 h3_r7), including records with no specieskey; `species_card_gbif` holds one
 row per species for the species card. With `--key-merge
 species_key_merge.csv`, each old key's records are counted under its kept
-key. As a safety check it stops, before building anything, if a merge row's
+key. The card's name and authorship are the Catalogue of Life's own for the
+(kept) key, from `--col-names`, never the occurrence records' names (which can
+be a subspecies, another spelling or a BOLD id); `name_source` says
+"Catalogue of Life, via GBIF" and `col_release` names the release, so the
+page can label the author. A key missing from that file is a FAIL. As a
+safety check it stops, before building anything, if a merge row's
 two keys do not have exactly one and the same species name in
 `bc_occurrence`. Its checks compare the totals with `bc_occurrence`, and, for
 each resolution, the per-hexagon occurrences and distinct specieskey worked
@@ -212,6 +242,7 @@ cd backend
 python pipeline/gbif/build_species_tables.py --tables ~/bcbn/data/gbif_tables \
     --outdir ~/bcbn/data/gbif_tables/species_merged \
     --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv \
+    --col-names ~/bcbn/data/col/315557/col_names_315557.parquet --col-release 315557 \
     --memory-limit 8GB --threads 8 --temp-dir ~/tmp/duckdb_species
 ```
 

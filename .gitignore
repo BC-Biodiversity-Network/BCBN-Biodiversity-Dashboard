@@ -37,3 +37,6 @@ backend/exploration/species_keys/cache/
 # LLM test caches and logs (do not commit)
 backend/exploration/llm/cache_harvest_2026_10/
 backend/exploration/llm/*.log
+
+# Catalogue of Life release downloads and the names parquet from fetch_col_names.py
+backend/data/col/

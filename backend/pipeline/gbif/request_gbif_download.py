@@ -12,8 +12,13 @@ Input:  a WKT polygon file (default bc_boundary_gbif.wkt, written by
         make_gbif_boundary.py)
 Output, in --outdir:
     <key>.zip            the Darwin Core Archive
-    <key>.download.json  the download key, DOI, status, record count and the
+    <key>.download.json  the download key, DOI, status, record count, the
                          request that was sent (without the username or email)
+                         and col_release: the ChecklistBank release of the
+                         Catalogue of Life that GBIF tied to checklistKey
+                         when the request was submitted. Our specieskeys are
+                         ids in that release, so fetch_col_names.py and
+                         build_species_tables.py need it.
 
 The request (checked against GBIF's API documentation, and the same shape as
 the request behind test download 0009659-260928105237408):
@@ -75,6 +80,8 @@ from match_bcsee_gbif import CHECKLIST_KEY, HEADERS
 
 
 API = "https://api.gbif.org/v1/occurrence/download"
+REGISTRY_DATASET_URL = "https://api.gbif.org/v1/dataset/"
+CLB_DATASET_URL = "https://api.checklistbank.org/dataset/"
 REQUEST_URL = f"{API}/request"
 
 # The interpreted multimedia.txt comes with this verbatim extension.
@@ -205,10 +212,41 @@ def info_path(outdir, key):
     return os.path.join(outdir, f"{key}.download.json")
 
 
-def save_info(outdir, key, request=None, status=None):
-    """Write <key>.download.json: the key, the request sent and, once known,
-    GBIF's status, DOI and record count. Keeps whatever an earlier run
-    already wrote there, so the request survives a resume with --key."""
+def lookup_col_release(when):
+    """Return which ChecklistBank release of the Catalogue of Life GBIF ties
+    to CHECKLIST_KEY right now, as a dict (checklistbank_key, alias,
+    version, issued, looked_up, when). GBIF's registry entry for the
+    checklist names it as its CLB_DATASET_KEY identifier. when says at what
+    point it was looked up. A failed lookup returns None with a warning,
+    so it never stops a download."""
+    try:
+        entry = requests.get(REGISTRY_DATASET_URL + CHECKLIST_KEY, headers=HEADERS, timeout=60)
+        entry.raise_for_status()
+        clb_key = next(i["identifier"] for i in entry.json().get("identifiers", [])
+                       if i.get("type") == "CLB_DATASET_KEY")
+        release = requests.get(CLB_DATASET_URL + str(clb_key), headers=HEADERS, timeout=60)
+        release.raise_for_status()
+        details = release.json()
+    except (requests.RequestException, StopIteration, ValueError) as error:
+        print(f"WARNING: could not look up the Catalogue of Life release ({error}). "
+              f"Find it later and pass it to build_species_tables.py --col-release.")
+        return None
+    return {
+        "checklistbank_key": int(clb_key),
+        "alias": details.get("alias"),
+        "version": details.get("version"),
+        "issued": details.get("issued"),
+        "looked_up": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "when": when,
+    }
+
+
+def save_info(outdir, key, request=None, status=None, col_release=None):
+    """Write <key>.download.json: the key, the request sent, the Catalogue
+    of Life release and, once known, GBIF's status, DOI and record count.
+    Keeps whatever an earlier run already wrote there, so the request and
+    the release survive a resume with --key; a release already recorded is
+    never replaced."""
     path = info_path(outdir, key)
     info = {}
     if os.path.exists(path):
@@ -216,6 +254,8 @@ def save_info(outdir, key, request=None, status=None):
             info = json.load(f)
 
     info["download_key"] = key
+    if col_release is not None and not info.get("col_release"):
+        info["col_release"] = col_release
     if request is not None:
         info["request"] = request
         info.setdefault("submitted", datetime.now(timezone.utc).isoformat(timespec="seconds"))
@@ -357,6 +397,16 @@ def main():
     if args.key:
         key = args.key.strip()
         print(f"Picking up download {key}")
+        # A download requested before the release was recorded gets it now,
+        # with a note that it was looked up on resuming, not at submission.
+        known = {}
+        if os.path.exists(info_path(args.outdir, key)):
+            with open(info_path(args.outdir, key), encoding="utf-8") as f:
+                known = json.load(f)
+        if not known.get("col_release") and not args.dry_run:
+            os.makedirs(args.outdir, exist_ok=True)
+            save_info(args.outdir, key, col_release=lookup_col_release(
+                "when the download was resumed with --key, not at submission"))
     else:
         wkt = read_polygon(args.wkt)
 
@@ -372,7 +422,8 @@ def main():
         request = build_request(wkt, user, email)
         key = submit(request, user, password, email)
         os.makedirs(args.outdir, exist_ok=True)
-        path = save_info(args.outdir, key, request=public_request(request))
+        path = save_info(args.outdir, key, request=public_request(request),
+                         col_release=lookup_col_release("at submission"))
         print(f"GBIF accepted the request. Download key: {key}")
         print(f"Saved to {path}")
         print(f"If this run stops, continue with:\n"

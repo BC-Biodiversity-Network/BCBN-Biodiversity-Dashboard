@@ -8,6 +8,10 @@ Input, all in --tables (written by build_dwca_tables.py):
     bc_occurrence.parquet     one row per record, with its H3 cells
     bc_species_image.parquet  one image per species
     bc_datasets.parquet       one row per dataset, with its title
+and, from fetch_col_names.py:
+    col_names_<release>.parquet  every name in the Catalogue of Life release
+                                 (--col-names), with col_release.json next
+                                 to it saying which release it is
 and, only with --key-merge:
     species_key_merge.csv     old_key, kept_key, species, ... (from
                               make_species_key_merge.py)
@@ -17,13 +21,35 @@ Output, in --outdir:
                                 hexagon, per year. Columns: specieskey,
                                 year, h3_r4, h3_r5, h3_r6, h3_r7,
                                 occurrences.
-    species_card_gbif.parquet   one row per species: names and taxonomy,
+    species_card_gbif.parquet   one row per species: the Catalogue of
+                                Life name and authorship, taxonomy,
                                 record counts, first and last year, number
                                 of datasets, map extent, the species image
                                 and the top 5 datasets, and which keys were
                                 merged into it. This is also the separate
                                 species table, so the taxonomy columns could
                                 later be dropped from bc_occurrence.
+
+The species card's name:
+  scientificname is the name and authorship of the (kept) specieskey's own
+  record in the Catalogue of Life release the GBIF download used, so it is
+  always at species level and always matches the key. It is never taken
+  from the occurrence records, which can carry a subspecies name, another
+  spelling, or a DNA barcode cluster id (BOLD:...). The card has:
+    col_name        the Catalogue of Life name (empty if the key is missing)
+    col_authorship  its authorship (empty if it has none or the key is
+                    missing)
+    scientificname  col_name and col_authorship together; for a key missing
+                    from the Catalogue of Life file, just the species name
+    name_source     "Catalogue of Life, via GBIF", so the page can label the
+                    author as coming from there; or a note that the key was
+                    not found
+    col_release     the release, e.g. "COL26.6 XR (ChecklistBank 315557)"
+  The release the download used is read from download_info.json in
+  --tables (col_release, written by build_dwca_tables.py from what
+  request_gbif_download.py recorded). A download made before that was
+  recorded needs it given with --col-release; for the current download it
+  is 315557.
 
 Merging keys (--key-merge):
   Some species names have two specieskeys in the Catalogue of Life, often
@@ -71,6 +97,11 @@ Checks, printed at the end (they are never written into the tables):
   - For each of h3_r4 to h3_r7, the per-hexagon occurrences and distinct
     specieskey (after the merge) worked out straight from the records equal
     species_hex grouped the same way.
+  - Every card key is in the Catalogue of Life file (expected: all of them),
+    and the file is the release the download used.
+  - For information only (counts and a few examples, never a FAIL): keys
+    whose Catalogue of Life rank is not species, and keys whose Catalogue of
+    Life name differs from the card's species column.
 
 Outputs are only replaced when every check passes: both tables are written
 to temporary names first (species_hex.tmp.parquet,
@@ -80,19 +111,25 @@ untouched, the temporary files stay for inspection, and the script exits
 with status 1.
 
 Run order:
-    build_dwca_tables.py -> make_species_key_merge.py
-        -> build_species_tables.py --key-merge -> build_hex_aggregates.py
+    request_gbif_download.py -> build_dwca_tables.py
+        -> fetch_col_names.py (once per Catalogue of Life release)
+        -> make_species_key_merge.py
+        -> build_species_tables.py --key-merge --col-names
+        -> build_hex_aggregates.py
 
 Only plain SQL is used, so this runs on the cluster's DuckDB 0.10.3.
 
-Run:
-    python build_species_tables.py --tables ~/bcbn/data/gbif_tables --outdir ~/bcbn/data/gbif_tables
-    python build_species_tables.py --tables ~/bcbn/data/gbif_tables --outdir ~/bcbn/data/gbif_tables \\
-        --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv
+Run (from backend/, on the server):
+    python pipeline/gbif/build_species_tables.py --tables ~/bcbn/data/gbif_tables \\
+        --outdir ~/bcbn/data/gbif_tables/species_merged \\
+        --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv \\
+        --col-names ~/bcbn/data/col/315557/col_names_315557.parquet --col-release 315557 \\
+        --memory-limit 8GB --threads 8 --temp-dir ~/tmp/duckdb_species
 """
 
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -134,8 +171,8 @@ def check_inputs(con, occurrence_path, image_path, datasets_path):
         ).fetchall()
     }
     needed = [
-        "specieskey", "taxonkey", "year", "datasetkey", "kingdom", "phylum",
-        "class", "order", "family", "genus", "species", "scientificname",
+        "specieskey", "year", "datasetkey", "kingdom", "phylum",
+        "class", "order", "family", "genus", "species",
         "decimallatitude", "decimallongitude",
     ] + [f"h3_r{r}" for r in RESOLUTIONS]
     missing = [c for c in needed if c not in columns]
@@ -240,7 +277,8 @@ def build_species_hex(con, out_path):
     )
 
 
-def build_species_card(con, image_path, datasets_path, out_path):
+def build_species_card(con, image_path, datasets_path, col_names_path, col_release_label,
+                       out_path):
     """Write species_card_gbif.parquet: one row per specieskey with its
     names and taxonomy, record counts, years, map extent, image, top
     datasets and merged keys.
@@ -248,10 +286,12 @@ def build_species_card(con, image_path, datasets_path, out_path):
     A species' records can disagree on the taxonomy columns (rarely, e.g.
     after a backbone change, and always for a merged species), so the
     combination found on the kept key's own records is used, and among
-    those the most common one. scientificname is taken from the kept key's
-    own records identified to the species itself (taxonkey = the record's
-    own specieskey), because a record identified to a subspecies carries
-    the subspecies' name; failing that, from its other records.
+    those the most common one.
+
+    The name and authorship come from the kept key's own row in the
+    Catalogue of Life file (col_names_path), never from the records. A key
+    missing from that file gets its species name, an empty authorship and a
+    name_source saying it was not found (the checks then FAIL).
 
     The image is the best of the images of the key and the keys merged
     into it: lowest license_rank, then the kept key's own image.
@@ -276,17 +316,10 @@ def build_species_card(con, image_path, datasets_path, out_path):
                              count(*) DESC, kingdom, phylum, class, "order",
                              family, genus, species) = 1
             ),
-            sciname AS (
-                SELECT specieskey, scientificname
-                FROM keyed
-                WHERE scientificname IS NOT NULL
-                GROUP BY specieskey, scientificname
-                QUALIFY row_number() OVER (
-                    PARTITION BY specieskey
-                    ORDER BY max(CASE WHEN own THEN 1 ELSE 0 END) DESC,
-                             max(CASE WHEN taxonkey = original_specieskey
-                                      THEN 1 ELSE 0 END) DESC,
-                             count(*) DESC, scientificname) = 1
+            col AS (
+                SELECT id, scientific_name, authorship
+                FROM read_parquet('{col_names_path}')
+                WHERE id IN (SELECT DISTINCT specieskey FROM keyed)
             ),
             stats AS (
                 SELECT specieskey,
@@ -338,7 +371,18 @@ def build_species_card(con, image_path, datasets_path, out_path):
                 FROM dataset_counts
                 GROUP BY specieskey
             )
-            SELECT s.specieskey, n.scientificname, t.species, t.kingdom,
+            SELECT s.specieskey,
+                   CASE WHEN c.id IS NULL THEN t.species
+                        ELSE trim(c.scientific_name || ' ' || coalesce(c.authorship, ''))
+                   END AS scientificname,
+                   c.scientific_name AS col_name,
+                   coalesce(c.authorship, '') AS col_authorship,
+                   CASE WHEN c.id IS NULL
+                        THEN 'species name from the GBIF records; key not found in the Catalogue of Life'
+                        ELSE 'Catalogue of Life, via GBIF'
+                   END AS name_source,
+                   '{col_release_label}' AS col_release,
+                   t.species, t.kingdom,
                    t.phylum, t.class, t."order", t.family, t.genus,
                    s.record_count, s.records_no_year, s.first_year,
                    s.last_year, s.n_datasets,
@@ -355,7 +399,7 @@ def build_species_card(con, image_path, datasets_path, out_path):
                    s.merged_keys, s.merged_record_count
             FROM stats AS s
             LEFT JOIN taxonomy AS t ON t.specieskey = s.specieskey
-            LEFT JOIN sciname AS n ON n.specieskey = s.specieskey
+            LEFT JOIN col AS c ON c.id = s.specieskey
             LEFT JOIN images AS i ON i.specieskey = s.specieskey
             LEFT JOIN top_datasets AS d ON d.specieskey = s.specieskey
             ORDER BY t.species, s.specieskey
@@ -377,6 +421,85 @@ def merge_summary(con):
            FROM records"""
     ).fetchone()
     return listed, found, moved, before, after
+
+
+def read_col_release(col_names_path):
+    """Return the release details in col_release.json next to the
+    Catalogue of Life names file (written by fetch_col_names.py)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(col_names_path)), "col_release.json")
+    if not os.path.exists(path):
+        raise SystemExit(f"{path} not found: run fetch_col_names.py, which writes it next to "
+                         f"the names file.")
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def expected_col_release(tables, given):
+    """Return the ChecklistBank release the download used: from
+    download_info.json in --tables, or --col-release for a download made
+    before it was recorded there. Stops if neither has it, or if they
+    disagree."""
+    recorded = None
+    path = os.path.join(tables, "download_info.json")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            recorded = (json.load(handle).get("col_release") or {}).get("checklistbank_key")
+    if recorded and given and int(recorded) != int(given):
+        raise SystemExit(f"--col-release {given} disagrees with download_info.json, which says "
+                         f"the download used {recorded}.")
+    if not (recorded or given):
+        raise SystemExit("Which Catalogue of Life release did the download use? "
+                         "download_info.json does not say; pass --col-release (315557 for "
+                         "the current download).")
+    return int(recorded or given)
+
+
+def check_col_names(con, card_path, col_names_path, expected_release, file_release):
+    """Return (results, info lines) for the Catalogue of Life names.
+
+    results are (name, status, detail): FAIL if any card key is missing from
+    the Catalogue of Life file, or if the file is not the release the
+    download used. The info lines report, never as a FAIL, the keys whose
+    Catalogue of Life rank is not species and the keys whose Catalogue of
+    Life name differs from the card's species column, with a few examples.
+    """
+    missing = con.execute(
+        f"""SELECT count(*), list(specieskey ORDER BY specieskey)[1:{EXAMPLES}]
+            FROM read_parquet('{card_path}') WHERE col_name IS NULL"""
+    ).fetchone()
+    results = [
+        ("every card key is in the Catalogue of Life file",
+         "PASS" if missing[0] == 0 else "FAIL",
+         f"{missing[0]:,} missing" + (f", e.g. {', '.join(missing[1])}" if missing[0] else "")),
+        ("the Catalogue of Life file is the release the download used",
+         "PASS" if file_release == expected_release else "FAIL",
+         f"file {file_release}, download {expected_release}"),
+    ]
+    not_species = con.execute(
+        f"""SELECT count(*) OVER (), c.specieskey, c.col_name, n.rank
+            FROM read_parquet('{card_path}') AS c
+            JOIN read_parquet('{col_names_path}') AS n ON n.id = c.specieskey
+            WHERE n.rank IS DISTINCT FROM 'species'
+            ORDER BY c.specieskey LIMIT {EXAMPLES}"""
+    ).fetchall()
+    differ = con.execute(
+        f"""SELECT count(*) OVER (),
+                   count(*) FILTER (WHERE regexp_replace(col_name, ' \\([^)]*\\)', '') = species) OVER (),
+                   specieskey, col_name, species
+            FROM read_parquet('{card_path}')
+            WHERE col_name IS NOT NULL AND col_name IS DISTINCT FROM species
+            -- Examples that differ by more than a subgenus come first.
+            ORDER BY CASE WHEN regexp_replace(col_name, ' \\([^)]*\\)', '') = species
+                          THEN 1 ELSE 0 END, specieskey
+            LIMIT {EXAMPLES}"""
+    ).fetchall()
+    info = [f"  INFO  Catalogue of Life rank not species: {not_species[0][0] if not_species else 0:,} keys"]
+    info += [f"          {key}: {name} ({rank})" for _, key, name, rank in not_species]
+    info.append(f"  INFO  Catalogue of Life name differs from the species column: "
+                f"{differ[0][0] if differ else 0:,} keys"
+                + (f" ({differ[0][1]:,} of them only by a subgenus in brackets)" if differ else ""))
+    info += [f"          {key}: '{name}' vs species '{species}'" for _, _, key, name, species in differ]
+    return results, info
 
 
 def check_totals(con, species_hex_path, card_path):
@@ -522,6 +645,19 @@ def main():
         "each old_key's records are counted under its kept_key. Off by default.",
     )
     parser.add_argument(
+        "--col-names",
+        required=True,
+        help="col_names_<release>.parquet from fetch_col_names.py: the Catalogue of Life "
+        "release the download used. The card's name and authorship come from it.",
+    )
+    parser.add_argument(
+        "--col-release",
+        type=int,
+        default=None,
+        help="The ChecklistBank release the download used, for a download whose "
+        "download_info.json does not record it (315557 for the current download).",
+    )
+    parser.add_argument(
         "--memory-limit",
         default="10GB",
         help="Most memory DuckDB may use before it spills to --temp-dir "
@@ -548,6 +684,12 @@ def main():
 
     con = connect(args.threads, args.memory_limit, args.temp_dir)
     check_inputs(con, occurrence_path, image_path, datasets_path)
+    col_names_path = os.path.expanduser(args.col_names)
+    if not os.path.exists(col_names_path):
+        raise SystemExit(f"{col_names_path} not found: run fetch_col_names.py first.")
+    expected_release = expected_col_release(args.tables, args.col_release)
+    release = read_col_release(col_names_path)
+    col_release_label = f"{release.get('alias')} (ChecklistBank {release.get('key')})".replace("'", "")
     merge_pairs = read_key_merge(args.key_merge) if args.key_merge else []
     check_merge_species(con, occurrence_path, merge_pairs, args.key_merge)
     register_records(con, occurrence_path, merge_pairs)
@@ -556,6 +698,8 @@ def main():
 
     print(f"Tables:    {args.tables}")
     print(f"Key merge: {args.key_merge or 'none (every key is its own species)'}")
+    print(f"COL names: {col_names_path} ({col_release_label}; the download used "
+          f"{expected_release})")
     print(f"Output:    {args.outdir}\n")
     t_all = time.time()
 
@@ -563,11 +707,15 @@ def main():
     build_species_hex(con, hex_tmp)
     print(f"species_hex built in {time.time() - t:.1f}s")
     t = time.time()
-    build_species_card(con, image_path, datasets_path, card_tmp)
+    build_species_card(con, image_path, datasets_path, col_names_path, col_release_label,
+                       card_tmp)
     print(f"species_card_gbif built in {time.time() - t:.1f}s")
 
     # Checks, all on the temporary files.
     results = check_totals(con, hex_tmp, card_tmp)
+    col_results, col_info = check_col_names(con, card_tmp, col_names_path, expected_release,
+                                            int(release.get("key")))
+    results += col_results
     hex_lines = []
     for r in RESOLUTIONS:
         cells, occ_bad, species_bad, examples = check_hex_against_records(con, hex_tmp, r)
@@ -615,6 +763,7 @@ def main():
     print("\nChecks:")
     for name, status, detail in results:
         print(f"  {status:<4}  {name}: {detail}")
+    print("\n".join(col_info))
     if hex_lines:
         print("  Hexagons that differ (from the records vs from species_hex):")
         print("\n".join(hex_lines))

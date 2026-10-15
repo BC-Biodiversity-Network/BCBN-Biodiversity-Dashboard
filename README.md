@@ -287,6 +287,41 @@ stay for inspection, the script says which files were not replaced, and it
 exits with status 1. The checks are only printed, never written into the
 tables.
 
+## BCSEE statuses on the species cards
+
+`backend/pipeline/bcsee/build_bcsee_status_display.py` gathers the BC
+statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the
+same species key into `bcsee_status_by_gbif_species.parquet`, one row per
+species key. Run it with the same species key merge as
+`build_species_tables.py`, so the statuses join to the species cards:
+
+```
+cd backend
+python pipeline/bcsee/build_bcsee_status_display.py --data-dir ~/bcbn/data \
+    --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv
+```
+
+With `--key-merge` (off by default), every entry matched to an old key is
+moved to its kept key, right after the hand-checked overrides, so it covers
+both. Each row and each entry keep `matched_species_keys`, the key or keys
+before the merge. Entries that end up the same are combined, keeping all
+their element_codes; entries with different statuses on one kept key are
+kept side by side, never one picked over the other, and the run prints them
+for review. With the current merge list, only one shown status moves
+(Massalongia carnosa, Yellow, from `VL5W8` to `737CH`).
+
+Every row also says where the statuses come from, for the front end to show
+next to each status: `status_source` ("BC Species and Ecosystems Explorer
+(BCSEE)"), `status_source_date` (the date the province made the BCSEE export,
+2026-05-05 now) and `status_pulled_on` (the date `pull_bcsee.py` downloaded
+it, 2026-09-26 now).
+
+The BCSEE match and the merge list must use the same Catalogue of Life
+release. Both use 315557 now, but nothing records which release the match
+used, so this is not checked yet: rerun `match_bcsee_gbif.py` and
+`make_species_key_merge.py` together whenever the GBIF download moves to a
+new release.
+
 ## Validation
 
 The clean product holds **38,739,753 records** and **38,218 distinct
@@ -316,7 +351,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/` | The production pipeline, one folder per data source (below). These are what runs to produce the dashboard's data. Run them from `backend/`, e.g. `python pipeline/gbif/build_dwca_tables.py`. A script that needs another folder's code adds that folder to its import path itself. |
 | `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `make_species_key_merge.py` decides which duplicate species keys to merge, `build_species_tables.py` builds `species_hex` and the species cards with that merge applied, and `build_hex_aggregates.py` builds the map's hexagon tables from `species_hex`. `build_species_summary.py` (Layer 3) builds the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
-| `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, and applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists; `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
+| `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |

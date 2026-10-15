@@ -20,6 +20,10 @@ Inputs, all in --data-dir:
                                answers are saved in
                                bcsee_raw/gbif_key_answers.jsonl so each key
                                is only asked about once.
+    species_key_merge.csv      optional, only with --key-merge: the species
+                               key merge from make_species_key_merge.py
+                               (old_key, kept_key, ...). Read with the same
+                               one-step check as build_species_tables.py.
     bcsee_gbif_overrides.csv   optional, columns element_code and
                                gbif_species_key. Written by a person after
                                checking a match by hand. Applied before
@@ -68,6 +72,23 @@ Rules:
      Exotic. Ties are broken by scientific_label, so every run gives the
      same order.
 
+The species key merge (--key-merge, off by default):
+  The site shows one species card per kept_key of the merge, and none for
+  an old_key. So, right after the overrides are applied, every entry whose
+  key is an old_key is moved to its kept_key; this covers matched keys and
+  overridden keys alike. The key before the merge is kept as
+  matched_species_key, so every move can be traced. A kept key that gains
+  entries is grouped as usual: entries that end up the same are combined by
+  rule 3, keeping all their element_codes, and entries with different
+  statuses are kept side by side, never one picked over the other (each is
+  BCSEE's own assessment). The run prints the entries moved, the kept keys
+  that gained entries and any kept key with different statuses, for review.
+
+  The match and the merge list must use the same Catalogue of Life release
+  (both 315557 now). Nothing records the release the match used, so that is
+  not checked yet: rerun match_bcsee_gbif.py and make_species_key_merge.py
+  together whenever the GBIF download moves to a new release.
+
 Output, one row per GBIF species:
     bcsee_status_by_gbif_species.parquet
         gbif_species_key, species_name (GBIF's accepted name, written like
@@ -76,7 +97,14 @@ Output, one row per GBIF species:
         has_separate_bcsee_species (two or more species-level BCSEE
         entries, so there is no overall BC status), statuses (the distinct
         statuses in entry order), element_codes (every BCSEE element_code,
-        in entry order), entries (the list of status entries)
+        in entry order), entries (the list of status entries; each also
+        has matched_species_keys, the key or keys its element_codes were
+        matched to before the key merge), matched_species_keys (every such
+        key on the row), and where the statuses come from, for the front end
+        to show next to every status: status_source ("BC Species and
+        Ecosystems Explorer (BCSEE)"), status_source_date (the date the
+        province made the BCSEE export) and status_pulled_on (the date
+        pull_bcsee.py downloaded it)
     bcsee_status_by_gbif_species.csv
         the same table to open in a spreadsheet. The lists are written as
         text: statuses, element_codes and the entries in status_display
@@ -88,6 +116,8 @@ answers file, so it is safe to run again at any time.
 Usage:
     python build_bcsee_status_display.py
     python build_bcsee_status_display.py --data-dir ~/Desktop/BCBN/Results
+    python build_bcsee_status_display.py --data-dir ~/bcbn/data \
+        --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv
 """
 
 import argparse
@@ -103,6 +133,15 @@ import duckdb
 import pandas as pd
 import requests
 
+
+# The species key merge list is read by the same function as in
+# build_species_tables.py, so both apply exactly the same one-step check.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gbif"))
+from build_species_tables import read_key_merge  # noqa: E402
+
+# The label the front end shows next to every status, so it is clear the
+# statuses are the province's, not BCBN's.
+STATUS_SOURCE = "BC Species and Ecosystems Explorer (BCSEE)"
 
 MATCH_URL = "https://api.gbif.org/v2/species/match"
 
@@ -166,11 +205,13 @@ def read_overrides(path, match):
     return dict(zip(overrides["element_code"], overrides["gbif_species_key"]))
 
 
-def read_entries(data):
+def read_entries(data, merge_pairs=None):
     """
     Read the BCSEE entries that can be shown, one row per element_code.
 
-    Applies the overrides, keeps rows with join_ok or an override, adds
+    Applies the overrides, then the species key merge (merge_pairs, from
+    read_key_merge, or None for no merge), keeps rows with join_ok or an
+    override, adds
     bc_list, english_name and the classification level from
     bcsee_status.parquet, and keeps only the statuses in SHOWN_STATUSES.
     """
@@ -195,6 +236,18 @@ def read_entries(data):
         print(f"  {int(changed.sum()):,} of them change the matched key, "
               f"{int((match['overridden'] & ~match['join_ok']).sum()):,} "
               f"bring in an entry without join_ok")
+
+    # The species key merge, after the overrides so it covers both: an entry
+    # on an old_key moves to its kept_key, the key with a species card.
+    # matched_species_key keeps the key before the merge.
+    match["matched_species_key"] = match["gbif_species_key"]
+    if merge_pairs:
+        kept_for = {old: kept for old, kept, _ in merge_pairs}
+        moved = match["gbif_species_key"].isin(kept_for)
+        match.loc[moved, "gbif_species_key"] = match.loc[moved, "gbif_species_key"].map(kept_for)
+        joinable = moved & (match["join_ok"] | match["overridden"])
+        print(f"  key merge: {len(kept_for):,} pairs; {int(moved.sum()):,} matched entries "
+              f"were on an old key, {int(joinable.sum()):,} of them joinable, now on the kept key")
 
     used = match[match["join_ok"] | match["overridden"]]
     rows = used.merge(status, on="element_code", how="left", indicator=True)
@@ -344,7 +397,9 @@ def describe(row, names):
     the name is the species name itself.
     """
     if row["key_changed"]:
-        name = names[row["gbif_species_key"]]
+        # The overridden key itself, not the kept key it may have been
+        # merged into, so the entry keeps its own name.
+        name = names[row["matched_species_key"]]
     elif gbif_has_own_entry(row):
         name = names[row["gbif_usage_key"]]
     else:
@@ -357,6 +412,7 @@ def describe(row, names):
         "common_label": english.strip() if isinstance(english, str) else "",
         "is_species_level": row["classification_level"] == "Species",
         "is_gbif_synonym": bool(name) and name.get("status") in SYNONYM_STATUSES,
+        "matched_species_keys": [row["matched_species_key"]],
         "element_code": row["element_code"],
     }
 
@@ -375,6 +431,7 @@ def merge_same(entries):
         same = (entry["status"], entry["scientific_label"], entry["common_label"])
         if same not in merged:
             merged[same] = {**{k: v for k, v in entry.items() if k != "element_code"},
+                            "matched_species_keys": list(entry["matched_species_keys"]),
                             "element_codes": [entry["element_code"]]}
             continue
         kept = merged[same]
@@ -384,8 +441,10 @@ def merge_same(entries):
         kept["is_species_level"] |= entry["is_species_level"]
         kept["is_gbif_synonym"] |= entry["is_gbif_synonym"]
         kept["element_codes"].append(entry["element_code"])
+        kept["matched_species_keys"] += entry["matched_species_keys"]
     for entry in merged.values():
         entry["element_codes"].sort()
+        entry["matched_species_keys"] = sorted(set(entry["matched_species_keys"]))
     return list(merged.values()), odd
 
 
@@ -443,6 +502,7 @@ def group_by_species(shown, names):
             "statuses": list(dict.fromkeys(e["status"] for e in entries)),
             "element_codes": [c for e in entries for c in e["element_codes"]],
             "entries": entries,
+            "matched_species_keys": sorted(set(group["matched_species_key"])),
         })
     return pd.DataFrame(rows), odd
 
@@ -463,11 +523,15 @@ def write_outputs(table, data):
     # One row per entry, with the entry's position, and the element_codes
     # joined into text so DuckDB reads every column as plain text or true/false.
     flat = pd.DataFrame([{"gbif_species_key": row.gbif_species_key, "position": i,
-                          **{k: v for k, v in e.items() if k != "element_codes"},
-                          "element_codes": ";".join(e["element_codes"])}
+                          **{k: v for k, v in e.items()
+                             if k not in ("element_codes", "matched_species_keys")},
+                          "element_codes": ";".join(e["element_codes"]),
+                          "matched_species_keys": ";".join(e["matched_species_keys"])}
                          for row in table.itertuples() for i, e in enumerate(row.entries)])
     species = table[["gbif_species_key", "species_name", "status_display",
-                     "has_multiple", "has_separate_bcsee_species"]]
+                     "has_multiple", "has_separate_bcsee_species", "matched_species_keys",
+                     "status_source", "status_source_date", "status_pulled_on"]].copy()
+    species["matched_species_keys"] = species["matched_species_keys"].map(";".join)
 
     tmp = parquet.with_suffix(".parquet.partial")
     con = duckdb.connect()
@@ -476,7 +540,9 @@ def write_outputs(table, data):
     con.execute(f"""
         COPY (
             SELECT s.gbif_species_key, s.species_name, s.status_display, s.has_multiple,
-                   s.has_separate_bcsee_species, st.statuses, e.element_codes, e.entries
+                   s.has_separate_bcsee_species, st.statuses, e.element_codes, e.entries,
+                   string_split(s.matched_species_keys, ';') AS matched_species_keys,
+                   s.status_source, s.status_source_date, s.status_pulled_on
             FROM species s
             JOIN (
                 SELECT gbif_species_key,
@@ -487,6 +553,7 @@ def write_outputs(table, data):
                            common_label := common_label,
                            is_species_level := is_species_level,
                            is_gbif_synonym := is_gbif_synonym,
+                           matched_species_keys := string_split(matched_species_keys, ';'),
                            element_codes := string_split(element_codes, ';'))
                            ORDER BY position) AS entries,
                        flatten(list(string_split(element_codes, ';')
@@ -511,6 +578,7 @@ def write_outputs(table, data):
     text["status_display"] = text["entries"].map(lambda e: display_text(e, " | "))
     text["statuses"] = text["statuses"].map(" | ".join)
     text["element_codes"] = text["element_codes"].map(" | ".join)
+    text["matched_species_keys"] = text["matched_species_keys"].map(" | ".join)
     text["entries"] = text["entries"].map(lambda e: json.dumps(e, ensure_ascii=False))
     tmp = csv.with_suffix(".csv.partial")
     text.to_csv(tmp, index=False)
@@ -533,6 +601,51 @@ def plain_text_columns(frame):
             values = out[col].astype(object)
             out[col] = values.where(values.notna(), None)
     return out
+
+
+def read_status_source(data):
+    """
+    Return (status_source_date, status_pulled_on) from bcsee_status.parquet:
+    the date the province made the BCSEE export (source_generated) and the
+    date pull_bcsee.py downloaded it (pulled_on). Either is "" if unknown.
+    Stops if the file mixes more than one pull, since then no single date
+    describes it.
+    """
+    con = duckdb.connect()
+    pulls = con.execute(
+        f"SELECT DISTINCT source_generated, pulled_on FROM '{data / 'bcsee_status.parquet'}'"
+    ).fetchall()
+    con.close()
+    if len(pulls) != 1:
+        raise ValueError(f"bcsee_status.parquet mixes {len(pulls)} pulls: {pulls}. "
+                         f"Rerun pull_bcsee.py.")
+    generated, pulled = pulls[0]
+    return (str(generated) if generated else ""), (str(pulled) if pulled else "")
+
+
+def report_merge(table, shown):
+    """
+    Print what the species key merge did: the entries moved to a kept key,
+    the kept keys that gained entries, and every kept key whose entries now
+    have different statuses, listed in full for review.
+    """
+    moved = shown[shown["matched_species_key"] != shown["gbif_species_key"]]
+    print(f"  key merge: {len(moved):,} shown entries moved to their kept key")
+    for _, r in moved.iterrows():
+        print(f"    {r['element_code']} {r['scientific_name']} ({r['bc_list']}): "
+              f"{r['matched_species_key']} -> {r['gbif_species_key']}")
+    gained = table[table.apply(
+        lambda row: any(k != row["gbif_species_key"] for k in row["matched_species_keys"]), axis=1)]
+    print(f"  key merge: {len(gained):,} kept keys gained entries")
+    both = gained[gained["matched_species_keys"].map(len) > 1]
+    different = both[both["statuses"].map(len) > 1]
+    print(f"  key merge: {len(both):,} kept keys now hold entries from both keys of a pair; "
+          f"{len(different):,} of them with different statuses (kept side by side)")
+    for row in different.itertuples():
+        print(f"    REVIEW {row.gbif_species_key} {row.species_name}:")
+        for e in row.entries:
+            print(f"      {e['status']:7} {e['scientific_label']}  "
+                  f"(from {', '.join(e['matched_species_keys'])}; {', '.join(e['element_codes'])})")
 
 
 def report(table, shown, odd):
@@ -565,6 +678,10 @@ def main():
                         help="Where the inputs are and where the output goes. "
                              "Defaults to the server's data folder, like the "
                              "other pipeline scripts.")
+    parser.add_argument("--key-merge", default=None,
+                        help="species_key_merge.csv from make_species_key_merge.py. When "
+                             "given, entries on an old_key move to its kept_key, the key "
+                             "with a species card. Off by default.")
     args = parser.parse_args()
     data = Path(args.data_dir).expanduser()
     raw = data / "bcsee_raw"
@@ -573,11 +690,18 @@ def main():
     print("READING")
     print("=" * 70)
     print()
-    shown = read_entries(data)
+    merge_pairs = read_key_merge(Path(args.key_merge).expanduser()) if args.key_merge else []
+    if args.key_merge:
+        print(f"  key merge list: {args.key_merge} ({len(merge_pairs):,} pairs)")
+    shown = read_entries(data, merge_pairs)
+    status_source_date, status_pulled_on = read_status_source(data)
     key_path = raw / "gbif_key_answers.jsonl"
     names = saved_names(raw / "gbif_match_answers_v2.jsonl", key_path)
+    # Names needed: each row's (kept) key, each entry's own GBIF name, and
+    # the overridden key of an overridden entry, which describe() uses.
     needed = set(shown["gbif_species_key"]) | set(
-        shown.loc[~shown["key_changed"], "gbif_usage_key"].dropna())
+        shown.loc[~shown["key_changed"], "gbif_usage_key"].dropna()) | set(
+        shown.loc[shown["key_changed"], "matched_species_key"])
     add_missing_names(needed, names, key_path)
 
     print()
@@ -586,7 +710,14 @@ def main():
     print("=" * 70)
     print()
     table, odd = group_by_species(shown, names)
+    table["status_source"] = STATUS_SOURCE
+    table["status_source_date"] = status_source_date
+    table["status_pulled_on"] = status_pulled_on
     report(table, shown, odd)
+    if args.key_merge:
+        report_merge(table, shown)
+    print(f"  source label: {STATUS_SOURCE}, made by the province {status_source_date or '?'}, "
+          f"pulled {status_pulled_on or '?'}")
 
     print()
     print("=" * 70)

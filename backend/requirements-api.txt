@@ -1,0 +1,6 @@
+# The species API (backend/api/) and its tests. duckdb is also used by the
+# pipeline; the others are only for the API.
+duckdb
+fastapi
+uvicorn
+pytest

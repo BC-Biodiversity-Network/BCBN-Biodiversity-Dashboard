@@ -223,7 +223,9 @@ python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/
 
 **`backend/pipeline/gbif/build_species_tables.py` -> `species_hex.parquet`, `species_card_gbif.parquet`**
 `species_hex` holds the records per species, year and hexagon (h3_r4 to
-h3_r7), including records with no specieskey; `species_card_gbif` holds one
+h3_r7). The clean filter keeps only records with a species name, so almost
+every record has a specieskey (1 record in the October 2026 build does not;
+it is kept with specieskey NULL). `species_card_gbif` holds one
 row per species for the species card. With `--key-merge
 species_key_merge.csv`, each old key's records are counted under its kept
 key. The card's name and authorship are the Catalogue of Life's own for the
@@ -249,8 +251,8 @@ python pipeline/gbif/build_species_tables.py --tables ~/bcbn/data/gbif_tables \
 **`backend/pipeline/gbif/build_hex_aggregates.py` -> `bc_hex_r{4..7}.parquet`, `bc_hex_r{4..7}.csv.gz`**
 Counts the records and distinct species in each hexagon at resolutions 4 to
 7 for the overview map, by grouping `species_hex.parquet` on its `h3_r4` to
-`h3_r7` columns: `occurrences` is the sum of the records (including records
-with no specieskey) and `distinct_species` is the number of distinct
+`h3_r7` columns: `occurrences` is the sum of the records (including the rare
+record with no specieskey) and `distinct_species` is the number of distinct
 specieskey, after the merge. It computes no H3 itself, so it runs on DuckDB
 0.10.3 and needs no h3 package. The gzipped CSVs are what the map loads.
 Their columns are `h3_cell`, `occurrences` and `distinct_species`, and the
@@ -353,6 +355,8 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the sensitive-species switch from environment variables, `db.py` checks and opens the data files with DuckDB, and `main.py` is the FastAPI app. |
+| `backend/tests/` | Tests for the API. `conftest.py` writes a tiny copy of the data files, so the tests never need the real data. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
@@ -587,6 +591,46 @@ only group by those stored cells, so they need neither the extension nor the
 package.
 
 Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `openpyxl`, `pyarrow`, `h3`.
+
+## Running the species API
+
+Species search and the species cards come from a small API in `backend/api/`
+(FastAPI and DuckDB). It reads four files, copied by hand from the server
+and the BCSEE build into `backend/data/api/` (git-ignored like the rest of
+`backend/data/`):
+
+| File | Comes from |
+| --- | --- |
+| `species_card_gbif.parquet`, `species_hex.parquet` | `~/bcbn/data/gbif_tables/species_merged/` on the server (`build_species_tables.py`) |
+| `bcsee_status_by_gbif_species.parquet` | `build_bcsee_status_display.py --key-merge` |
+| `download_info.json` | `~/bcbn/data/gbif_tables/` on the server (`build_dwca_tables.py`); the GBIF download DOI to cite |
+
+```
+pip install -r backend/requirements-api.txt
+cd backend
+uvicorn api.main:app --reload --port 8000
+python -m pytest
+```
+
+Two environment variables change its behaviour:
+
+- `BCBN_API_DATA_DIR`: the folder with the four files, if not
+  `backend/data/api/`.
+- `BCBN_SENSITIVE_MAX_RES`: the switch for coarsening sensitive species'
+  locations. Empty means off (the setting for now); 4 to 7 caps the species
+  map at that H3 resolution and coarsens the card's extent box to match. Any
+  other value stops the API. Which species count as sensitive is not decided
+  yet.
+
+At start-up the API checks that every file is there with the columns it
+reads, that the cards have one Catalogue of Life release and the statuses
+one BCSEE source and date, and refuses to start if not, listing every
+problem.
+
+`GET /api/meta` returns where the data comes from and what it holds: the
+Catalogue of Life release, the BCSEE source and dates, the GBIF download,
+species and record totals, the year range, the map resolutions and the
+sensitive-species setting.
 
 ## Running the front end
 

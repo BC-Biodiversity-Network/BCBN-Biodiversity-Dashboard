@@ -23,22 +23,17 @@ def test_data_dir_from_environment():
     assert settings.data_dir == Path.home() / "somewhere" / "api"
 
 
-def test_sensitive_switch_is_off_by_default():
-    """Unset or empty means coarsening is off."""
+def test_sensitive_setting_is_empty_by_default():
+    """Unset or empty gives None, the only value the API accepts for now."""
     assert load_settings({}).sensitive_max_res is None
     assert parse_sensitive_max_res("") is None
     assert parse_sensitive_max_res("   ") is None
 
 
-def test_sensitive_switch_accepts_a_stored_resolution():
-    """A resolution from 4 to 7 turns coarsening on at that resolution."""
-    assert parse_sensitive_max_res("5") == 5
-    assert parse_sensitive_max_res(" 7 ") == 7
-    assert load_settings({"BCBN_SENSITIVE_MAX_RES": "4"}).sensitive_max_res == 4
-
-
-@pytest.mark.parametrize("text", ["3", "8", "abc", "5.5", "off"])
-def test_sensitive_switch_refuses_other_values(text):
-    """Anything else stops the API instead of quietly meaning off."""
-    with pytest.raises(SettingsError):
-        parse_sensitive_max_res(text)
+@pytest.mark.parametrize("text", ["5", "4", "7", "3", "abc", "off"])
+def test_sensitive_setting_with_any_value_stops_the_api(text):
+    """Any value at all stops the API, with a message saying sensitive-
+    species handling is not implemented, so nobody thinks species are
+    protected when they are not."""
+    with pytest.raises(SettingsError, match="not implemented yet"):
+        load_settings({"BCBN_SENSITIVE_MAX_RES": text})

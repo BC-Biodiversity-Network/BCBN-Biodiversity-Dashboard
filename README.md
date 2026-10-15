@@ -125,9 +125,14 @@ metadata of every dataset.
 - `bc_datasets.parquet`: one row per dataset in the archive: title,
   citation, license and DOI from its metadata, publisher, and how many of its
   records are in `bc_occurrence` (0 if all were filtered out).
-- `bc_species_image.parquet`: one image per species, a StillImage licensed
-  CC0, CC BY or CC BY-NC (preferred in that order), from the most recent
-  record. Images with no license are not used.
+- `bc_species_image.parquet`: one image per species, a StillImage from the
+  most recent record with the best licence. Species card images can have
+  any of these licences, preferred in this order: CC0 or the Public Domain
+  Mark, CC BY, CC BY-SA, CC BY-ND, CC BY-NC, CC BY-NC-SA, CC BY-NC-ND (any
+  version, or none stated), or Beaty Museum images provided without a
+  licence. Any other image, including one whose licence is filled in but
+  can't be read, is not used. `license_rank` and `license_source` say which
+  case applies.
 - `download_info.json`: the download key, DOI, date and query. The DOI comes
   from the GBIF download API when the archive doesn't include it.
 
@@ -355,7 +360,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers the BC statuses (Red, Blue, Yellow, Exotic) of every BCSEE entry that points to the same GBIF species into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the sensitive-species switch from environment variables, `db.py` checks and opens the data files with DuckDB, and `main.py` is the FastAPI app. |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/tests/` | Tests for the API. `conftest.py` writes a tiny copy of the data files, so the tests never need the real data. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
@@ -616,11 +621,12 @@ Two environment variables change its behaviour:
 
 - `BCBN_API_DATA_DIR`: the folder with the four files, if not
   `backend/data/api/`.
-- `BCBN_SENSITIVE_MAX_RES`: the switch for coarsening sensitive species'
-  locations. Empty means off (the setting for now); 4 to 7 caps the species
-  map at that H3 resolution and coarsens the card's extent box to match. Any
-  other value stops the API. Which species count as sensitive is not decided
-  yet.
+- `BCBN_SENSITIVE_MAX_RES`: reserved for coarsening sensitive species'
+  locations, which is not implemented: which species, how coarse, and what
+  happens to the card's extent box and photo link are not decided yet. It
+  must be left empty. Any value stops the API at start-up with a message
+  saying so, so nobody thinks species are protected when they are not.
+  `/api/meta` reports it (always null for now).
 
 At start-up the API checks that every file is there with the columns it
 reads, that the cards have one Catalogue of Life release and the statuses
@@ -631,6 +637,32 @@ problem.
 Catalogue of Life release, the BCSEE source and dates, the GBIF download,
 species and record totals, the year range, the map resolutions and the
 sensitive-species setting.
+
+`GET /api/species/{key}` returns one species card (`backend/api/species.py`):
+the Catalogue of Life name and authorship with `name_source` and
+`col_release`, the taxonomy, record counts, the extent box, the image, the
+top datasets and the BCSEE statuses. An old key that was merged gives the
+kept key's card with `merged_from` set; any other key without a card,
+including a species BCSEE lists but with no records in BC, gives 404.
+
+- Every BCSEE status entry, and the BCSEE block itself, carries
+  `status_source`, `status_source_date` and `status_pulled_on`. The English
+  name is the species-level BCSEE common name, with `english_name_source`.
+  The block's `state` is `listed`, `in_bcsee_no_status`, `not_in_bcsee` or
+  `unknown`. `build_bcsee_status_display.py` only writes species with a Red,
+  Blue, Yellow or Exotic status, so with today's file a species without
+  one is `unknown` (it may be in BCSEE as Not Reviewed, Unknown, ...).
+  `not_in_bcsee` and `in_bcsee_no_status` only appear once that file also
+  lists species without a shown status (`/api/meta` says whether it does).
+- An image is returned only with its URL, a link to the original, a
+  creator and a readable licence (code, label and link); otherwise `image`
+  is null. So Beaty Museum images without a licence are picked by
+  `bc_species_image` but never shown. Images are always shown unchanged
+  apart from resizing (iNaturalist photos use the medium size), with
+  creator, licence and a link to the original. ND images are flagged with
+  `no_derivatives` and are never cropped.
+- The extent box is the card's own; no species' locations are coarsened
+  (see `BCBN_SENSITIVE_MAX_RES` above).
 
 ## Running the front end
 

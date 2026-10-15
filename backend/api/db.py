@@ -2,12 +2,15 @@
 db.py
 
 Opens the API's data: checks that the four files are there and have the
-columns the API reads, opens one DuckDB connection over them, and works
-out the figures /api/meta returns.
+columns the API reads and that every species key has one answer, opens one
+DuckDB connection over them, and works out the figures /api/meta returns
+and the lookup from merged (old) keys to kept keys.
 
-The parquet files are read in place (DuckDB views over read_parquet), not
-loaded into memory. A request for one species only reads the few parquet
-row groups that hold it, so this stays fast without a database server.
+The two small files (the species cards and the BCSEE statuses) are copied
+into memory when the API starts. species_hex is read in place (a DuckDB
+view over read_parquet): it is sorted by species key, so a request for one
+species only reads the few parquet row groups that hold it. Either way it
+stays fast without a database server.
 
 Each request should use its own cursor (connection.cursor()), which is
 DuckDB's way of sharing one database between threads.
@@ -19,7 +22,7 @@ import json
 
 import duckdb
 
-from api.settings import RESOLUTIONS
+from api.settings import RESOLUTIONS, refuse_sensitive_setting
 
 # The columns the API reads from each parquet file, so a file from an older
 # build is caught when the API starts rather than halfway through a request.
@@ -48,12 +51,25 @@ REQUIRED_COLUMNS = {
 DOWNLOAD_INFO_FILE = "download_info.json"
 REQUIRED_DOWNLOAD_FIELDS = ["download_key", "doi", "doi_url", "date"]
 
+# The BCSEE statuses the site shows, the same list as SHOWN_STATUSES in
+# build_bcsee_status_display.py. Other BCSEE values (Not Reviewed, Unknown,
+# Accidental, No Status, Extinct, Other) are not shown as a status.
+SHOWN_STATUSES = ["Red", "Blue", "Yellow", "Exotic"]
+
 # The name each parquet file is given inside DuckDB.
 VIEW_NAMES = {
     "species_card_gbif.parquet": "species_card",
     "species_hex.parquet": "species_hex",
     "bcsee_status_by_gbif_species.parquet": "bcsee_status",
 }
+
+# The files copied into memory when the API starts, rather than read from
+# disk on every request. The card file is sorted by species name, not key,
+# so finding one key in it on disk means reading the whole file (about
+# 30 ms); in memory it takes under 2 ms. Both files are small (about 4 MB
+# and 0.5 MB). species_hex stays on disk: it is ten times larger and sorted
+# by key, so DuckDB only reads the part that holds the species asked for.
+LOADED_INTO_MEMORY = {"species_card_gbif.parquet", "bcsee_status_by_gbif_species.parquet"}
 
 
 class DataFilesError(RuntimeError):
@@ -143,18 +159,83 @@ def check_single_values(con):
     return problems
 
 
+def check_keys(con):
+    """Return a list of problems with the species keys: every card key
+    must appear once, and every old key in merged_keys must belong to
+    exactly one card and must not be a card key itself. Otherwise a
+    request for that key would have more than one answer."""
+    problems = []
+
+    rows, keys = con.execute(
+        "SELECT count(*), count(DISTINCT specieskey) FROM species_card").fetchone()
+    if rows != keys:
+        problems.append(
+            f"species_card_gbif.parquet has {rows - keys} repeated specieskey(s)")
+
+    repeated = con.execute(
+        """SELECT old_key FROM (
+               SELECT unnest(merged_keys) AS old_key FROM species_card)
+           GROUP BY old_key HAVING count(*) > 1
+           ORDER BY old_key""").fetchall()
+    if repeated:
+        problems.append(
+            "these merged keys belong to more than one card: "
+            + ", ".join(row[0] for row in repeated))
+
+    also_cards = con.execute(
+        """SELECT DISTINCT m.old_key FROM (
+               SELECT unnest(merged_keys) AS old_key FROM species_card) AS m
+           JOIN species_card AS c ON c.specieskey = m.old_key
+           ORDER BY m.old_key""").fetchall()
+    if also_cards:
+        problems.append(
+            "these merged keys still have a card of their own: "
+            + ", ".join(row[0] for row in also_cards))
+
+    return problems
+
+
+def read_merged_keys(con):
+    """Return a dict from each old (merged-away) key to the key it was
+    merged into. It has a few hundred entries, so it is kept in memory and
+    a request for an old key needs no extra query."""
+    return dict(con.execute(
+        """SELECT old_key, specieskey FROM (
+               SELECT specieskey, unnest(merged_keys) AS old_key
+               FROM species_card)""").fetchall())
+
+
+def bcsee_includes_species_without_status(con):
+    """True if the BCSEE file has rows for species whose BCSEE entries have
+    no shown status (none of Red, Blue, Yellow, Exotic).
+
+    build_bcsee_status_display.py currently leaves those species out, so a
+    species with no row may still be in BCSEE (as Not Reviewed, Unknown and
+    so on). Only when the file includes them does "no row" really mean
+    "not in BCSEE"."""
+    shown = ", ".join(sql_text(status) for status in SHOWN_STATUSES)
+    count = con.execute(
+        f"""SELECT count(*) FROM bcsee_status
+            WHERE NOT list_has_any(coalesce(statuses, []::VARCHAR[]), [{shown}])""").fetchone()[0]
+    return count > 0
+
+
 def create_views(con, data_dir):
     """Give each parquet file a short name inside DuckDB (species_card,
-    species_hex, bcsee_status), so queries never repeat the file paths."""
+    species_hex, bcsee_status), so queries never repeat the file paths.
+    The files in LOADED_INTO_MEMORY become in-memory tables; the others
+    stay views that read the file on disk."""
     for file_name, view_name in VIEW_NAMES.items():
+        kind = "TABLE" if file_name in LOADED_INTO_MEMORY else "VIEW"
         con.execute(
-            f"CREATE VIEW {view_name} AS "
+            f"CREATE {kind} {view_name} AS "
             f"SELECT * FROM read_parquet({sql_text(data_dir / file_name)})")
 
 
-def build_meta(con, download_info, sensitive_max_res):
+def build_meta(con, download_info, sensitive_max_res, includes_without_status):
     """Work out the figures /api/meta returns. They only change when the
     data files change, so this runs once when the API starts.
+    includes_without_status is bcsee_includes_species_without_status().
 
     Every species count is distinct specieskey after the merge, which is
     one card row per species."""
@@ -205,19 +286,30 @@ def build_meta(con, download_info, sensitive_max_res):
             "status_source_date": status_source_date,
             "status_pulled_on": status_pulled_on,
             "species_with_status": species_with_status,
+            "includes_species_without_status": includes_without_status,
         },
         "gbif_download": download_info,
     }
 
 
 class ApiData:
-    """The API's open data: the DuckDB connection and the /api/meta
-    figures. Made by open_data() when the API starts."""
+    """The API's open data, made by open_data() when the API starts:
+    connection    the DuckDB connection
+    settings      the Settings it was opened with
+    meta          the /api/meta figures
+    merged_keys   a dict from each old (merged-away) key to its kept key
+    bcsee_includes_without_status
+                  whether a species with no BCSEE row is really not in
+                  BCSEE (see bcsee_includes_species_without_status)"""
 
-    def __init__(self, connection, meta):
-        """Keep the connection and the meta figures."""
+    def __init__(self, connection, settings, meta, merged_keys,
+                 bcsee_includes_without_status):
+        """Keep everything the endpoints need."""
         self.connection = connection
+        self.settings = settings
         self.meta = meta
+        self.merged_keys = merged_keys
+        self.bcsee_includes_without_status = bcsee_includes_without_status
 
     def cursor(self):
         """Return a new cursor for one request. Each request gets its own,
@@ -235,7 +327,10 @@ def open_data(settings):
 
     Every check runs before anything is returned, and if any fails this
     raises DataFilesError listing all the problems, so the API refuses to
-    start rather than serve wrong or partial answers."""
+    start rather than serve wrong or partial answers. A value for the
+    sensitive-species setting stops it first, with SettingsError."""
+    refuse_sensitive_setting(settings)
+
     data_dir = settings.data_dir
     if not data_dir.is_dir():
         raise DataFilesError(
@@ -252,15 +347,19 @@ def open_data(settings):
         if not problems:
             create_views(con, data_dir)
             problems += check_single_values(con)
+            problems += check_keys(con)
 
         if problems:
             raise DataFilesError(
                 f"The API cannot start; problems with the data in {data_dir}:\n  - "
                 + "\n  - ".join(problems))
 
-        meta = build_meta(con, download_info, settings.sensitive_max_res)
+        includes_without_status = bcsee_includes_species_without_status(con)
+        meta = build_meta(con, download_info, settings.sensitive_max_res,
+                          includes_without_status)
+        merged_keys = read_merged_keys(con)
     except BaseException:
         con.close()
         raise
 
-    return ApiData(con, meta)
+    return ApiData(con, settings, meta, merged_keys, includes_without_status)

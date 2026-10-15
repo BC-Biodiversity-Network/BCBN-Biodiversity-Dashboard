@@ -16,13 +16,12 @@ BCBN_API_DATA_DIR
     never committed.
 
 BCBN_SENSITIVE_MAX_RES
-    The switch for coarsening the locations of sensitive species. Empty or
-    unset means off, which is the setting for now. A number from 4 to 7
-    turns it on: the species map for a sensitive species is never finer
-    than that H3 resolution, and the card's extent box is coarsened to
-    match. Which species count as sensitive is not decided yet (waiting on
-    Evan), so this only builds the switch; the endpoints that use it
-    (the species card and the species map) both read it from here.
+    Reserved for coarsening the locations of sensitive species. Which
+    species, how coarse, and what happens to the card's extent box and
+    photo link are not decided yet (waiting on Evan), so nothing is
+    coarsened. It must be left empty: any value stops the API at start-up,
+    so nobody can believe species are protected when they are not.
+    /api/meta reports it (always null for now).
 """
 
 import os
@@ -43,35 +42,34 @@ class SettingsError(ValueError):
 @dataclass(frozen=True)
 class Settings:
     """The API's settings. data_dir is the folder with the four data
-    files; sensitive_max_res is None when coarsening is off, or the finest
-    H3 resolution a sensitive species may be shown at."""
+    files; sensitive_max_res must be None until sensitive-species handling
+    exists (see refuse_sensitive_setting)."""
 
     data_dir: Path = DEFAULT_DATA_DIR
     sensitive_max_res: int | None = None
 
 
-def parse_sensitive_max_res(text):
-    """Turn the text of BCBN_SENSITIVE_MAX_RES into a resolution or None.
+def not_implemented_message(value):
+    """The message given when BCBN_SENSITIVE_MAX_RES has a value."""
+    return (f"BCBN_SENSITIVE_MAX_RES is set to {value!r}, but sensitive-species "
+            "handling is not implemented yet: no species' locations would be "
+            "coarsened. Leave it empty (unset) until the rule is decided.")
 
-    Empty or missing text means off (None). Anything else must be one of
-    the stored resolutions, 4 to 7; any other value stops the API, because
-    a mistyped privacy setting must never quietly mean "off"."""
+
+def parse_sensitive_max_res(text):
+    """Read the text of BCBN_SENSITIVE_MAX_RES. Empty or missing gives None;
+    any other value stops the API (see the top of this file)."""
     if text is None or text.strip() == "":
         return None
+    raise SettingsError(not_implemented_message(text.strip()))
 
-    try:
-        value = int(text.strip())
-    except ValueError:
-        raise SettingsError(
-            f"BCBN_SENSITIVE_MAX_RES must be empty (off) or one of "
-            f"{list(RESOLUTIONS)}, not {text!r}") from None
 
-    if value not in RESOLUTIONS:
-        raise SettingsError(
-            f"BCBN_SENSITIVE_MAX_RES must be empty (off) or one of "
-            f"{list(RESOLUTIONS)}, not {value}")
-
-    return value
+def refuse_sensitive_setting(settings):
+    """Stop the API if settings ask for sensitive-species handling. This
+    also covers Settings made in code, which do not go through
+    parse_sensitive_max_res."""
+    if settings.sensitive_max_res is not None:
+        raise SettingsError(not_implemented_message(settings.sensitive_max_res))
 
 
 def load_settings(environ=None):

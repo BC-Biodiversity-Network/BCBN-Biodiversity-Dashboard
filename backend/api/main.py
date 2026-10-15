@@ -17,14 +17,19 @@ Endpoints so far:
                     the GBIF download to cite, species and record totals,
                     the year range, the map resolutions and the
                     sensitive-species setting.
+    GET /api/species/{key}
+                    one species card (see species.py). An old key that
+                    was merged gives the kept key's card with
+                    merged_from set; an unknown key gives 404.
 """
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from api.db import open_data
 from api.settings import load_settings
+from api.species import build_species_card
 
 
 def create_app(settings=None):
@@ -51,6 +56,19 @@ def create_app(settings=None):
         are worked out once at start-up, since they only change with the
         data files."""
         return request.app.state.data.meta
+
+    @app.get("/api/species/{key}")
+    def species(key: str, request: Request):
+        """Return the species card for key, following a merged key to the
+        key it was merged into. A species with no records in BC has no
+        card, even if BCSEE lists it, so it also gives 404."""
+        card = build_species_card(request.app.state.data, key)
+        if card is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No species with key {key!r} in the BC data: it is not a "
+                       "species key with records in BC, nor a key merged into one.")
+        return card
 
     return app
 

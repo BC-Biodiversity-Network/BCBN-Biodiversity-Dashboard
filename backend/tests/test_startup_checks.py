@@ -1,10 +1,14 @@
 """Tests for the checks db.py runs when the API starts: a missing or wrong
 data file must stop the start-up with a message naming every problem."""
 
+from dataclasses import replace
+
 import pytest
+from fastapi.testclient import TestClient
 
 from api.db import DataFilesError, open_data
-from api.settings import Settings
+from api.main import create_app
+from api.settings import Settings, SettingsError
 from conftest import BCSEE_SQL, CARD_SQL, DOWNLOAD_INFO, write_test_data
 
 
@@ -62,3 +66,39 @@ def test_two_bcsee_dates_are_refused(tmp_path):
     write_test_data(tmp_path, bcsee_sql=bcsee)
     with pytest.raises(DataFilesError, match="exactly one status_source"):
         open_data(Settings(data_dir=tmp_path))
+
+
+def test_merged_key_with_its_own_card_is_refused(tmp_path):
+    """An old key that still has a card would give two answers."""
+    card = (f"SELECT * REPLACE (CASE WHEN specieskey = 'BBBB' THEN ['AAAA'] "
+            f"ELSE merged_keys END AS merged_keys) FROM ({CARD_SQL})")
+    write_test_data(tmp_path, card_sql=card)
+    with pytest.raises(DataFilesError, match="still have a card of their own: AAAA"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+def test_merged_key_on_two_cards_is_refused(tmp_path):
+    """An old key merged into two different cards would give two answers."""
+    card = (f"SELECT * REPLACE (CASE WHEN specieskey = 'CCCC' THEN ['OLD1'] "
+            f"ELSE merged_keys END AS merged_keys) FROM ({CARD_SQL})")
+    write_test_data(tmp_path, card_sql=card)
+    with pytest.raises(DataFilesError, match="more than one card: OLD1"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+def test_repeated_card_key_is_refused(tmp_path):
+    """Two cards with the same key would give two answers."""
+    write_test_data(tmp_path, card_sql=f"{CARD_SQL} UNION ALL SELECT * FROM ({CARD_SQL}) WHERE specieskey = 'AAAA'")
+    with pytest.raises(DataFilesError, match="1 repeated specieskey"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+def test_sensitive_setting_stops_start_up(settings):
+    """Settings made in code with a sensitive resolution are refused too,
+    both by open_data and by the API's own start-up."""
+    asking = replace(settings, sensitive_max_res=5)
+    with pytest.raises(SettingsError, match="not implemented yet"):
+        open_data(asking)
+    with pytest.raises(SettingsError, match="not implemented yet"):
+        with TestClient(create_app(asking)):
+            pass

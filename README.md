@@ -397,7 +397,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search, `hexes.py` builds the species map, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/shared/` | Code used by both the API and the pipeline. `image_credit.py` is the one definition of when a species image can be shown (image URL, link to the original, creator, readable licence), in Python for the API and as SQL for `build_species_image.py`. |
 | `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
@@ -723,6 +723,25 @@ its source; an English name that belongs to one BCSEE entry rather than the
 whole species is marked `bcsee_entry_english_name`. Species BCSEE lists but
 with no records in BC have no card and are never found. A query with fewer
 than 2 letters or digits gives 400.
+
+`GET /api/species/{key}/hexes?res=&year_from=&year_to=` gives the species map
+(`backend/api/hexes.py`): the records of one species per H3 hexagon at `res`
+(required, 4 to 7), from `species_hex.parquet`, counted by specieskey after the
+merge (an old merged key gives the kept key's map with `merged_from`). The
+hexagons come as two lists of the same length, `cells` and `occurrences`.
+With no year filter every record is counted, including those with no year, so
+the counts add up to the card's `record_count` at every resolution. With
+`year_from` and/or `year_to` (inclusive; a missing bound is the first or last
+year in the data), only records with a year in the range are counted;
+`records_no_year_left_out` and `records_outside_years` say how many were left
+out, and `records_shown` + those two = `records_total`. The years allowed are
+those of the whole dataset (`/api/meta` `first_year` to `last_year`), so one
+year control works for every species. `hexagon_count` and `records_shown`
+give the summary. A `res` that is not stored, a year outside the data, or
+`year_from` after `year_to` gives 400; an unknown key, or a species BCSEE
+lists but with no records in BC, gives 404. Colour bins are left to the front
+end. Responses over 1 KB are gzipped for browsers that accept it: the robin's
+map at res 7 is 355 KB, 63 KB gzipped.
 
 ## Running the front end
 

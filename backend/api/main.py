@@ -25,16 +25,35 @@ Endpoints so far:
                     species whose names (or key) match q, best first (see
                     search.py). A query with fewer than 2 letters or
                     digits gives 400.
+    GET /api/species/{key}/hexes?res=&year_from=&year_to=
+                    the species map: records per H3 hexagon at res (4 to
+                    7), optionally for a year range (see hexes.py). A bad
+                    res or year range gives 400, an unknown key 404.
+
+Responses larger than 1 KB are gzipped for clients that accept it (the
+species map of the robin at res 7 is about 355 KB, about 60 KB gzipped).
 """
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.gzip import GZipMiddleware
 
 from api.db import open_data
+from api.hexes import HexesRequestError, species_hexes
 from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
 from api.settings import load_settings
 from api.species import build_species_card
+
+
+def unknown_key(key):
+    """The 404 error for a key that is neither a species card nor a key
+    merged into one. Species BCSEE lists but with no records in BC have no
+    card, so they get it too."""
+    return HTTPException(
+        status_code=404,
+        detail=f"No species with key {key!r} in the BC data: it is not a "
+               "species key with records in BC, nor a key merged into one.")
 
 
 def create_app(settings=None):
@@ -55,6 +74,10 @@ def create_app(settings=None):
             app.state.data.close()
 
     app = FastAPI(title="BCBN species API", lifespan=lifespan)
+    # Gzip any response over 1 KB when the browser accepts it. Level 5
+    # rather than Starlette's default 9: for the robin's map at res 7 it
+    # gives 65 KB instead of 59 KB, in 6 ms instead of about 150 ms.
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
     @app.get("/api/meta")
     def meta(request: Request):
@@ -70,11 +93,22 @@ def create_app(settings=None):
         card, even if BCSEE lists it, so it also gives 404."""
         card = build_species_card(request.app.state.data, key)
         if card is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No species with key {key!r} in the BC data: it is not a "
-                       "species key with records in BC, nor a key merged into one.")
+            raise unknown_key(key)
         return card
+
+    @app.get("/api/species/{key}/hexes")
+    def hexes(key: str, request: Request, res: int = Query(...),
+              year_from: int | None = None, year_to: int | None = None):
+        """Return the species map for key at resolution res, for the years
+        year_from to year_to if either is given (see hexes.py). A merged
+        key gives the kept key's map with merged_from set."""
+        try:
+            result = species_hexes(request.app.state.data, key, res, year_from, year_to)
+        except HexesRequestError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        if result is None:
+            raise unknown_key(key)
+        return result
 
     @app.get("/api/search")
     def species_search(request: Request, q: str = Query(..., max_length=200),

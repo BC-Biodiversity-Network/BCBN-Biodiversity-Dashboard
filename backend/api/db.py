@@ -307,7 +307,9 @@ class ApiData:
     merged_keys   a dict from each old (merged-away) key to its kept key
     bcsee_includes_without_status
                   whether a species with no BCSEE row is really not in
-                  BCSEE (see bcsee_includes_species_without_status)"""
+                  BCSEE (see bcsee_includes_species_without_status)
+    search_keys   every card key and merged key in lower case, to the card
+                  key and merged_from; filled in by search.prepare_search()"""
 
     def __init__(self, connection, settings, meta, merged_keys,
                  bcsee_includes_without_status):
@@ -317,6 +319,7 @@ class ApiData:
         self.meta = meta
         self.merged_keys = merged_keys
         self.bcsee_includes_without_status = bcsee_includes_without_status
+        self.search_keys = {}
 
     def cursor(self):
         """Return a new cursor for one request. Each request gets its own,

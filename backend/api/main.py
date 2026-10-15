@@ -21,13 +21,18 @@ Endpoints so far:
                     one species card (see species.py). An old key that
                     was merged gives the kept key's card with
                     merged_from set; an unknown key gives 404.
+    GET /api/search?q=&limit=
+                    species whose names (or key) match q, best first (see
+                    search.py). A query with fewer than 2 letters or
+                    digits gives 400.
 """
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 
 from api.db import open_data
+from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
 from api.settings import load_settings
 from api.species import build_species_card
 
@@ -44,6 +49,7 @@ def create_app(settings=None):
         message."""
         app.state.data = open_data(settings or load_settings())
         try:
+            prepare_search(app.state.data)
             yield
         finally:
             app.state.data.close()
@@ -69,6 +75,18 @@ def create_app(settings=None):
                 detail=f"No species with key {key!r} in the BC data: it is not a "
                        "species key with records in BC, nor a key merged into one.")
         return card
+
+    @app.get("/api/search")
+    def species_search(request: Request, q: str = Query(..., max_length=200),
+                       limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)):
+        """Return the species matching q, best first: a typed species key,
+        then names equal to q, then names with a word starting with q, then
+        names holding q anywhere; ties go to the species with more
+        records."""
+        try:
+            return search(request.app.state.data, q, limit)
+        except QueryTooShort as error:
+            raise HTTPException(status_code=400, detail=str(error))
 
     return app
 

@@ -1,5 +1,11 @@
 """Tests for GET /api/meta. The client fixture is in conftest.py."""
 
+from fastapi.testclient import TestClient
+
+from api.main import create_app
+from api.settings import Settings
+from conftest import BCSEE_WITH_NO_STATUS_SQL, write_test_data
+
 
 def test_meta_totals(client):
     """Species are counted once per card (distinct specieskey after the
@@ -26,6 +32,7 @@ def test_meta_sources(client):
         "status_source_date": "2026-05-05",
         "status_pulled_on": "2026-09-26",
         # ZZZZ has a status but no card, so it is not counted.
+        "species_in_bcsee": 1,
         "species_with_status": 1,
         # The test BCSEE file, like the real one, leaves out species with
         # no shown status.
@@ -37,3 +44,15 @@ def test_meta_sources(client):
 def test_meta_reports_the_sensitive_setting(client):
     """The sensitive setting is reported, and is always null for now."""
     assert client.get("/api/meta").json()["sensitive_max_res"] is None
+
+
+def test_meta_counts_species_without_a_status_separately(tmp_path):
+    """With a BCSEE file that also lists species without a shown status,
+    species_in_bcsee counts them but species_with_status does not."""
+    write_test_data(tmp_path, bcsee_sql=BCSEE_WITH_NO_STATUS_SQL)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        statuses = client.get("/api/meta").json()["statuses"]
+    # AAAA is Yellow; CCCC is in BCSEE as Not Reviewed only.
+    assert statuses["species_in_bcsee"] == 2
+    assert statuses["species_with_status"] == 1
+    assert statuses["includes_species_without_status"] is True

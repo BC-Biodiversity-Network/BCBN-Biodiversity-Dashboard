@@ -166,3 +166,22 @@ def test_extent_is_the_cards_own(client):
     assert client.get("/api/species/AAAA").json()["extent"] == {
         "min_lat": 49.1, "max_lat": 49.2, "min_lon": -123.2, "max_lon": -123.1,
     }
+
+
+def test_listed_species_keeps_its_no_status_entries(tmp_path):
+    """A Yellow species with a Not Reviewed subspecies stays listed, its
+    statuses hold only Yellow, and each entry keeps its own BCSEE value."""
+    subspecies = """{'status': 'Not Reviewed', 'scientific_label': 'Turdus migratorius caurinus',
+                     'name_source': 'BCSEE', 'common_label': '',
+                     'is_species_level': false, 'is_gbif_synonym': false,
+                     'matched_species_keys': ['AAAA'], 'element_codes': ['ABPBJ2017X']}"""
+    bcsee_sql = (f"SELECT * REPLACE (CASE WHEN gbif_species_key = 'AAAA' "
+                 f"THEN list_append(entries, {subspecies}) ELSE entries END AS entries) "
+                 f"FROM ({BCSEE_WITH_NO_STATUS_SQL})")
+    write_test_data(tmp_path, bcsee_sql=bcsee_sql)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        bcsee = client.get("/api/species/AAAA").json()["bcsee"]
+    assert bcsee["state"] == "listed"
+    assert bcsee["statuses"] == ["Yellow"]
+    assert [e["status"] for e in bcsee["entries"]] == ["Yellow", "Not Reviewed"]
+    assert all(e["status_source_date"] == "2026-05-05" for e in bcsee["entries"])

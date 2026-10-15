@@ -32,9 +32,15 @@ Inputs, all in --data-dir:
                                is false.
 
 Rules:
-  1. Only the statuses Red, Blue, Yellow and Exotic are shown. Every other
-     bc_list value (Not Reviewed, Unknown, Accidental, No Status, Extinct,
-     Other) is dropped, and a GBIF species with nothing left is left out.
+  1. Entries with a shown status (Red, Blue, Yellow, Exotic) and entries
+     that are in BCSEE without one (Not Reviewed, Unknown, Accidental, No
+     Status) are kept, so the site can tell "in BCSEE but no status" from
+     "not in BCSEE". Extinct entries are left out, as the GBIF cleaning
+     leaves out extinct taxa, and so is the one Other entry, until it is
+     decided; the run lists both. A species whose entries are all without
+     a shown status gets a row with an empty statuses list, and every
+     entry keeps its own BCSEE value as its status, so a Not Reviewed
+     subspecies is never mixed up with its species' Yellow.
   2. Each BCSEE entry becomes one status entry:
        status            the bc_list value
        scientific_label  GBIF's name for the entry when GBIF matched the
@@ -69,8 +75,9 @@ Rules:
      common_label) are merged into one, keeping all their element_codes.
      BCSEE lists Tricholoma zelleri twice, for example, both Yellow.
   4. Order: species-level BCSEE entries first, then Red, Blue, Yellow,
-     Exotic. Ties are broken by scientific_label, so every run gives the
-     same order.
+     Exotic, then Not Reviewed, Unknown, Accidental, No Status (any other
+     value last). Ties are broken by scientific_label, so every run gives
+     the same order.
 
 The species key merge (--key-merge, off by default):
   The site shows one species card per kept_key of the merge, and none for
@@ -96,7 +103,8 @@ Output, one row per GBIF species:
         not for the front end), has_multiple (more than one entry shown),
         has_separate_bcsee_species (two or more species-level BCSEE
         entries, so there is no overall BC status), statuses (the distinct
-        statuses in entry order), element_codes (every BCSEE element_code,
+        shown statuses, Red, Blue, Yellow or Exotic, in entry order; empty
+        for a species in BCSEE without one), element_codes (every BCSEE element_code,
         in entry order), entries (the list of status entries; each also
         has matched_species_keys, the key or keys its element_codes were
         matched to before the key merge), matched_species_keys (every such
@@ -117,7 +125,12 @@ Usage:
     python build_bcsee_status_display.py
     python build_bcsee_status_display.py --data-dir ~/Desktop/BCBN/Results
     python build_bcsee_status_display.py --data-dir ~/bcbn/data \
-        --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv
+        --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv --col-release 315557
+
+--col-release is only needed when some GBIF names are not in the saved
+answers yet. Before looking any up, the run checks that GBIF's Catalogue of
+Life checklist (CHECKLIST_KEY) still points at that release, and stops
+without asking or writing anything if it does not.
 """
 
 import argparse
@@ -159,6 +172,14 @@ WAIT = 2
 
 # The statuses shown, in the order they are listed.
 SHOWN_STATUSES = ["Red", "Blue", "Yellow", "Exotic"]
+
+# BCSEE values that mean the species is in BCSEE but has no shown status.
+# Their entries are kept (rule 1) and listed after the shown statuses.
+NO_STATUS_VALUES = ["Not Reviewed", "Unknown", "Accidental", "No Status"]
+
+# Every BCSEE value that is kept, in the order entries are listed. Extinct
+# and Other are not here, so their entries are left out.
+KEPT_VALUES = SHOWN_STATUSES + NO_STATUS_VALUES
 
 # GBIF statuses that mean the matched name is a synonym.
 SYNONYM_STATUSES = {"SYNONYM", "AMBIGUOUS_SYNONYM", "HOMOTYPIC_SYNONYM",
@@ -213,7 +234,8 @@ def read_entries(data, merge_pairs=None):
     read_key_merge, or None for no merge), keeps rows with join_ok or an
     override, adds
     bc_list, english_name and the classification level from
-    bcsee_status.parquet, and keeps only the statuses in SHOWN_STATUSES.
+    bcsee_status.parquet, and keeps only the values in KEPT_VALUES. The
+    entries left out (Extinct, Other) are printed, so they can be checked.
     """
     con = duckdb.connect()
     match = con.execute(
@@ -257,10 +279,17 @@ def read_entries(data, merge_pairs=None):
                          f"for example {list(lost[:5])}. Rerun pull_bcsee.py and "
                          f"match_bcsee_gbif.py so the two files agree.")
     rows = rows.drop(columns="_merge")
-    shown = rows[rows["bc_list"].isin(SHOWN_STATUSES)].reset_index(drop=True)
-    print(f"  {len(used):,} BCSEE entries can be joined, {len(shown):,} have a "
-          f"status that is shown ({', '.join(SHOWN_STATUSES)})")
-    return shown
+    kept = rows[rows["bc_list"].isin(KEPT_VALUES)].reset_index(drop=True)
+    n_shown = int(kept["bc_list"].isin(SHOWN_STATUSES).sum())
+    print(f"  {len(used):,} BCSEE entries can be joined: {n_shown:,} with a shown "
+          f"status ({', '.join(SHOWN_STATUSES)}), {len(kept) - n_shown:,} in BCSEE "
+          f"without one ({', '.join(NO_STATUS_VALUES)})")
+    left_out = rows[~rows["bc_list"].isin(KEPT_VALUES)]
+    print(f"  {len(left_out):,} entries left out (their BCSEE value is not kept):")
+    for _, r in left_out.iterrows():
+        print(f"    {r['element_code']} {r['scientific_name']} ({r['bc_list']}), "
+              f"key {r['gbif_species_key']}")
+    return kept
 
 
 def read_jsonl(path):
@@ -337,14 +366,54 @@ def ask_key(key):
     return answer
 
 
-def add_missing_names(keys, names, key_path):
+def release_problem(expected, current):
+    """
+    Say why GBIF names must not be looked up now, or return None if they may.
+
+    CHECKLIST_KEY is GBIF's pointer to the Catalogue of Life, and GBIF moves
+    it to each new release. Our keys and names come from one release (the
+    one the GBIF download used), so a name looked up after GBIF has moved
+    on could differ from the rest. expected is the ChecklistBank release
+    given with --col-release (None if not given); current is what
+    lookup_col_release() in request_gbif_download.py found GBIF using now
+    (None if that lookup failed).
+    """
+    if expected is None:
+        return ("--col-release was not given; pass the ChecklistBank release the "
+                "rest of the data uses (315557 for the current download)")
+    if current is None:
+        return "could not find out which Catalogue of Life release GBIF uses now"
+    if current["checklistbank_key"] != expected:
+        return (f"GBIF now uses {current['alias']} (ChecklistBank "
+                f"{current['checklistbank_key']}) for the Catalogue of Life, not "
+                f"{expected}, so the names could differ from the rest of the data")
+    return None
+
+
+def add_missing_names(keys, names, key_path, expected_release):
     """
     Look up the keys that are not in the saved answers, add them to names,
     and save GBIF's answers so the next run does not ask again.
+
+    Before asking anything, checks that GBIF still uses expected_release
+    (see release_problem) and stops if not. Nothing is checked or asked
+    when every name is already saved.
     """
     missing = sorted({k for k in keys if k not in names})
     if not missing:
         return
+
+    # Imported here so the GBIF registry is only contacted when a lookup is
+    # really needed. request_gbif_download.py asks GBIF with the same
+    # checklist key (both take it from match_bcsee_gbif.py's value).
+    from request_gbif_download import lookup_col_release
+    problem = release_problem(expected_release,
+                              lookup_col_release("before looking up GBIF names"))
+    if problem:
+        raise ValueError(f"{len(missing):,} GBIF names would be looked up, but {problem}. "
+                         f"Nothing was looked up or written.")
+
+    print(f"  Catalogue of Life release checked: GBIF uses {expected_release}")
     print(f"  looking up {len(missing):,} GBIF keys not in the saved answers")
     with ThreadPoolExecutor(WORKERS) as pool:
         answers = list(pool.map(ask_key, missing))
@@ -449,9 +518,13 @@ def merge_same(entries):
 
 
 def order_key(entry):
-    """Sort key: species-level first, then by status, then by name."""
+    """Sort key: species-level first, then by status in KEPT_VALUES order
+    (shown statuses before the ones without a status), then by name. A
+    status not in KEPT_VALUES sorts after all of them instead of failing."""
+    status = entry["status"]
+    rank = KEPT_VALUES.index(status) if status in KEPT_VALUES else len(KEPT_VALUES)
     return (not entry["is_species_level"],
-            SHOWN_STATUSES.index(entry["status"]),
+            rank,
             entry["scientific_label"],
             entry["common_label"])
 
@@ -473,14 +546,14 @@ def display_text(entries, separator):
     return separator.join(parts)
 
 
-def group_by_species(shown, names):
+def group_by_species(kept, names):
     """
     Gather the status entries of each GBIF species into one row.
 
     Returns the table and the list of odd merges from merge_same().
     """
     rows, odd = [], []
-    for key, group in shown.groupby("gbif_species_key", sort=True):
+    for key, group in kept.groupby("gbif_species_key", sort=True):
         species_name = written_like_bcsee(names[key])
         entries, group_odd = merge_same([describe(r, names) for _, r in group.iterrows()])
         odd += group_odd
@@ -499,7 +572,10 @@ def group_by_species(shown, names):
             "status_display": display_text(entries, "; "),
             "has_multiple": len(entries) > 1,
             "has_separate_bcsee_species": separate,
-            "statuses": list(dict.fromkeys(e["status"] for e in entries)),
+            # Only the shown statuses; entries without one keep their
+            # BCSEE value in their own status field.
+            "statuses": list(dict.fromkeys(
+                e["status"] for e in entries if e["status"] in SHOWN_STATUSES)),
             "element_codes": [c for e in entries for c in e["element_codes"]],
             "entries": entries,
             "matched_species_keys": sorted(set(group["matched_species_key"])),
@@ -529,9 +605,14 @@ def write_outputs(table, data):
                           "matched_species_keys": ";".join(e["matched_species_keys"])}
                          for row in table.itertuples() for i, e in enumerate(row.entries)])
     species = table[["gbif_species_key", "species_name", "status_display",
-                     "has_multiple", "has_separate_bcsee_species", "matched_species_keys",
-                     "status_source", "status_source_date", "status_pulled_on"]].copy()
+                     "has_multiple", "has_separate_bcsee_species", "statuses",
+                     "matched_species_keys", "status_source", "status_source_date",
+                     "status_pulled_on"]].copy()
     species["matched_species_keys"] = species["matched_species_keys"].map(";".join)
+    # statuses comes from group_by_species(), which keeps only the shown
+    # statuses. It must not be rebuilt from the entries here, because the
+    # entries also hold Not Reviewed, Unknown and so on.
+    species["statuses"] = species["statuses"].map(";".join)
 
     tmp = parquet.with_suffix(".parquet.partial")
     con = duckdb.connect()
@@ -540,7 +621,12 @@ def write_outputs(table, data):
     con.execute(f"""
         COPY (
             SELECT s.gbif_species_key, s.species_name, s.status_display, s.has_multiple,
-                   s.has_separate_bcsee_species, st.statuses, e.element_codes, e.entries,
+                   s.has_separate_bcsee_species,
+                   -- An empty text gives [''] when split, so blanks are
+                   -- filtered out to leave an empty list.
+                   list_filter(string_split(coalesce(s.statuses, ''), ';'), x -> x <> '')
+                       AS statuses,
+                   e.element_codes, e.entries,
                    string_split(s.matched_species_keys, ';') AS matched_species_keys,
                    s.status_source, s.status_source_date, s.status_pulled_on
             FROM species s
@@ -560,12 +646,6 @@ def write_outputs(table, data):
                            ORDER BY position)) AS element_codes
                 FROM flat GROUP BY gbif_species_key
             ) e USING (gbif_species_key)
-            JOIN (
-                SELECT gbif_species_key, list(status ORDER BY first_position) AS statuses
-                FROM (SELECT gbif_species_key, status, min(position) AS first_position
-                      FROM flat GROUP BY ALL)
-                GROUP BY gbif_species_key
-            ) st USING (gbif_species_key)
             ORDER BY s.species_name, s.gbif_species_key
         ) TO '{tmp}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
     con.close()
@@ -623,14 +703,15 @@ def read_status_source(data):
     return (str(generated) if generated else ""), (str(pulled) if pulled else "")
 
 
-def report_merge(table, shown):
+def report_merge(table, kept):
     """
     Print what the species key merge did: the entries moved to a kept key,
     the kept keys that gained entries, and every kept key whose entries now
-    have different statuses, listed in full for review.
+    have different statuses (BCSEE values), listed in full for review.
+    kept is the table of BCSEE entries from read_entries().
     """
-    moved = shown[shown["matched_species_key"] != shown["gbif_species_key"]]
-    print(f"  key merge: {len(moved):,} shown entries moved to their kept key")
+    moved = kept[kept["matched_species_key"] != kept["gbif_species_key"]]
+    print(f"  key merge: {len(moved):,} entries moved to their kept key")
     for _, r in moved.iterrows():
         print(f"    {r['element_code']} {r['scientific_name']} ({r['bc_list']}): "
               f"{r['matched_species_key']} -> {r['gbif_species_key']}")
@@ -638,7 +719,9 @@ def report_merge(table, shown):
         lambda row: any(k != row["gbif_species_key"] for k in row["matched_species_keys"]), axis=1)]
     print(f"  key merge: {len(gained):,} kept keys gained entries")
     both = gained[gained["matched_species_keys"].map(len) > 1]
-    different = both[both["statuses"].map(len) > 1]
+    # Compare every entry's own value, not only the shown statuses, so a
+    # Yellow and a Not Reviewed on one kept key are also listed for review.
+    different = both[both["entries"].map(lambda es: len({e["status"] for e in es}) > 1)]
     print(f"  key merge: {len(both):,} kept keys now hold entries from both keys of a pair; "
           f"{len(different):,} of them with different statuses (kept side by side)")
     for row in different.itertuples():
@@ -648,16 +731,23 @@ def report_merge(table, shown):
                   f"(from {', '.join(e['matched_species_keys'])}; {', '.join(e['element_codes'])})")
 
 
-def report(table, shown, odd):
-    """Print counts and anything a person should look at."""
-    print(f"  {len(table):,} GBIF species with a status shown, "
-          f"{int(table['has_multiple'].sum()):,} of them with more than one entry, "
+def report(table, kept, odd):
+    """Print counts and anything a person should look at. kept is the
+    table of BCSEE entries from read_entries()."""
+    with_status = int((table["statuses"].map(len) > 0).sum())
+    print(f"  {len(table):,} GBIF species in BCSEE: {with_status:,} with a shown "
+          f"status, {len(table) - with_status:,} without one; "
+          f"{int(table['has_multiple'].sum()):,} with more than one entry, "
           f"{int(table['has_separate_bcsee_species'].sum()):,} with two or more "
           f"species-level BCSEE entries")
     entries = [e for es in table["entries"] for e in es]
     merged = [e for e in entries if len(e["element_codes"]) > 1]
-    print(f"  {len(entries):,} entries from {len(shown):,} BCSEE entries "
+    print(f"  {len(entries):,} entries from {len(kept):,} BCSEE entries "
           f"({len(merged):,} merged)")
+    mixed = table[(table["statuses"].map(len) > 0) & table["entries"].map(
+        lambda es: any(e["status"] not in SHOWN_STATUSES for e in es))]
+    print(f"  {len(mixed):,} species with a shown status also have entries without "
+          f"one (each keeps its own BCSEE value)")
     for e in merged:
         print(f"    merged {', '.join(e['element_codes'])}: "
               f"{e['status']} {e['scientific_label']}")
@@ -682,6 +772,11 @@ def main():
                         help="species_key_merge.csv from make_species_key_merge.py. When "
                              "given, entries on an old_key move to its kept_key, the key "
                              "with a species card. Off by default.")
+    parser.add_argument("--col-release", type=int, default=None,
+                        help="The ChecklistBank release of the Catalogue of Life the rest "
+                             "of the data uses (315557 for the current download). Needed "
+                             "only when a GBIF name has to be looked up: the run then "
+                             "checks GBIF still uses this release, and stops if not.")
     args = parser.parse_args()
     data = Path(args.data_dir).expanduser()
     raw = data / "bcsee_raw"
@@ -693,29 +788,29 @@ def main():
     merge_pairs = read_key_merge(Path(args.key_merge).expanduser()) if args.key_merge else []
     if args.key_merge:
         print(f"  key merge list: {args.key_merge} ({len(merge_pairs):,} pairs)")
-    shown = read_entries(data, merge_pairs)
+    kept = read_entries(data, merge_pairs)
     status_source_date, status_pulled_on = read_status_source(data)
     key_path = raw / "gbif_key_answers.jsonl"
     names = saved_names(raw / "gbif_match_answers_v2.jsonl", key_path)
     # Names needed: each row's (kept) key, each entry's own GBIF name, and
     # the overridden key of an overridden entry, which describe() uses.
-    needed = set(shown["gbif_species_key"]) | set(
-        shown.loc[~shown["key_changed"], "gbif_usage_key"].dropna()) | set(
-        shown.loc[shown["key_changed"], "matched_species_key"])
-    add_missing_names(needed, names, key_path)
+    needed = set(kept["gbif_species_key"]) | set(
+        kept.loc[~kept["key_changed"], "gbif_usage_key"].dropna()) | set(
+        kept.loc[kept["key_changed"], "matched_species_key"])
+    add_missing_names(needed, names, key_path, args.col_release)
 
     print()
     print("=" * 70)
     print("GROUPING")
     print("=" * 70)
     print()
-    table, odd = group_by_species(shown, names)
+    table, odd = group_by_species(kept, names)
     table["status_source"] = STATUS_SOURCE
     table["status_source_date"] = status_source_date
     table["status_pulled_on"] = status_pulled_on
-    report(table, shown, odd)
+    report(table, kept, odd)
     if args.key_merge:
-        report_merge(table, shown)
+        report_merge(table, kept)
     print(f"  source label: {STATUS_SOURCE}, made by the province {status_source_date or '?'}, "
           f"pulled {status_pulled_on or '?'}")
 

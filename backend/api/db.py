@@ -263,11 +263,17 @@ def build_meta(con, download_info, sensitive_max_res, includes_without_status):
         """SELECT DISTINCT status_source, status_source_date, status_pulled_on
            FROM bcsee_status""").fetchone()
 
-    # Only statuses that reach a species card count here; BCSEE species
-    # with no records in BC have no card and are not shown.
-    species_with_status = con.execute(
-        """SELECT count(*) FROM species_card AS c
-           JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey""").fetchone()[0]
+    # Only species with a card count here; BCSEE species with no records in
+    # BC have no card and are not shown. species_in_bcsee counts every card
+    # species with a BCSEE row; species_with_status only those with a shown
+    # status (Red, Blue, Yellow or Exotic), not Not Reviewed, Unknown, ...
+    shown = ", ".join(sql_text(status) for status in SHOWN_STATUSES)
+    species_in_bcsee, species_with_status = con.execute(
+        f"""SELECT count(*),
+                   count(*) FILTER (WHERE list_has_any(
+                       coalesce(b.statuses, []::VARCHAR[]), [{shown}]))
+            FROM species_card AS c
+            JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey""").fetchone()
 
     return {
         "species_count": species_count,
@@ -285,6 +291,7 @@ def build_meta(con, download_info, sensitive_max_res, includes_without_status):
             "status_source": status_source,
             "status_source_date": status_source_date,
             "status_pulled_on": status_pulled_on,
+            "species_in_bcsee": species_in_bcsee,
             "species_with_status": species_with_status,
             "includes_species_without_status": includes_without_status,
         },

@@ -94,7 +94,8 @@ def write_inputs(folder):
     })
     con = duckdb.connect()
     for name, frame in (("bcsee_gbif_match", match), ("bcsee_status", status)):
-        con.register("frame", frame)
+        # Plain Python text, which DuckDB 0.10.3 (the server's) can read.
+        con.register("frame", bcsee.plain_text_columns(frame))
         con.execute(f"COPY frame TO '{folder / name}.parquet' (FORMAT PARQUET)")
         con.unregister("frame")
     con.close()

@@ -125,14 +125,18 @@ metadata of every dataset.
 - `bc_datasets.parquet`: one row per dataset in the archive: title,
   citation, license and DOI from its metadata, publisher, and how many of its
   records are in `bc_occurrence` (0 if all were filtered out).
-- `bc_species_image.parquet`: one image per species, a StillImage from the
-  most recent record with the best licence. Species card images can have
-  any of these licences, preferred in this order: CC0 or the Public Domain
-  Mark, CC BY, CC BY-SA, CC BY-ND, CC BY-NC, CC BY-NC-SA, CC BY-NC-ND (any
-  version, or none stated), or Beaty Museum images provided without a
-  licence. Any other image, including one whose licence is filled in but
-  can't be read, is not used. `license_rank` and `license_source` say which
-  case applies.
+- `bc_species_image.parquet`: one image per species, picked only among the
+  StillImages that pass the same credit check as the API: an image URL, a
+  link to the original, a creator and a readable licence
+  (`backend/shared/image_credit.py`). Among those, the best licence wins,
+  then the most recent record. The licences, preferred in this order: CC0
+  or the Public Domain Mark, CC BY, CC BY-SA, CC BY-ND, CC BY-NC, CC
+  BY-NC-SA, CC BY-NC-ND (any version, or none stated). Beaty Museum images
+  provided without a licence keep their place in the ranking (rank 8), but
+  fail the check, so none is picked for now. `license_rank` and
+  `license_source` say which case applies. The selection is in
+  `build_species_image.py`, which this script calls, and which can also
+  redo it on its own from the existing tables (see below).
 - `download_info.json`: the download key, DOI, date and query. The DOI comes
   from the GBIF download API when the archive doesn't include it.
 
@@ -165,10 +169,30 @@ The steps run in this order:
 
 ```
 request_gbif_download.py -> build_dwca_tables.py
+    (-> build_species_image.py, only to pick the images again without the zip)
     -> fetch_col_names.py (once per Catalogue of Life release)
     -> make_species_key_merge.py
     -> build_species_tables.py --key-merge --col-names
     -> build_hex_aggregates.py
+```
+
+**`backend/pipeline/gbif/build_species_image.py` -> `bc_species_image.parquet`**
+Picks the species images again from the tables `build_dwca_tables.py` already
+wrote (`bc_occurrence`, `bc_media`, `bc_datasets`), with the same code, so the
+50 GB download does not have to be unpacked again. The new table is written as
+`bc_species_image.tmp.parquet` and only replaces the real one when every check
+passes: one row per species, every picked image passes the credit check, every
+species with a passing StillImage has one, and no species whose current image
+passes loses it or gets a different one. It prints how many species gained,
+lost or changed their image and, with `--key-merge`, how many species cards
+will have an image. Rerun `build_species_tables.py` afterwards so the cards
+use the new images.
+
+```
+cd backend
+python pipeline/gbif/build_species_image.py --tables ~/bcbn/data/gbif_tables \
+    --key-merge ~/bcbn/data/gbif_tables/species_key_merge.csv \
+    --memory-limit 8GB --threads 8 --temp-dir ~/tmp/duckdb_species_image
 ```
 
 The key merge is applied in one place only, `build_species_tables.py`, and
@@ -369,12 +393,13 @@ running them from anywhere else quietly writes to the wrong place.
 | Folder | Contents |
 | --- | --- |
 | `backend/pipeline/` | The production pipeline, one folder per data source (below). These are what runs to produce the dashboard's data. Run them from `backend/`, e.g. `python pipeline/gbif/build_dwca_tables.py`. A script that needs another folder's code adds that folder to its import path itself. |
-| `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above). `make_species_key_merge.py` decides which duplicate species keys to merge, `build_species_tables.py` builds `species_hex` and the species cards with that merge applied, and `build_hex_aggregates.py` builds the map's hexagon tables from `species_hex`. `build_species_summary.py` (Layer 3) builds the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
+| `backend/pipeline/gbif/` | GBIF occurrence data. `request_gbif_download.py` requests a GBIF Darwin Core Archive download inside `bc_boundary_gbif.wkt` and downloads the zip. `build_dwca_tables.py` builds the occurrence, media, dataset and species image tables from that download, using the filter in `build_bc_clean.py` (described above); the species image is picked by `build_species_image.py`, which it calls and which can also run on its own from those tables. `make_species_key_merge.py` decides which duplicate species keys to merge, `build_species_tables.py` builds `species_hex` and the species cards with that merge applied, and `build_hex_aggregates.py` builds the map's hexagon tables from `species_hex`. `build_species_summary.py` (Layer 3) builds the species summary from `bc_occurrence.parquet`. `build_bc_clean.py` (Layer 2) still holds the filter and the boundary code that `build_dwca_tables.py` and `make_gbif_boundary.py` import. `make_gbif_boundary.py` writes BC's boundary as `bc_boundary_gbif.wkt`, a small polygon (266 points) to paste into a GBIF download filter: it takes the same ABMS boundary as `build_bc_clean.py`, pushes it out 2 km and simplifies it, so it still covers all of BC (about 1.2% extra area along the edges, which `build_bc_clean.py` clips away), and writes the points counter-clockwise. `request_gbif_download.py` imports its checklist key from `../bcsee/match_bcsee_gbif.py`. |
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
 | `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
-| `backend/tests/` | Tests for the API. `conftest.py` writes a tiny copy of the data files, so the tests never need the real data. |
+| `backend/shared/` | Code used by both the API and the pipeline. `image_credit.py` is the one definition of when a species image can be shown (image URL, link to the original, creator, readable licence), in Python for the API and as SQL for `build_species_image.py`. |
+| `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
@@ -671,8 +696,9 @@ including a species BCSEE lists but with no records in BC, gives 404.
   only) separately.
 - An image is returned only with its URL, a link to the original, a
   creator and a readable licence (code, label and link); otherwise `image`
-  is null. So Beaty Museum images without a licence are picked by
-  `bc_species_image` but never shown. Images are always shown unchanged
+  is null. The check is `backend/shared/image_credit.py`, the same one
+  `build_species_image.py` uses to pick the image, so a picked image is
+  always shown. Images are always shown unchanged
   apart from resizing (iNaturalist photos use the medium size), with
   creator, licence and a link to the original. ND images are flagged with
   `no_derivatives` and are never cropped.

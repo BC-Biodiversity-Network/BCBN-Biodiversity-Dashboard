@@ -40,8 +40,9 @@ required.
 
 Inputs, in --tables (from build_dwca_tables.py): bc_media.parquet and
 bc_occurrence.parquet. The licence ranking and the list of Beaty datasets
-are imported from pipeline/gbif/build_dwca_tables.py, so the counts follow
-the pipeline's own rules.
+are imported from pipeline/gbif/build_species_image.py, and the readable
+licences from shared/image_credit.py, so the counts follow the pipeline's
+and the API's own rules.
 
 Plain SQL only, so it runs on the server's DuckDB 0.10.3. Run on the
 server (bc_media for the full download is only there), from backend/:
@@ -58,12 +59,12 @@ from pathlib import Path
 import duckdb
 
 # The pipeline's GBIF scripts are not a package; add their folder to the
-# path the way the pipeline scripts themselves do.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pipeline" / "gbif"))
-from build_dwca_tables import BEATY_DATASET_KEYS, SPECIES_IMAGE_LICENSES_SQL  # noqa: E402
-
-# The licence codes the API can read (describe_licence in api/images.py).
-READABLE_LICENCE = "CC0_1_0|PDM_1_0|CC_BY(_NC)?(_SA)?(_ND)?(_[0-9]+_[0-9]+)?"
+# path the way the pipeline scripts themselves do, and backend/ for shared/.
+BACKEND = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(BACKEND / "pipeline" / "gbif"))
+sys.path.insert(0, str(BACKEND))
+from build_species_image import BEATY_DATASET_KEYS, SPECIES_IMAGE_LICENSES_SQL  # noqa: E402
+from shared.image_credit import READABLE_LICENCE_PATTERN as READABLE_LICENCE  # noqa: E402
 
 # Where an image comes from. BOLD and Mushroom Observer are told apart by
 # the image's web address, Beaty by its dataset, museums and herbaria by the

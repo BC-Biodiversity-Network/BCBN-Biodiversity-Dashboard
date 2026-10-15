@@ -7,12 +7,15 @@ or into nothing when the image cannot be credited properly.
 The rule: an image is only shown with its creator, its licence and a link
 to the original. So an image is returned only when the card has all four
 of: the image URL, the link to the original, a creator, and a licence
-code that can be read. Anything less and the card has no image. How
-bc_species_image picks the image is not changed here; picking an image
-that has full credit is a later pipeline step.
+code that can be read. Anything less and the card has no image. The rule
+itself lives in shared/image_credit.py, which the pipeline also uses to
+pick the species image, so the pipeline only picks images this module
+will show.
 """
 
 import re
+
+from shared.image_credit import credit, has_text
 
 # iNaturalist serves every photo in several sizes, and the "original" one
 # the records point to can be several megabytes. The card uses "medium"
@@ -22,15 +25,11 @@ INATURALIST_ORIGINAL = re.compile(
     r"^(https://(?:inaturalist-open-data\.s3\.amazonaws\.com|static\.inaturalist\.org)"
     r"/photos/\d+/)original(\.[A-Za-z]+)$")
 
-# The licence codes build_dwca_tables.py writes: CC0_1_0, PDM_1_0, and
-# CC_BY with any of NC, SA, ND, with or without a version (CC_BY_SA_4_0,
-# CC_BY_SA).
-CC_LICENCE_CODE = re.compile(r"^CC_BY((?:_NC)?(?:_SA)?(?:_ND)?)(?:_(\d+)_(\d+))?$")
-
-
-def has_text(value):
-    """True if value is a string with something other than spaces in it."""
-    return isinstance(value, str) and value.strip() != ""
+# The CC BY codes build_dwca_tables.py writes: CC_BY with any of NC, SA,
+# ND, with or without a version (CC_BY_SA_4_0, CC_BY_SA). This splits a
+# code into its parts for the label; which codes count as readable is
+# decided by shared/image_credit.py, and a test checks the two agree.
+CC_LICENCE_CODE = re.compile(r"^CC_BY((?:_NC)?(?:_SA)?(?:_ND)?)(?:_([0-9]+)_([0-9]+))?$")
 
 
 def display_url(identifier):
@@ -80,25 +79,24 @@ def card_image(card):
     original), creator, rightsholder, the licence code, label and link, and
     no_derivatives, which is true for ND licences so the page knows never
     to crop that image."""
-    identifier = card.get("image_identifier")
-    page_url = card.get("image_references")
-    creator = card.get("image_creator")
-    licence = describe_licence(card.get("image_license_code"))
-
-    if not (has_text(identifier) and has_text(page_url) and has_text(creator)
-            and licence is not None):
+    # The card stores the image columns with an image_ prefix; the shared
+    # rule uses the bc_media names.
+    image = {column: card.get(f"image_{column}") for column in
+             ("identifier", "references", "creator", "rightsholder", "license_code")}
+    shown = credit(image)
+    if shown is None:
         return None
 
-    licence_label, licence_url = licence
-    rightsholder = card.get("image_rightsholder")
+    licence_label, licence_url = describe_licence(shown["license_code"])
+    rightsholder = image["rightsholder"]
 
     return {
-        "url": display_url(identifier.strip()),
-        "page_url": page_url.strip(),
-        "creator": creator.strip(),
+        "url": display_url(shown["url"]),
+        "page_url": shown["link"],
+        "creator": shown["creator"],
         "rightsholder": rightsholder.strip() if has_text(rightsholder) else None,
-        "license_code": card["image_license_code"],
+        "license_code": shown["license_code"],
         "license_label": licence_label,
         "license_url": licence_url,
-        "no_derivatives": "_ND" in card["image_license_code"],
+        "no_derivatives": "_ND" in shown["license_code"],
     }

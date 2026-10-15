@@ -56,7 +56,7 @@ used at the end.
 Works on DuckDB 0.10.3 (the cluster's version) and newer.
 
 Run:
-    python build_dwca_tables.py --zip ~/bcbn/data/0009659-260928105237408.zip --outdir ~/bcbn/data/dwca --workdir ~/bcbn/data/tmp_dwca --memory-limit 8GB
+    python build_dwca_tables.py --zip ~/bcbn/data/gbif_dwca/0009771-260928105237408.zip --outdir ~/bcbn/data/gbif_tables --workdir ~/bcbn/data/tmp_dwca --memory-limit 8GB
 """
 
 import argparse

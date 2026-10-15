@@ -152,7 +152,7 @@ For a full BC download (about 43M records, `occurrence.txt` about 50 GB):
 
 ```
 cd backend
-python pipeline/gbif/build_dwca_tables.py --zip ~/bcbn/data/<download key>.zip --outdir ~/bcbn/data/dwca \
+python pipeline/gbif/build_dwca_tables.py --zip ~/bcbn/data/gbif_dwca/0009771-260928105237408.zip --outdir ~/bcbn/data/gbif_tables \
     --workdir ~/bcbn/data/tmp_dwca --memory-limit 8GB --threads 8
 ```
 

@@ -73,10 +73,12 @@ How species_hex is meant to be read:
   - The overview map with a year filter groups the same way, and counts
     distinct specieskey for the number of species.
   - Records with no year have year = NULL. Any year filter leaves them out.
-  - Every record is in it. Records with no specieskey (identified only to
-    genus or above) have specieskey = NULL, so the overview map counts
-    every record. count(DISTINCT specieskey) ignores NULL, so the species
-    counts are not affected, and neither is a query for one species.
+  - Every record is in it. build_bc_clean.py keeps only records with a
+    species name, so almost every record has a specieskey (1 record in the
+    October 2026 build does not). A record without one has specieskey =
+    NULL and still counts in the overview map's records.
+    count(DISTINCT specieskey) ignores NULL, so the species counts are not
+    affected, and neither is a query for one species.
   - build_hex_aggregates.py builds the overview map (bc_hex_r4 to r7) from
     this file, so every species count on the site is distinct specieskey
     after the merge, and the merge happens in this script only.
@@ -262,8 +264,9 @@ def register_records(con, occurrence_path, merge_pairs):
 
 def build_species_hex(con, out_path):
     """Write species_hex.parquet: records per species, year and hexagon,
-    sorted by specieskey and then year. Records with no specieskey are kept,
-    with specieskey = NULL, at the end of the file."""
+    sorted by specieskey and then year. Records with no specieskey (rare,
+    since build_bc_clean.py keeps only records with a species name) are
+    kept, with specieskey = NULL, at the end of the file."""
     cells = ", ".join(f"h3_r{r}" for r in RESOLUTIONS)
     con.execute(
         f"""

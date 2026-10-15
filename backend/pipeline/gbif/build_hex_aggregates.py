@@ -28,9 +28,9 @@ analysis work, where the types and the compression are worth having.
 Schema of every output, so the browser can use one loader for all of them:
     h3_cell           VARCHAR  15-char H3 index string (what deck.gl's
                                H3HexagonLayer takes as `hexagon`)
-    occurrences       BIGINT   records in that cell, including records with
-                               no specieskey (identified only to genus or
-                               above)
+    occurrences       BIGINT   records in that cell, including the rare
+                               record with no specieskey (build_bc_clean.py
+                               keeps only records with a species name)
     distinct_species  INTEGER  distinct specieskey in that cell, after the
                                key merge
 

@@ -31,6 +31,16 @@ Inputs, all in --data-dir:
                                in the file, and is used even if its join_ok
                                is false.
 
+Input next to this script (tracked in git, not in --data-dir):
+    bcsee_extra_keys.csv       hand-checked rows saying "this BCSEE entry
+                               also applies to this other key", with columns
+                               element_code, extra_gbif_species_key,
+                               bcsee_scientific_name,
+                               extra_gbif_scientific_name, reason,
+                               checked_by and checked_date. Required; it may
+                               hold only the header. See "Extra keys" below.
+                               --extra-keys reads another file instead.
+
 Rules:
   1. Entries with a shown status (Red, Blue, Yellow, Exotic) and entries
      that are in BCSEE without one (Not Reviewed, Unknown, Accidental, No
@@ -103,6 +113,24 @@ The species key merge (--key-merge, off by default):
   not checked yet: rerun match_bcsee_gbif.py and make_species_key_merge.py
   together whenever the GBIF download moves to a new release.
 
+Extra keys (bcsee_extra_keys.csv):
+  GBIF matches each BCSEE entry to one key. Sometimes the same species also
+  has a second key under another name, with most of the records on it: BCSEE
+  calls Cooper's Hawk Accipiter cooperii, which is matched to VP2T6, while
+  most records are on Astur cooperii, CVW5J. Each row of bcsee_extra_keys.csv
+  says that one BCSEE entry also applies to one more key, after a person has
+  checked it. The keys are never merged: the entry stays on its own key and
+  a copy is added on the extra key, after the overrides and the key merge.
+  The copy keeps the entry's own name and matched_species_keys, and has
+  also_applied_from_key set to the key it was copied from (empty on every
+  other entry), so it can always be told apart. Before anything is applied,
+  the run stops with every problem listed if a row's element_code is not a
+  BCSEE entry that is shown, its bcsee_scientific_name is not BCSEE's name
+  for it, the entry is not at species level, the extra key is the entry's
+  own key or an old key of the merge, the extra key already has a BCSEE
+  entry (or two rows point to it), or GBIF's name for the extra key is not
+  extra_gbif_scientific_name. Every row applied is printed with both names.
+
 Output, one row per GBIF species:
     bcsee_status_by_gbif_species.parquet
         gbif_species_key, species_name (GBIF's accepted name, written like
@@ -114,7 +142,8 @@ Output, one row per GBIF species:
         for a species in BCSEE without one), element_codes (every BCSEE element_code,
         in entry order), entries (the list of status entries; each also
         has matched_species_keys, the key or keys its element_codes were
-        matched to before the key merge), matched_species_keys (every such
+        matched to before the key merge, and also_applied_from_key, see
+        "Extra keys"), matched_species_keys (every such
         key on the row), and where the statuses come from, for the front end
         to show next to every status: status_source ("BC Species and
         Ecosystems Explorer (BCSEE)"), status_source_date (the date the
@@ -198,6 +227,11 @@ RANK_MARKERS = {"SUBSPECIES": "ssp.", "VARIETY": "var.", "FORM": "f."}
 MARKED_KINGDOMS = {"Plantae", "Fungi"}
 
 OUTPUT_NAME = "bcsee_status_by_gbif_species"
+
+# The hand-checked extra keys, kept in git next to this script.
+EXTRA_KEYS_FILE = Path(__file__).resolve().parent / "bcsee_extra_keys.csv"
+EXTRA_KEY_COLUMNS = ["element_code", "extra_gbif_species_key", "bcsee_scientific_name",
+                     "extra_gbif_scientific_name", "reason", "checked_by", "checked_date"]
 
 
 def read_overrides(path, match):
@@ -297,6 +331,134 @@ def read_entries(data, merge_pairs=None):
         print(f"    {r['element_code']} {r['scientific_name']} ({r['bc_list']}), "
               f"key {r['gbif_species_key']}")
     return kept
+
+
+def read_extra_keys(path):
+    """
+    Read bcsee_extra_keys.csv (see "Extra keys" at the top).
+
+    Returns the rows as a table of text. Stops with an error if the file is
+    missing, lacks a column, leaves a value blank or lists the same
+    element_code and key twice, rather than guessing what was meant. A file
+    with only the header gives an empty table.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found. It is kept in git next to this "
+                                f"script; it may hold only the header line.")
+    extra = pd.read_csv(path, dtype=str, keep_default_na=False)
+    missing = [c for c in EXTRA_KEY_COLUMNS if c not in extra.columns]
+    if missing:
+        raise ValueError(f"{path.name} is missing the column(s) {missing}")
+    extra = extra[EXTRA_KEY_COLUMNS].apply(lambda col: col.str.strip())
+    problems = []
+    blank = extra[(extra == "").any(axis=1)]
+    for _, r in blank.iterrows():
+        empty = [c for c in EXTRA_KEY_COLUMNS if r[c] == ""]
+        problems.append(f"row for {r['element_code'] or '?'} has no {', '.join(empty)}")
+    twice = extra[extra.duplicated(["element_code", "extra_gbif_species_key"])]
+    for _, r in twice.iterrows():
+        problems.append(f"{r['element_code']} -> {r['extra_gbif_species_key']} is listed twice")
+    if problems:
+        raise ValueError(f"{path.name}: " + "; ".join(problems))
+    print(f"  {len(extra):,} extra keys read from {path.name}")
+    return extra
+
+
+def check_extra_keys(extra, kept, bcsee_names, old_keys):
+    """
+    Check the rows of bcsee_extra_keys.csv against the BCSEE entries, before
+    any GBIF name is looked up.
+
+    kept is the table from read_entries(), after the overrides and the key
+    merge; bcsee_names maps every element_code in bcsee_status.parquet to
+    BCSEE's scientific name; old_keys are the merged-away keys. Stops with
+    every problem listed (see "Extra keys" at the top for the rules).
+    """
+    problems = []
+    entries = kept.set_index("element_code")
+    has_entry = set(kept["gbif_species_key"])
+    targets = extra["extra_gbif_species_key"]
+    for _, r in extra.iterrows():
+        code, key = r["element_code"], r["extra_gbif_species_key"]
+        if code not in bcsee_names:
+            problems.append(f"{code} is not in bcsee_status.parquet")
+            continue
+        if bcsee_names[code] != r["bcsee_scientific_name"]:
+            problems.append(f"{code} is {bcsee_names[code]} in BCSEE, "
+                            f"not {r['bcsee_scientific_name']}")
+        if code not in entries.index:
+            problems.append(f"{code} is not shown on any key (not joinable, or its "
+                            f"BCSEE value is not kept)")
+            continue
+        own = entries.loc[code]
+        if own["classification_level"] != "Species":
+            problems.append(f"{code} is a {own['classification_level']} entry; only "
+                            f"species-level entries can be added to another key")
+        if key == own["gbif_species_key"]:
+            problems.append(f"{code} is already on {key}")
+        elif key in has_entry:
+            problems.append(f"{key} already has a BCSEE entry of its own; adding "
+                            f"{code} could clash with it, so it was not added")
+        if key in old_keys:
+            problems.append(f"{key} is an old key of the species key merge and has "
+                            f"no card; name its kept key instead")
+        if (targets == key).sum() > 1:
+            problems.append(f"{key} is the extra key of more than one row")
+    if problems:
+        raise ValueError("bcsee_extra_keys.csv: " + "; ".join(dict.fromkeys(problems)))
+
+
+def check_extra_key_names(extra, names):
+    """
+    Check that GBIF's name for every extra key is the name written in the
+    row (extra_gbif_scientific_name) and is a species, so a mistyped key
+    that happens to exist is caught. names is the saved_names() mapping,
+    with any missing names already looked up.
+    """
+    problems = []
+    for _, r in extra.iterrows():
+        key = r["extra_gbif_species_key"]
+        name = names.get(key)
+        if name is None:
+            problems.append(f"GBIF has no name for {key}")
+        elif name.get("canonicalName") != r["extra_gbif_scientific_name"]:
+            problems.append(f"{key} is {name.get('canonicalName')} in GBIF, "
+                            f"not {r['extra_gbif_scientific_name']}")
+        elif name.get("rank") != "SPECIES":
+            problems.append(f"{key} is a {name.get('rank')}, not a species")
+    if problems:
+        raise ValueError("bcsee_extra_keys.csv: " + "; ".join(problems))
+
+
+def apply_extra_keys(kept, extra, names):
+    """
+    Add a copy of each listed BCSEE entry on its extra key, and return the
+    new table. The entry itself stays on its own key: nothing is moved.
+    also_applied_from_key is the key copied from on a copy, and empty on
+    every other row. Prints every row applied, with both names.
+    """
+    kept = kept.copy()
+    kept["also_applied_from_key"] = ""
+    copies = []
+    for _, r in extra.iterrows():
+        own = kept[(kept["element_code"] == r["element_code"])
+                   & (kept["also_applied_from_key"] == "")].iloc[0]
+        copy = own.copy()
+        copy["also_applied_from_key"] = own["gbif_species_key"]
+        copy["gbif_species_key"] = r["extra_gbif_species_key"]
+        copies.append(copy)
+        print(f"  extra key: {own['element_code']} {own['scientific_name']} "
+              f"({own['bc_list']}) on {own['gbif_species_key']} "
+              f"{names[own['gbif_species_key']]['canonicalName']}, also on "
+              f"{r['extra_gbif_species_key']} {r['extra_gbif_scientific_name']}")
+    out = pd.concat([kept, pd.DataFrame(copies)], ignore_index=True) if copies else kept
+    # The entry must still be on its own key: the list adds, it never moves.
+    for _, r in extra.iterrows():
+        left = out[(out["element_code"] == r["element_code"])
+                   & (out["also_applied_from_key"] == "")]
+        if len(left) != 1:
+            raise ValueError(f"{r['element_code']} is no longer on its own key")
+    return out
 
 
 def read_jsonl(path):
@@ -490,6 +652,8 @@ def describe(row, names):
         "is_species_level": row["classification_level"] == "Species",
         "is_gbif_synonym": bool(name) and name.get("status") in SYNONYM_STATUSES,
         "matched_species_keys": [row["matched_species_key"]],
+        # The key this entry was copied from by bcsee_extra_keys.csv, or empty.
+        "also_applied_from_key": row.get("also_applied_from_key", "") or "",
         "element_code": row["element_code"],
     }
 
@@ -650,6 +814,7 @@ def write_outputs(table, data):
                            is_species_level := is_species_level,
                            is_gbif_synonym := is_gbif_synonym,
                            matched_species_keys := string_split(matched_species_keys, ';'),
+                           also_applied_from_key := also_applied_from_key,
                            element_codes := string_split(element_codes, ';'))
                            ORDER BY position) AS entries,
                        flatten(list(string_split(element_codes, ';')
@@ -693,6 +858,16 @@ def plain_text_columns(frame):
     return out
 
 
+def read_bcsee_names(data):
+    """Return BCSEE's scientific name for every element_code in
+    bcsee_status.parquet, for checking bcsee_extra_keys.csv."""
+    con = duckdb.connect()
+    rows = con.execute(
+        f"SELECT element_code, scientific_name FROM '{data / 'bcsee_status.parquet'}'").fetchall()
+    con.close()
+    return dict(rows)
+
+
 def read_status_source(data):
     """
     Return (status_source_date, status_pulled_on) from bcsee_status.parquet:
@@ -720,13 +895,18 @@ def report_merge(table, kept):
     have different statuses (BCSEE values), listed in full for review.
     kept is the table of BCSEE entries from read_entries().
     """
-    moved = kept[kept["matched_species_key"] != kept["gbif_species_key"]]
+    # Copies from bcsee_extra_keys.csv sit on another key too, but they were
+    # not moved by the merge, so they are left out here.
+    own = kept[kept["also_applied_from_key"] == ""] if "also_applied_from_key" in kept else kept
+    moved = own[own["matched_species_key"] != own["gbif_species_key"]]
     print(f"  key merge: {len(moved):,} entries moved to their kept key")
     for _, r in moved.iterrows():
         print(f"    {r['element_code']} {r['scientific_name']} ({r['bc_list']}): "
               f"{r['matched_species_key']} -> {r['gbif_species_key']}")
     gained = table[table.apply(
-        lambda row: any(k != row["gbif_species_key"] for k in row["matched_species_keys"]), axis=1)]
+        lambda row: any(k != row["gbif_species_key"]
+                        for e in row["entries"] if not e["also_applied_from_key"]
+                        for k in e["matched_species_keys"]), axis=1)]
     print(f"  key merge: {len(gained):,} kept keys gained entries")
     both = gained[gained["matched_species_keys"].map(len) > 1]
     # Compare every entry's own value, not only the shown statuses, so a
@@ -787,6 +967,10 @@ def main():
                              "of the data uses (315557 for the current download). Needed "
                              "only when a GBIF name has to be looked up: the run then "
                              "checks GBIF still uses this release, and stops if not.")
+    parser.add_argument("--extra-keys", default=str(EXTRA_KEYS_FILE),
+                        help="The hand-checked list of BCSEE entries that also apply to "
+                             "another key. Defaults to bcsee_extra_keys.csv next to "
+                             "this script.")
     args = parser.parse_args()
     data = Path(args.data_dir).expanduser()
     raw = data / "bcsee_raw"
@@ -799,6 +983,8 @@ def main():
     if args.key_merge:
         print(f"  key merge list: {args.key_merge} ({len(merge_pairs):,} pairs)")
     kept = read_entries(data, merge_pairs)
+    extra = read_extra_keys(Path(args.extra_keys).expanduser())
+    check_extra_keys(extra, kept, read_bcsee_names(data), {old for old, _, _ in merge_pairs})
     status_source_date, status_pulled_on = read_status_source(data)
     key_path = raw / "gbif_key_answers.jsonl"
     names = saved_names(raw / "gbif_match_answers_v2.jsonl", key_path)
@@ -806,8 +992,11 @@ def main():
     # the overridden key of an overridden entry, which describe() uses.
     needed = set(kept["gbif_species_key"]) | set(
         kept.loc[~kept["key_changed"], "gbif_usage_key"].dropna()) | set(
-        kept.loc[kept["key_changed"], "matched_species_key"])
+        kept.loc[kept["key_changed"], "matched_species_key"]) | set(
+        extra["extra_gbif_species_key"])
     add_missing_names(needed, names, key_path, args.col_release)
+    check_extra_key_names(extra, names)
+    kept = apply_extra_keys(kept, extra, names)
 
     print()
     print("=" * 70)

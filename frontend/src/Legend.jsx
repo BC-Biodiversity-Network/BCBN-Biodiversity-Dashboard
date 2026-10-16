@@ -10,8 +10,11 @@ import { binColours, legendEdgeLabels } from './colours'
 // index.css), so a swatch looks like a hexagon of that bin on bare land.
 //
 // scheme is one of COLOUR_SCHEMES; caption can hold markup (the species name
-// in italics); summary and status are short lines of text, or null.
-export default function Legend({ scheme, caption, summary = null, status = null, statusIsError = false }) {
+// in italics); summary, leftOut (how many records with no date a year range
+// left out) and status are short lines of text, or null.
+export default function Legend({
+  scheme, caption, summary = null, leftOut = null, status = null, statusIsError = false,
+}) {
   return (
     <div className="legend">
       <div className="legend-caption">{caption}</div>
@@ -35,6 +38,7 @@ export default function Legend({ scheme, caption, summary = null, status = null,
       </div>
 
       {summary && <div className="legend-summary">{summary}</div>}
+      {leftOut && <div className="legend-left-out">{leftOut}</div>}
       {status && (
         <div className={statusIsError ? 'legend-status error' : 'legend-status'} role="status">
           {status}

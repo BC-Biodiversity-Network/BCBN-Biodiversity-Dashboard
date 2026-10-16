@@ -120,6 +120,65 @@ body {
   color: #fff;
 }
 
+/* The year control, under the scale toggle: two year boxes and an "All
+   years" button on one line, with the note on recent years underneath. */
+.year-filter {
+  max-width: 250px;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+}
+
+.year-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Wide enough for four digits and the browser's up and down arrows. */
+.year-box {
+  width: 62px;
+  padding: 3px 4px;
+  border: 1px solid #b8b8b8;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.year-reset {
+  margin-left: 2px;
+  padding: 3px 7px;
+  border: 1px solid #b8b8b8;
+  border-radius: 3px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.year-reset:disabled {
+  color: #999;
+  cursor: default;
+}
+
+.year-filter-note,
+.year-filter-problem {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #555;
+}
+
+.year-filter-problem {
+  color: #a3261b;
+}
+
 /* The colour key, bottom left. The basemap credit sits bottom right, so this
    is kept narrow enough that the two never meet. */
 .legend {
@@ -177,6 +236,7 @@ body {
 /* Under the species map's colours: how many records in how many hexagons,
    and whether the map is loading or failed. */
 .legend-summary,
+.legend-left-out,
 .legend-status {
   margin-top: 5px;
   font-size: 11px;

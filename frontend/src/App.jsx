@@ -37,6 +37,11 @@ export default function App() {
   // What the data is and where it comes from (/api/meta), for the GBIF
   // download citation on the card; null until it arrives or if it fails.
   const [meta, setMeta] = useState(null)
+  // The year range for whichever map is shown: null for all years (the
+  // default, so the site looks as it always has until it is changed), or
+  // { from, to } (see yearRange.js). It lives here rather than in the map,
+  // so it stays the same when a species card is opened or closed.
+  const [years, setYears] = useState(null)
 
   // Fetches /api/meta once, when the page first appears. If the API is not
   // there, the overview still works and the card says the citation is loading.
@@ -78,13 +83,22 @@ export default function App() {
     loading: !overviewError && Object.keys(overviewRows).length === 0,
     error: overviewError,
   }
+  // The years the filter allows: those of the whole dataset, once
+  // /api/meta has arrived.
+  const yearBounds = meta ? { firstYear: meta.first_year, lastYear: meta.last_year } : null
 
   // The map with its controls fills the window above the footer, so the
   // footer never covers the legend, the controls or the map credits.
   return (
     <div className="app-layout">
       <div className="map-area">
-        <HexMap overview={overview} species={species} />
+        <HexMap
+          overview={overview}
+          species={species}
+          years={years}
+          yearBounds={yearBounds}
+          onYearsChange={setYears}
+        />
 
         <div className="top-right-controls">
           <SearchBox onSelect={pickSpecies} />

@@ -258,3 +258,83 @@ describe('the overview legends', () => {
     expect(document.querySelectorAll('.legend-swatch')).toHaveLength(7)
   })
 })
+
+describe('a year range', () => {
+  const YEARS = { from: 2000, to: 2020 }
+
+  // A pretend overview answer from the API for 2000 to 2020.
+  function overviewAnswer(res) {
+    return {
+      res, year_from: 2000, year_to: 2020, years_counted: [2000, 2020],
+      hexagon_count: 2, records_shown: 467303, records_total: 40785214,
+      records_no_year_left_out: 37966, records_outside_years: 40279945,
+      cells: ['8428c9bffffffff', '842800bffffffff'], occurrences: [467000, 303], distinct_species: [900, 12],
+    }
+  }
+
+  // A pretend API: overview and species answers for 2000 to 2020.
+  function stubYearsApi() {
+    return stubHexes((url) => (url.startsWith('/api/overview/')
+      ? { body: overviewAnswer(Number(url.match(/res=(\d)/)[1])) }
+      : { body: { ...hexes('59PMB', 4, ['8428c9bffffffff'], [1200]), years_counted: [2000, 2020], records_no_year_left_out: 1 } }))
+  }
+
+  it('asks for nothing with all years: the overview comes from the shipped files', async () => {
+    const urls = stubYearsApi()
+    render(<HexMap overview={OVERVIEW} species={null} years={null} />)
+    await settle()
+    expect(urls()).toEqual([])
+    expect(visibleLayers()).toEqual(['bc-hexagons-r4'])
+    expect(document.querySelector('.legend-summary')).toBeNull()
+  })
+
+  it('shows the overview for the range from the API, with the range, totals and the no-date note', async () => {
+    const urls = stubYearsApi()
+    render(<HexMap overview={OVERVIEW} species={null} years={YEARS} />)
+    await settle()
+    expect(urls()).toEqual(['/api/overview/hexes?res=4&year_from=2000&year_to=2020'])
+    expect(visibleLayers()).toEqual(['overview-2000-2020-r4'])
+    expect(document.querySelector('.legend-summary').textContent).toBe('467,303 records in 2 hexagons, 2000 to 2020')
+    expect(document.querySelector('.legend-left-out').textContent).toBe('37,966 records with no date are not shown.')
+    // The same answer colours both scales; the fixed bins stay.
+    const layer = () => mapState.layers.find((l) => l.id === 'overview-2000-2020-r4')
+    expect(layer().props.updateTriggers.getFillColor).toBe('species')
+    act(() => screen.getByRole('button', { name: 'Records' }).click())
+    expect(layer().props.updateTriggers.getFillColor).toBe('records')
+    expect([...document.querySelectorAll('.legend-edge')].map((el) => el.textContent))
+      .toEqual(['1', '10', '100', '1K', '10K', '100K', '1M+'])
+    expect(urls()).toHaveLength(1)
+  })
+
+  it('maps a species for the range, and keeps the range on the overview when the card closes', async () => {
+    const urls = stubYearsApi()
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={ROBIN} years={YEARS} />)
+    await settle()
+    expect(urls()).toEqual(['/api/species/59PMB/hexes?res=4&year_from=2000&year_to=2020'])
+    expect(document.querySelector('.legend-summary').textContent).toBe('1,200 records in 1 hexagon, 2000 to 2020')
+    expect(document.querySelector('.legend-left-out').textContent).toBe('1 record with no date is not shown.')
+
+    rerender(<HexMap overview={OVERVIEW} species={null} years={YEARS} />)
+    await settle()
+    expect(urls()[1]).toBe('/api/overview/hexes?res=4&year_from=2000&year_to=2020')
+    expect(visibleLayers()).toEqual(['overview-2000-2020-r4'])
+  })
+
+  it('says it is loading, and says clearly when the range cannot be loaded', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubHexes(() => ({ status: 500, body: { detail: 'Internal Server Error' } }))
+    render(<HexMap overview={OVERVIEW} species={null} years={YEARS} />)
+    expect(screen.getByRole('status').textContent).toBe('Loading hexagons...')
+    expect(visibleLayers()).toEqual([])
+    await settle()
+    expect(screen.getByRole('status').textContent).toBe('Could not load the map for these years: Internal Server Error')
+    // The all-years overview is not shown in its place.
+    expect(visibleLayers()).toEqual([])
+  })
+
+  it('shows the year control under the scale toggle', () => {
+    render(<HexMap overview={OVERVIEW} species={null} years={null} yearBounds={{ firstYear: 1784, lastYear: 2026 }} />)
+    const controls = document.querySelector('.top-left-controls')
+    expect([...controls.children].map((el) => el.className)).toEqual(['hex-size-label', 'variable-toggle', 'year-filter'])
+  })
+})

@@ -102,9 +102,30 @@ export function fetchMeta({ signal } = {}) {
   return fetchJson('/meta', signal)
 }
 
-// Fetches the species map at one resolution (/api/species/{key}/hexes?res=).
-// key can be an old merged key: the API then sends the kept key's map. No
-// year filter yet, so every record is counted.
-export function fetchSpeciesHexes(key, resolution, { signal } = {}) {
-  return fetchJson(`/species/${encodeURIComponent(key)}/hexes?res=${resolution}`, signal)
+// The query string for a map at one resolution and, if years is set, a
+// range of years. years is null for all years, or { from, to } where either
+// may be null for an open end (the API fills it in from the data).
+function mapParams(resolution, years) {
+  const params = new URLSearchParams({ res: String(resolution) })
+  if (years?.from != null) {
+    params.set('year_from', String(years.from))
+  }
+  if (years?.to != null) {
+    params.set('year_to', String(years.to))
+  }
+  return params
+}
+
+// Fetches the species map at one resolution (/api/species/{key}/hexes),
+// for a range of years if years is set (see mapParams). key can be an old
+// merged key: the API then sends the kept key's map.
+export function fetchSpeciesHexes(key, resolution, { signal, years = null } = {}) {
+  return fetchJson(`/species/${encodeURIComponent(key)}/hexes?${mapParams(resolution, years)}`, signal)
+}
+
+// Fetches the overview map (records and species per hexagon) at one
+// resolution for a range of years (/api/overview/hexes). With all years the
+// page uses the shipped overview files instead (see App.jsx).
+export function fetchOverviewHexes(resolution, { signal, years = null } = {}) {
+  return fetchJson(`/overview/hexes?${mapParams(resolution, years)}`, signal)
 }

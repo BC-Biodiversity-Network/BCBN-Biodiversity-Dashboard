@@ -762,6 +762,35 @@ lists but with no records in BC, gives 404. Colour bins are left to the front
 end. Responses over 1 KB are gzipped for browsers that accept it: the robin's
 map at res 7 is 355 KB, 63 KB gzipped.
 
+`GET /api/overview/hexes?res=&year_from=&year_to=` gives the overview map
+(`backend/api/overview.py`): for every hexagon at `res`, the records
+(`occurrences`) and the distinct species (`distinct_species`, by specieskey
+after the merge), as three lists of the same length with `cells`. It follows
+the species map's rules exactly: `res` is required (4 to 7), the years allowed
+are the whole dataset's, with no years every record counts (including those
+with no year), and with years records with no year are left out and counted in
+`records_no_year_left_out`, with `records_outside_years`, `records_shown` and
+`records_total` as above. The one record with no specieskey counts in records
+but not in species. With no year filter the answer is exactly the shipped
+`frontend/public/data/bc_hex_r4..r7.csv.gz`, hexagon for hexagon;
+`backend/tests/test_overview_matches_files.py` checks this against the real
+data (it is skipped where `backend/data/api` is missing).
+
+Each request reads the whole of `species_hex` (it is sorted by species, not
+hexagon). Measured on the Mac, through HTTP with gzip, best of three:
+
+| res | all years | 2000 to 2005 | 2000 to 2020 |
+| --- | --- | --- | --- |
+| 4 | 0.08 s, 5 KB | 0.05 s, 4 KB | 0.07 s, 5 KB |
+| 5 | 0.10 s, 28 KB | 0.06 s, 13 KB | 0.08 s, 22 KB |
+| 6 | 0.16 s, 110 KB | 0.08 s, 33 KB | 0.13 s, 77 KB |
+| 7 | 0.36 s, 351 KB | 0.10 s, 63 KB | 0.24 s, 211 KB |
+
+The same SQL on DuckDB 0.10.3 (the cluster's version) gives the same answers
+in 0.08 to 0.27 s once the file has been read once. So no precomputed table is
+needed. The page still uses the shipped files for all years and calls this
+endpoint only when a year range is set (see "Running the front end").
+
 ## Running the front end
 
 The map lives in `frontend/`. It is a Vite + React app that draws the hexagon
@@ -793,11 +822,11 @@ The overview map reads `frontend/public/data/bc_hex_r4.csv.gz` to
 `bc_hex_r7.csv.gz`, one per zoom tier, which are produced on the server by
 `backend/pipeline/gbif/build_hex_aggregates.py`, copied to the Mac by hand and
 committed. They are plain files, so the overview map works with no API behind
-it; only the species search needs the API, and says so if it cannot reach it.
+it; only the species search and the year filter need the API, and say so if
+they cannot reach it.
 
 While a species card is open, the map shows that species' own hexagons
-instead of the overview (`GET /api/species/{key}/hexes?res=N`, with no year
-filter). It uses the same zoom tiers as the overview (resolution 4 to 7,
+instead of the overview (`GET /api/species/{key}/hexes?res=N`). It uses the same zoom tiers as the overview (resolution 4 to 7,
 `frontend/src/zoomTiers.js`). Each resolution is fetched the first time its
 tier is reached and then kept, so zooming back costs nothing. An answer that
 arrives after the user has moved on is kept but not shown. When a species is
@@ -808,6 +837,30 @@ legend gives the species name, the colours, the records and hexagons at the
 current resolution ("964,801 records in 17,412 hexagons"), and the note that
 the maps show recording effort. The hover box gives the number of records of
 that species in the hexagon.
+
+One year control, under the scale toggle (`frontend/src/YearFilter.jsx`),
+applies to whichever map is shown. It starts on all years, so the site looks
+as it always has until it is changed. It is two year boxes and an "All years"
+button: typing is the main way in, because the data runs from 1784 but almost
+all of it is from after 2000, so a slider would make the useful years hard to
+hit. The boxes are applied on Enter or when the control is left, not on every
+key; an empty box is an open end; a year outside the data or a backwards
+range gets a message instead of a request. With a range set, the overview
+comes from `GET /api/overview/hexes` instead of the shipped files, and the
+species map is asked for that range. Answers are kept per map, range and
+resolution, so going back to a range costs nothing, and a late answer for an
+earlier range is never shown. While a new range loads, the previous map stays
+up with "Loading hexagons...". The legend then gives the range and the totals
+("467,303 records in 522 hexagons, 2000 to 2020") and how many records with no
+date were left out. The range stays when a species card is opened or closed.
+The colour bins stay fixed, so maps for different years can be compared.
+
+A note under the year boxes says the most recent years are incomplete,
+because records reach GBIF late. Which years it names is set in
+`frontend/src/yearRange.js` (`INCOMPLETE_FROM_YEAR`, now 2025), from the
+records per year in the download of 4 October 2026: 3.92 million in 2023,
+4.18 million in 2024, then 0.68 million in 2025 and 0.48 million in 2026.
+Recheck it after every new GBIF download.
 
 All three maps use fixed log-scale bins (`frontend/src/colours.js`). Each bin
 starts at the number shown in the legend, and the last bin has no upper limit:
@@ -853,8 +906,10 @@ matches the map.
 The map code is split by job: `HexMap.jsx` (the map, its layers and moving to
 a species), `Legend.jsx`, `colours.js` (bins and colours), `zoomTiers.js`
 (which resolution each zoom shows), `speciesHexes.js` (fetching and keeping
-the species map) and `hexTooltip.js` (the hover boxes). `App.jsx` loads the
-overview files and holds which species is open.
+the species map and the overview for a year range), `YearFilter.jsx` and
+`yearRange.js` (the year control and its rules) and `hexTooltip.js` (the
+hover boxes). `App.jsx` loads the overview files and holds which species is
+open and which years are shown.
 
 The search box (`frontend/src/SearchBox.jsx`) searches a quarter of a second
 after the last key press, and only once there are at least 2 letters or

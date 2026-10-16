@@ -11,7 +11,9 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
-import { useSpeciesHexes } from './speciesHexes'
+import { useOverviewHexes, useSpeciesHexes } from './speciesHexes'
+import YearFilter from './YearFilter'
+import { yearsLabel } from './yearRange'
 import {
   FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonSizeLabel, hexagonWidthPixels, pickResolution,
 } from './zoomTiers'
@@ -56,6 +58,11 @@ export function overviewLayerId(resolution) {
 }
 export function speciesLayerId(speciesKey, resolution) {
   return `species-${speciesKey}-r${resolution}`
+}
+// The overview for a year range, from the API, gets its own id for each
+// range and resolution, for the same reason.
+export function filteredOverviewLayerId(yearsCounted, resolution) {
+  return `overview-${yearsCounted.join('-')}-r${resolution}`
 }
 
 // Builds one hexagon layer: rows of { h3Cell, ... } coloured by a scale.
@@ -104,27 +111,40 @@ function buildHexagonLayer(id, rows, visible, schemeName, outline) {
 
 // Builds every layer the map holds.
 //
-// All four overview resolutions are always built and handed to deck.gl, and
-// at most one is visible: the current tier, and none while a species is
-// open (also while its map is still loading or has failed, so the overview
-// never shows under a species card). The hidden ones stay loaded on the
-// graphics card without being drawn, so changing tier, or closing a species
-// card, costs nothing and no hexagons are ever uploaded twice. The species map, when there is one, is
-// the one other layer.
+// All four overview resolutions from the shipped files (all years) are
+// always built and handed to deck.gl, and at most one is visible: the
+// current tier, and none while a species is open (also while its map is
+// still loading or has failed, so the overview never shows under a species
+// card) or while a year range is set. The hidden ones stay loaded on the
+// graphics card without being drawn, so changing tier, closing a species
+// card or going back to all years costs nothing and no hexagons are ever
+// uploaded twice. The overview for a year range (overviewFiltered, with
+// filteredOverview the map data from the API, or null while none has
+// arrived) and the species map are the other layers, when there are any.
 //
 // A deck.gl layer is a description of what to draw, not the drawing itself.
 // They are meant to be thrown away and made again; deck.gl keeps the real
 // work, the data already on the graphics card, and finds it again by layer
 // id. Holding on to an old layer object and handing the same one back is what
 // caused hexagons from one zoom tier to show up under another.
-export function buildLayers({ overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1 }) {
+export function buildLayers({
+  overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
+  overviewFiltered = false, filteredOverview = null,
+}) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
     if (!rows || rows.length === 0) {
       return null
     }
-    return buildHexagonLayer(overviewLayerId(r), rows, !speciesOpen && r === resolution, schemeName, outline)
+    const visible = !speciesOpen && !overviewFiltered && r === resolution
+    return buildHexagonLayer(overviewLayerId(r), rows, visible, schemeName, outline)
   })
+
+  if (!speciesOpen && overviewFiltered && filteredOverview) {
+    layers.push(buildHexagonLayer(
+      filteredOverviewLayerId(filteredOverview.yearsCounted, filteredOverview.resolution),
+      filteredOverview.rows, true, schemeName, outline))
+  }
 
   if (speciesOpen && speciesData) {
     layers.push(buildHexagonLayer(
@@ -202,12 +222,35 @@ function SchemeToggle({ current, onChange }) {
   )
 }
 
-// The summary under the species map's legend, for example
-// "964,801 records in 17,412 hexagons".
-export function speciesSummary(data) {
+// The summary under a legend, for map data from the API, for example
+// "964,801 records in 17,412 hexagons", with the years when a range was
+// counted: "467,303 records in 13,278 hexagons, 2000 to 2020". The years are
+// the ones of the map on screen, which while a new range loads is still the
+// previous one.
+export function hexesSummary(data) {
   const records = `${data.recordsShown.toLocaleString()} ${data.recordsShown === 1 ? 'record' : 'records'}`
   const hexagons = `${data.hexagonCount.toLocaleString()} ${data.hexagonCount === 1 ? 'hexagon' : 'hexagons'}`
-  return `${records} in ${hexagons}`
+  const years = data.yearsCounted ? `, ${yearsLabel(data.yearsCounted)}` : ''
+  return `${records} in ${hexagons}${years}`
+}
+
+// The note under the summary when records with no date were left out of a
+// year range, or null when none were.
+export function noDateNote(data) {
+  const count = data?.recordsNoYearLeftOut ?? 0
+  if (!data?.yearsCounted || count === 0) {
+    return null
+  }
+  return `${count.toLocaleString()} ${count === 1 ? 'record' : 'records'} with no date ${count === 1 ? 'is' : 'are'} not shown.`
+}
+
+// The status line under a legend for map data from the API: loading, a
+// failure (what names what failed to load), or null.
+function apiStatus(hexes, what) {
+  if (hexes.error) {
+    return `Could not load ${what}: ${hexes.error.message}`
+  }
+  return hexes.loading ? 'Loading hexagons...' : null
 }
 
 // The map: the overview hexagons, or, while a species card is open, that
@@ -221,7 +264,12 @@ export function speciesSummary(data) {
 // old merged key works), name its scientific name for the legend, and id a
 // number that changes every time a species is picked, so the map moves to
 // it again even when the same species is picked twice.
-export default function HexMap({ overview, species }) {
+//
+// years is the year range for whichever map is shown (null for all years,
+// when the overview uses the shipped files and the site looks as it always
+// has), yearBounds is { firstYear, lastYear } from /api/meta or null, and
+// onYearsChange sets a new range (see YearFilter).
+export default function HexMap({ overview, species, years = null, yearBounds = null, onYearsChange = () => {} }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
   const [schemeName, setSchemeName] = useState(DEFAULT_SCHEME)
@@ -229,16 +277,20 @@ export default function HexMap({ overview, species }) {
   // screen (see outlineOpacity). Only changes in quarter steps.
   const [outline, setOutline] = useState(
     () => outlineOpacity(hexagonWidthPixels(resolution, INITIAL_VIEW_STATE.zoom)))
-  const speciesHexes = useSpeciesHexes(species?.key ?? null, resolution)
+  const speciesHexes = useSpeciesHexes(species?.key ?? null, years, resolution)
   const speciesData = species ? speciesHexes.data : null
+  // The overview for a year range, only asked for while no species is open.
+  const overviewHexes = useOverviewHexes(species ? null : years, resolution)
+  const overviewFiltered = years !== null
   // The id of the species the map was last moved to.
   const fittedFor = useRef(null)
 
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
+      overviewFiltered, filteredOverview: overviewHexes.data,
     }),
-    [overview.rows, resolution, schemeName, species, speciesData, outline],
+    [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data],
   )
 
   // Moves the map to a newly picked species once its first hexagons arrive:
@@ -279,21 +331,28 @@ export default function HexMap({ overview, species }) {
 
   let legend = null
   if (species) {
-    let status = null
-    if (speciesHexes.error) {
-      status = `Could not load the map of this species: ${speciesHexes.error.message}`
-    } else if (speciesHexes.loading) {
-      status = 'Loading hexagons...'
-    }
     legend = (
       <Legend
         scheme={COLOUR_SCHEMES.speciesMap}
         caption={species.name
           ? <>Records of <i>{species.name}</i> per hexagon</>
           : 'Records of this species per hexagon'}
-        summary={speciesData ? speciesSummary(speciesData) : null}
-        status={status}
+        summary={speciesData ? hexesSummary(speciesData) : null}
+        leftOut={noDateNote(speciesData)}
+        status={apiStatus(speciesHexes, 'the map of this species')}
         statusIsError={Boolean(speciesHexes.error)}
+      />
+    )
+  } else if (overviewFiltered) {
+    const data = overviewHexes.data
+    legend = (
+      <Legend
+        scheme={COLOUR_SCHEMES[schemeName]}
+        caption={COLOUR_SCHEMES[schemeName].legendCaption}
+        summary={data ? hexesSummary(data) : null}
+        leftOut={noDateNote(data)}
+        status={apiStatus(overviewHexes, 'the map for these years')}
+        statusIsError={Boolean(overviewHexes.error)}
       />
     )
   } else if (overviewReady) {
@@ -313,6 +372,7 @@ export default function HexMap({ overview, species }) {
         <div className="top-left-controls">
           <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
+          <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
         </div>
       )}
 

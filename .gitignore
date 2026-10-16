@@ -40,3 +40,6 @@ backend/exploration/llm/*.log
 
 # Catalogue of Life release downloads and the names parquet from fetch_col_names.py
 backend/data/col/
+
+backend/exploration/coopers_hawk/
+backend/exploration/llm/trial_gemini-3.1-flash-lite_v4.csv

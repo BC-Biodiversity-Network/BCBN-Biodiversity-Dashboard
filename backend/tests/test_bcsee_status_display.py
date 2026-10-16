@@ -166,10 +166,11 @@ def test_written_files_keep_only_shown_statuses(tmp_path):
     bcsee.write_outputs(table, tmp_path)
 
     written = duckdb.execute(
-        f"SELECT gbif_species_key, statuses, [e.status FOR e IN entries] "
+        f"SELECT gbif_species_key, statuses, [e.status FOR e IN entries], "
+        f"[e.classification_level FOR e IN entries] "
         f"FROM '{tmp_path / bcsee.OUTPUT_NAME}.parquet' ORDER BY 1").fetchall()
-    assert written == [("K1", ["Yellow"], ["Yellow", "Not Reviewed"]),
-                       ("K2", [], ["Unknown"])]
+    assert written == [("K1", ["Yellow"], ["Yellow", "Not Reviewed"], ["Species", "Subspecies"]),
+                       ("K2", [], ["Unknown"], ["Species"])]
 
     csv = pd.read_csv(tmp_path / f"{bcsee.OUTPUT_NAME}.csv", dtype=str, keep_default_na=False)
     assert dict(zip(csv["gbif_species_key"], csv["statuses"])) == {"K1": "Yellow", "K2": ""}

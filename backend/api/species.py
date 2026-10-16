@@ -112,6 +112,9 @@ def bcsee_block(row, includes_without_status, source):
             "scientific_label": entry["scientific_label"],
             "scientific_label_source": entry["name_source"],
             "common_label": entry["common_label"] or None,
+            # BCSEE's own level for the entry (Species, Subspecies, Variety or
+            # Population); None in a BCSEE file built before it was kept.
+            "classification_level": entry.get("classification_level"),
             "is_species_level": entry["is_species_level"],
             "is_gbif_synonym": entry["is_gbif_synonym"],
             "element_codes": entry["element_codes"],

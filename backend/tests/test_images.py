@@ -11,18 +11,20 @@ from api.images import card_image, describe_licence, display_url
     ("CC_BY_4_0", ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/")),
     ("CC_BY_NC_SA_3_0", ("CC BY-NC-SA 3.0", "https://creativecommons.org/licenses/by-nc-sa/3.0/")),
     ("CC_BY_NC_ND_4_0", ("CC BY-NC-ND 4.0", "https://creativecommons.org/licenses/by-nc-nd/4.0/")),
-    # No version in the record, so no link rather than a guessed one.
-    ("CC_BY_SA", ("CC BY-SA", None)),
 ])
 def test_known_licences(code, expected):
-    """Every code build_dwca_tables.py can write gets a label and, when it
-    names a version, the matching Creative Commons link."""
+    """Every code with a version that build_dwca_tables.py can write gets a
+    label and the matching Creative Commons link."""
     assert describe_licence(code) == expected
 
 
-@pytest.mark.parametrize("code", [None, "", "Copyright", "CC_BY_XX_4_0"])
+@pytest.mark.parametrize("code", [None, "", "Copyright", "CC_BY_XX_4_0",
+                                  # No version in the record: the licence link
+                                  # would be a guess, so it cannot be shown.
+                                  "CC_BY_SA", "CC_BY_NC"])
 def test_unknown_licences(code):
-    """An empty or unknown code has no licence to show."""
+    """An empty or unknown code, or a CC code with no version, has no
+    licence to show."""
     assert describe_licence(code) is None
 
 

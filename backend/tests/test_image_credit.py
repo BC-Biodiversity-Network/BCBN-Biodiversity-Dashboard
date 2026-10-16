@@ -63,6 +63,15 @@ def test_strict_rule_examples():
     assert not passes({**full, "creator": None, "rightsholder": "R"})
 
 
+def test_cc_licence_without_a_version_fails():
+    """A CC licence that names no version (CC_BY_SA) fails the check in both
+    forms, because its licence link would be a guess."""
+    image = {"identifier": "u", "references": "l", "creator": "c", "license_code": "CC_BY_SA"}
+    assert not passes(image)
+    assert sql_answers([{**image, "rightsholder": None}]) == [False]
+    assert passes({**image, "license_code": "CC_BY_SA_4_0"})
+
+
 @pytest.mark.parametrize("code", CODES)
 def test_api_labels_exactly_the_readable_licences(code):
     """describe_licence gives a label for a code exactly when the shared

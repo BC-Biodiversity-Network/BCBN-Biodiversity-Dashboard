@@ -60,6 +60,13 @@ Rules:
                          "x Elyhordeum macounii").
        name_source       "GBIF" or "BCSEE", where scientific_label came from
        common_label      the whole BCSEE english_name, or empty
+       classification_level
+                         BCSEE's own level for the entry: Species,
+                         Subspecies, Variety or Population. Unlike
+                         is_species_level, it is kept as it is when BCSEE
+                         lists separate species on one GBIF species, so the
+                         page can tell a separate BCSEE species from a
+                         subspecies.
        is_species_level  true for the species-level BCSEE entry, so the
                          front end can show a "species overall" tag. Only
                          set when the GBIF species has exactly one
@@ -479,6 +486,7 @@ def describe(row, names):
         "scientific_label": written_like_bcsee(name) if name else row["scientific_name"],
         "name_source": "GBIF" if name else "BCSEE",
         "common_label": english.strip() if isinstance(english, str) else "",
+        "classification_level": row["classification_level"],
         "is_species_level": row["classification_level"] == "Species",
         "is_gbif_synonym": bool(name) and name.get("status") in SYNONYM_STATUSES,
         "matched_species_keys": [row["matched_species_key"]],
@@ -504,7 +512,8 @@ def merge_same(entries):
                             "element_codes": [entry["element_code"]]}
             continue
         kept = merged[same]
-        for field in ("name_source", "is_species_level", "is_gbif_synonym"):
+        for field in ("name_source", "classification_level", "is_species_level",
+                      "is_gbif_synonym"):
             if kept[field] != entry[field]:
                 odd.append((kept["element_codes"][0], entry["element_code"], field))
         kept["is_species_level"] |= entry["is_species_level"]
@@ -637,6 +646,7 @@ def write_outputs(table, data):
                            scientific_label := scientific_label,
                            name_source := name_source,
                            common_label := common_label,
+                           classification_level := classification_level,
                            is_species_level := is_species_level,
                            is_gbif_synonym := is_gbif_synonym,
                            matched_species_keys := string_split(matched_species_keys, ';'),

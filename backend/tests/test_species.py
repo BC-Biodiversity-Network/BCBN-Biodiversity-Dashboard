@@ -62,6 +62,8 @@ def test_bcsee_listed_species(client):
         "scientific_label": "Turdus migratorius",
         "scientific_label_source": "GBIF",
         "common_label": "American Robin",
+        # The test BCSEE file is in the older shape, without the level.
+        "classification_level": None,
         "is_species_level": True,
         "is_gbif_synonym": False,
         "element_codes": ["ABPBJ20170"],
@@ -185,3 +187,17 @@ def test_listed_species_keeps_its_no_status_entries(tmp_path):
     assert bcsee["statuses"] == ["Yellow"]
     assert [e["status"] for e in bcsee["entries"]] == ["Yellow", "Not Reviewed"]
     assert all(e["status_source_date"] == "2026-05-05" for e in bcsee["entries"])
+
+
+def test_bcsee_entry_level_is_passed_on(tmp_path):
+    """BCSEE's own level for each entry reaches the card, so the page can
+    tell a separate BCSEE species from a subspecies."""
+    # Adds the level to the test entries: Species for species-level ones.
+    bcsee = f"""SELECT * REPLACE (list_transform(entries, e -> struct_insert(e,
+                 classification_level := CASE WHEN e.is_species_level THEN 'Species'
+                                              ELSE 'Subspecies' END)) AS entries)
+                FROM ({BCSEE_WITH_NO_STATUS_SQL})"""
+    write_test_data(tmp_path, bcsee_sql=bcsee)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        entries = client.get("/api/species/CCCC").json()["bcsee"]["entries"]
+    assert [e["classification_level"] for e in entries] == ["Species"]

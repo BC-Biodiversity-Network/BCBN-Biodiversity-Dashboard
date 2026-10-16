@@ -3,7 +3,7 @@ image_credit.py
 
 The one definition of when an image can be shown on a species card: it
 needs an image URL, a link to the original, a creator and a licence that
-can be read. The pipeline uses it to pick the species image
+can be read and linked (a CC licence must name its version). The pipeline uses it to pick the species image
 (pipeline/gbif/build_species_image.py, as SQL) and the API uses it to decide
 whether to show the image (api/images.py, in Python), so the two can never
 disagree. Both forms are built from the same column lists below, and a test
@@ -32,11 +32,13 @@ CREATOR_COLUMNS = ("creator",)
 LICENCE_COLUMN = "license_code"
 
 # The licence codes that can be read and shown with a label and a link: CC0,
-# the Public Domain Mark, and CC BY with any of NC, SA, ND, with a version
-# (CC_BY_NC_4_0) or without (CC_BY_SA). The same codes build_dwca_tables.py
-# writes. Written so both Python's re and DuckDB's regexp_full_match read it
+# the Public Domain Mark, and CC BY with any of NC, SA, ND and a version
+# (CC_BY_NC_4_0). A CC code with no version (CC_BY_SA, which
+# build_dwca_tables.py writes when the record names none) fails: CC BY asks
+# for a link to the licence, and without a version that link would be a
+# guess. Written so both Python's re and DuckDB's regexp_full_match read it
 # the same way.
-READABLE_LICENCE_PATTERN = r"CC0_1_0|PDM_1_0|CC_BY(?:_NC)?(?:_SA)?(?:_ND)?(?:_[0-9]+_[0-9]+)?"
+READABLE_LICENCE_PATTERN = r"CC0_1_0|PDM_1_0|CC_BY(?:_NC)?(?:_SA)?(?:_ND)?_[0-9]+_[0-9]+"
 
 
 # ---------------------------------------------------------------- Python

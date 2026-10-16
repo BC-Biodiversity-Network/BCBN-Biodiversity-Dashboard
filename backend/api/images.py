@@ -25,11 +25,11 @@ INATURALIST_ORIGINAL = re.compile(
     r"^(https://(?:inaturalist-open-data\.s3\.amazonaws\.com|static\.inaturalist\.org)"
     r"/photos/\d+/)original(\.[A-Za-z]+)$")
 
-# The CC BY codes build_dwca_tables.py writes: CC_BY with any of NC, SA,
-# ND, with or without a version (CC_BY_SA_4_0, CC_BY_SA). This splits a
-# code into its parts for the label; which codes count as readable is
-# decided by shared/image_credit.py, and a test checks the two agree.
-CC_LICENCE_CODE = re.compile(r"^CC_BY((?:_NC)?(?:_SA)?(?:_ND)?)(?:_([0-9]+)_([0-9]+))?$")
+# The CC BY codes that can be shown: CC_BY with any of NC, SA, ND and a
+# version (CC_BY_SA_4_0). This splits a code into its parts for the label;
+# which codes count as readable is decided by shared/image_credit.py (a code
+# with no version does not), and a test checks the two agree.
+CC_LICENCE_CODE = re.compile(r"^CC_BY((?:_NC)?(?:_SA)?(?:_ND)?)_([0-9]+)_([0-9]+)$")
 
 
 def display_url(identifier):
@@ -44,11 +44,9 @@ def display_url(identifier):
 def describe_licence(code):
     """Return (label, url) for a licence code, for example
     ("CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"),
-    or None if the code is empty or not one we know.
-
-    A code with no version (CC_BY_SA) gets a label but no link, because
-    the record never said which version it is and the link would be a
-    guess."""
+    or None if the code is empty, not one we know, or a CC code with no
+    version (CC_BY_SA): the record never said which version it is, so the
+    licence link would be a guess, and CC BY asks for that link."""
     if code == "CC0_1_0":
         return "CC0 1.0", "https://creativecommons.org/publicdomain/zero/1.0/"
     if code == "PDM_1_0":
@@ -61,10 +59,6 @@ def describe_licence(code):
     # "_NC_SA" becomes ["by", "nc", "sa"].
     parts = ["by"] + [part.lower() for part in match.group(1).split("_") if part]
     label = "CC " + "-".join(part.upper() for part in parts)
-
-    if match.group(2) is None:
-        return label, None
-
     version = f"{match.group(2)}.{match.group(3)}"
     return (f"{label} {version}",
             f"https://creativecommons.org/licenses/{'-'.join(parts)}/{version}/")

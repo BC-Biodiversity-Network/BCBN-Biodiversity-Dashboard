@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { BCSEE_LIST_DEFINITIONS, bcseeDefinition } from './bcseeDefinitions'
-import { bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
+import { OGL_BC_STATEMENT, bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
 
 describe('the BCSEE definitions', () => {
   it('cover every B.C. List value in the data', () => {
@@ -20,6 +20,12 @@ describe('the BCSEE definitions', () => {
   it('say plainly when a value is not defined', () => {
     expect(bcseeDefinition('Extirpated')).toBe(
       '"Extirpated" is a value on BCSEE\'s B.C. List that its help page does not define.')
+  })
+})
+
+describe('the OGL-BC statement', () => {
+  it('is the licence’s own wording, with its en dash', () => {
+    expect(OGL_BC_STATEMENT).toBe('Contains information licensed under the Open Government Licence \u2013 British Columbia.')
   })
 })
 

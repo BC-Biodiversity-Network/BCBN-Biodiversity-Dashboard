@@ -392,6 +392,10 @@ describe('the Sources section', () => {
     expect(text).toContain("Classification: as on this species' GBIF occurrence records, which GBIF matches to the Catalogue of Life (COL26.6 XR (ChecklistBank 315557)).")
     expect(text).toContain('Conservation status: B.C. Conservation Data Centre. 2026. BC Species and Ecosystems Explorer. ' +
       'B.C. Government, Victoria B.C. Available: http://a100.gov.bc.ca/pub/eswp/ (provincial export of 2026-05-05, accessed 2026-09-26).')
+    expect(text).toContain('(provincial export of 2026-05-05, accessed 2026-09-26). ' +
+      'Contains information licensed under the Open Government Licence \u2013 British Columbia. Status definitions:')
+    expect(screen.getByRole('link', { name: 'Open Government Licence \u2013 British Columbia' }).href).toBe(
+      'https://www2.gov.bc.ca/gov/content/data/policy-standards/data-policies/open-data/open-government-licence-bc')
     expect(text).toContain('Occurrence records: GBIF.org (4 October 2026) GBIF Occurrence Download https://doi.org/10.15468/dl.ge9ypx')
     expect(text).toContain('Species key: 7NFJR')
     expect(screen.getByRole('link', { name: 'https://doi.org/10.15468/dl.ge9ypx' })).toBeTruthy()

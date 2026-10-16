@@ -14,7 +14,18 @@ describe('the page footer', () => {
     expect(text).toContain('BCBN shows them as published and does not assess or set conservation statuses.')
     expect(text).toContain('Species names and authorship come from the Catalogue of Life, via GBIF.')
     expect(text).toContain('Occurrence records come from GBIF.org.')
-    expect(text).toContain('do not endorse BCBN or this site.')
+    expect(text).toContain('These sources, and the photographers whose photos are shown, do not ' +
+      'endorse BCBN or this site, and this site is not an official government source.')
+  })
+
+  it('carries the OGL-BC attribution statement, worded exactly, with a link to the licence', () => {
+    render(<SiteFooter />)
+    // Right after the BCSEE sentences, so it is clear which data it is about.
+    expect(screen.getByRole('contentinfo').textContent).toContain(
+      'does not assess or set conservation statuses. ' +
+      'Contains information licensed under the Open Government Licence \u2013 British Columbia. Species names')
+    expect(screen.getByRole('link', { name: 'Open Government Licence \u2013 British Columbia' }).href).toBe(
+      'https://www2.gov.bc.ca/gov/content/data/policy-standards/data-policies/open-data/open-government-licence-bc')
   })
 
   it('links each source', () => {

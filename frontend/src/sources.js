@@ -31,6 +31,18 @@ export function colRelease(colReleaseText) {
   return (match && COL_RELEASES[match[1]]) || null
 }
 
+// The BCSEE export is under the Open Government Licence – British Columbia
+// (stated in the export file's Metadata sheet and on BCSEE's export page,
+// https://a100.gov.bc.ca/pub/eswp/jsp/export.jsp, checked 2026-10-15). The
+// licence asks for this attribution statement and, where possible, a link to
+// the licence. The wording is the licence's own (version 2.0), en dash
+// included; OGL_BC_NAME is the part of it that is linked.
+export const OGL_BC_URL =
+  'https://www2.gov.bc.ca/gov/content/data/policy-standards/data-policies/open-data/open-government-licence-bc'
+export const OGL_BC_PREFIX = 'Contains information licensed under the '
+export const OGL_BC_NAME = 'Open Government Licence – British Columbia'
+export const OGL_BC_STATEMENT = `${OGL_BC_PREFIX}${OGL_BC_NAME}.`
+
 // The BC Species and Ecosystems Explorer, cited the way the BC Conservation
 // Data Centre asks ("How to Cite Information & Data from the Conservation
 // Data Centre", BCSEE_CITATION_GUIDE_URL): the year of the export, and when

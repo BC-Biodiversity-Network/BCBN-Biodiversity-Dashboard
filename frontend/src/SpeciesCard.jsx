@@ -3,6 +3,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { fetchSpecies } from './api'
 import { BCSEE_LIST_HELP_URL, bcseeDefinition } from './bcseeDefinitions'
 import InfoTip from './InfoTip'
+import OglBcStatement from './OglBcStatement'
 import { BCSEE_URL, bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
 
 // The BCSEE values that are conservation statuses, each with its own chip
@@ -394,7 +395,8 @@ function RecordsSection({ card }) {
 // Where everything on the card comes from, in small text at the bottom:
 // names and authorship (with the Catalogue of Life's own citation and
 // licence), the classification, the conservation status (cited the way
-// the BC Conservation Data Centre asks), the occurrence records (the GBIF
+// the BC Conservation Data Centre asks, with the Open Government Licence –
+// British Columbia attribution statement), the occurrence records (the GBIF
 // download, cited the way GBIF asks) and the species key.
 function SourcesSection({ card, meta }) {
   const { name, bcsee } = card
@@ -421,7 +423,8 @@ function SourcesSection({ card, meta }) {
       <p>
         <strong>Conservation status:</strong> {bcseeCitation(bcsee.status_source_date)}{' '}
         <a href={BCSEE_URL} target="_blank" rel="noreferrer">{BCSEE_URL}</a>{' '}
-        {bcseeCitationEnd(bcsee.status_source_date, bcsee.status_pulled_on)} Status definitions:{' '}
+        {bcseeCitationEnd(bcsee.status_source_date, bcsee.status_pulled_on)} <OglBcStatement />{' '}
+        Status definitions:{' '}
         <a href={BCSEE_LIST_HELP_URL} target="_blank" rel="noreferrer">BCSEE help, B.C. List</a>.
       </p>
       <p>

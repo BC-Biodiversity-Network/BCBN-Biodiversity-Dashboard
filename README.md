@@ -364,6 +364,21 @@ next to each status: `status_source` ("BC Species and Ecosystems Explorer
 2026-05-05 now) and `status_pulled_on` (the date `pull_bcsee.py` downloaded
 it, 2026-09-26 now).
 
+**Licence.** The BCSEE export that `pull_bcsee.py` downloads
+(`SummaryExportAll.xlsx`) is under the Open Government Licence – British
+Columbia (version 2.0). Evidence, checked 2026-10-15: BCSEE's export page,
+https://a100.gov.bc.ca/pub/eswp/jsp/export.jsp, links "Summary Export All"
+and says "Note: The data contained in the Results Export in BCSEE are
+provided under the Open Government License – BC"; the file's own Metadata
+sheet says "Open Government License– BC" ("Generated May 5 2026"). The BC
+Data Catalogue record "BC Species and Ecosystems Explorer" is marked "Access
+Only", which appears to be about the BCSEE application rather than the
+exported data. As the licence asks, the site shows its attribution statement,
+"Contains information licensed under the Open Government Licence – British
+Columbia.", linked to the licence
+(https://www2.gov.bc.ca/gov/content/data/policy-standards/data-policies/open-data/open-government-licence-bc),
+in the page footer and in the Sources section of every species card.
+
 The BCSEE match and the merge list must use the same Catalogue of Life
 release. Both use 315557 now, but nothing records which release the match
 used, so this is not checked yet: rerun `match_bcsee_gbif.py` and

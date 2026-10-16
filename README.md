@@ -871,8 +871,10 @@ shows, top to bottom:
 
 - the Catalogue of Life name exactly as stored (a subgenus in brackets
   included) in italics, with its authorship exactly as in the Catalogue of
-  Life file and a "?" that explains what the authorship is; the classification
-  from kingdom to genus; and the common name labelled "Common name from
+  Life file and a "?" that explains it, using the card's own authorship and
+  name, with a sentence on what parentheses mean only when the authorship has
+  them (cards with no authorship, 454 of 38,992, show no "?"); the
+  classification from kingdom to genus; and the common name labelled "Common name from
   BCSEE". When BCSEE lists separate species on the key, no common name is
   shown here; each BCSEE entry shows its own.
 - the photo, only when the API sends one, always whole (never cropped, as ND

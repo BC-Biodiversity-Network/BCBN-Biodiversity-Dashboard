@@ -630,6 +630,13 @@ body {
   white-space: normal;
 }
 
+/* A second paragraph inside a tip, such as the note on parentheses in the
+   authorship tip. */
+.info-tip-text .tip-paragraph {
+  display: block;
+  margin-top: 6px;
+}
+
 .status-chip:focus-visible,
 .help-button:focus-visible {
   outline: 2px solid #3987e5;

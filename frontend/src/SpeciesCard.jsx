@@ -19,12 +19,25 @@ const LEVEL_WORDS = {
   Population: ['population', 'populations'],
 }
 
-// The explanation behind the "?" next to the name and authorship.
-const AUTHORSHIP_HELP =
-  'The text after the species name is the authorship: who first published the name, ' +
-  'and for animals, the year it was published. Parentheses mean the species was first ' +
-  'described in a different genus and later moved. Plant authors are often abbreviated ' +
-  '(for example, "L." is Linnaeus) and usually have no year.'
+// The explanation behind the "?" next to the name and authorship, using this
+// card's own authorship and scientific name, both exactly as stored. The
+// sentence about parentheses is only added when the authorship has them.
+function AuthorshipHelp({ name }) {
+  return (
+    <>
+      “{name.col_authorship}” is the authorship of the scientific name{' '}
+      <i>{name.col_name}</i>: who first named this species and, if a year is shown, the
+      year they named it.
+      {name.col_authorship.includes('(') && (
+        <span className="tip-paragraph">
+          Parentheses around the authorship, as in “(Linnaeus, 1766)”, mean the species was
+          first described under a different name, usually in a different genus, and later
+          given its current name.
+        </span>
+      )}
+    </>
+  )
+}
 
 // The species card panel. requestedKey is the key to show: the one picked in
 // search, or the old merged key that was typed, so the API can say it was
@@ -99,7 +112,9 @@ function CardBody({ card, meta }) {
 
 // The top of the card: the Catalogue of Life name in italics, exactly as
 // stored (a subgenus in brackets included), with its authorship as stored
-// and a "?" explaining what the authorship is; the classification from
+// and a "?" explaining what the authorship is (no "?" when the card has no
+// authorship, as 454 of 38,992 cards had in October 2026, since there is
+// then nothing to explain); the classification from
 // kingdom to genus; and the species' own common name from BCSEE when there
 // is one. When BCSEE lists separate species on this key, the API sends no
 // common name, so none is shown here; each BCSEE entry shows its own.
@@ -109,10 +124,14 @@ function CardTitle({ card }) {
     <header className="card-title">
       <h2>
         <span className="scientific-name">{name.col_name}</span>
-        {name.col_authorship && <span className="card-authorship"> {name.col_authorship}</span>}
-        <InfoTip label="?" className="help-button" ariaLabel="What is the authorship?">
-          {AUTHORSHIP_HELP}
-        </InfoTip>
+        {name.col_authorship && (
+          <>
+            <span className="card-authorship"> {name.col_authorship}</span>
+            <InfoTip label="?" className="help-button" ariaLabel="What is the authorship?">
+              <AuthorshipHelp name={name} />
+            </InfoTip>
+          </>
+        )}
       </h2>
       <TaxonomyLine taxonomy={card.taxonomy} />
       {card.english_name && (

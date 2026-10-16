@@ -147,13 +147,60 @@ describe('the top of the card', () => {
     const help = screen.getByRole('button', { name: 'What is the authorship?' })
     expect(screen.queryByRole('tooltip')).toBeNull()
     fireEvent.mouseEnter(help.parentElement)
-    expect(screen.getByRole('tooltip').textContent).toContain(
-      'The text after the species name is the authorship: who first published the name')
-    expect(screen.getByRole('tooltip').textContent).toContain('"L." is Linnaeus')
+    expect(screen.getByRole('tooltip')).toBeTruthy()
     fireEvent.mouseLeave(help.parentElement)
     expect(screen.queryByRole('tooltip')).toBeNull()
     fireEvent.click(help)
     expect(screen.getByRole('tooltip')).toBeTruthy()
+    fireEvent.keyDown(help, { key: 'Escape' })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    act(() => help.focus())
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+  })
+
+  // Opens the authorship "?" on a card with this name and authorship, and
+  // returns the tip.
+  async function authorshipTip(colName, colAuthorship) {
+    await showCard(makeCard({ name: { ...makeCard().name, col_name: colName, col_authorship: colAuthorship } }))
+    fireEvent.click(screen.getByRole('button', { name: 'What is the authorship?' }))
+    return screen.getByRole('tooltip')
+  }
+
+  const FIRST_SENTENCE_END = ': who first named this species and, if a year is shown, the year they named it.'
+  const PARENTHESES_SENTENCE = 'Parentheses around the authorship, as in “(Linnaeus, 1766)”, mean the species was '
+    + 'first described under a different name, usually in a different genus, and later given its current name.'
+
+  it('names the authorship and the scientific name, with no note on parentheses when there are none', async () => {
+    const tip = await authorshipTip('Turdus migratorius', 'Linnaeus, 1766')
+    expect(tip.textContent).toBe(
+      `“Linnaeus, 1766” is the authorship of the scientific name Turdus migratorius${FIRST_SENTENCE_END}`)
+    expect(tip.querySelector('i').textContent).toBe('Turdus migratorius')
+    expect(tip.textContent).not.toContain('Parentheses')
+    expect(tip.textContent).not.toContain('abbreviated')
+  })
+
+  it('adds the note on parentheses when the authorship has them', async () => {
+    const tip = await authorshipTip('Setophaga petechia', '(Linnaeus, 1766)')
+    expect(tip.textContent).toBe(
+      `“(Linnaeus, 1766)” is the authorship of the scientific name Setophaga petechia${FIRST_SENTENCE_END}`
+      + PARENTHESES_SENTENCE)
+    expect(tip.querySelector('.tip-paragraph').textContent).toBe(PARENTHESES_SENTENCE)
+  })
+
+  it('shows a plant authorship exactly as stored, with the note on parentheses', async () => {
+    const tip = await authorshipTip('Acmispon parviflorus', '(Benth.) D.D.Sokoloff')
+    expect(tip.textContent).toContain(
+      '“(Benth.) D.D.Sokoloff” is the authorship of the scientific name Acmispon parviflorus:')
+    expect(tip.querySelector('i').textContent).toBe('Acmispon parviflorus')
+    expect(tip.querySelector('.tip-paragraph').textContent).toBe(PARENTHESES_SENTENCE)
+    expect(tip.textContent).not.toContain('abbreviated')
+  })
+
+  it('shows no "?" and no authorship when the card has none', async () => {
+    const { panel } = await showCard(makeCard({ name: { ...makeCard().name, col_authorship: '' } }))
+    expect(screen.queryByRole('button', { name: 'What is the authorship?' })).toBeNull()
+    expect(panel.querySelector('.card-authorship')).toBeNull()
+    expect(panel.querySelector('.scientific-name').textContent).toBe('Turdus migratorius')
   })
 
   it('does not show the extent box coordinates', async () => {

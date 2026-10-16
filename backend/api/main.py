@@ -29,6 +29,10 @@ Endpoints so far:
                     the species map: records per H3 hexagon at res (4 to
                     7), optionally for a year range (see hexes.py). A bad
                     res or year range gives 400, an unknown key 404.
+    GET /api/overview/hexes?res=&year_from=&year_to=
+                    the overview map: records and distinct species per H3
+                    hexagon at res (4 to 7), optionally for a year range
+                    (see overview.py). A bad res or year range gives 400.
 
 Responses larger than 1 KB are gzipped for clients that accept it (the
 species map of the robin at res 7 is about 355 KB, about 60 KB gzipped).
@@ -41,6 +45,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from api.db import open_data
 from api.hexes import HexesRequestError, species_hexes
+from api.overview import overview_hexes
 from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
 from api.settings import load_settings
 from api.species import build_species_card
@@ -109,6 +114,17 @@ def create_app(settings=None):
         if result is None:
             raise unknown_key(key)
         return result
+
+    @app.get("/api/overview/hexes")
+    def overview(request: Request, res: int = Query(...),
+                 year_from: int | None = None, year_to: int | None = None):
+        """Return the overview map at resolution res: records and distinct
+        species per hexagon, for the years year_from to year_to if either is
+        given (see overview.py)."""
+        try:
+            return overview_hexes(request.app.state.data, res, year_from, year_to)
+        except HexesRequestError as error:
+            raise HTTPException(status_code=400, detail=str(error))
 
     @app.get("/api/search")
     def species_search(request: Request, q: str = Query(..., max_length=200),

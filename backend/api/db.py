@@ -35,7 +35,7 @@ REQUIRED_COLUMNS = {
         "n_datasets", "min_lat", "max_lat", "min_lon", "max_lon",
         "image_identifier", "image_references", "image_creator",
         "image_rightsholder", "image_license_code",
-        "top_datasets", "merged_keys", "merged_record_count",
+        "top_datasets", "merged_keys", "merged_record_count", "merged_names",
     ],
     "species_hex.parquet": [
         "specieskey", "year", "h3_r4", "h3_r5", "h3_r6", "h3_r7", "occurrences",

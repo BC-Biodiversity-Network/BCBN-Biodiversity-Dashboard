@@ -438,6 +438,13 @@ body {
   color: #555;
 }
 
+/* An old name of a key merged into this card, under the name. */
+.card-previous-name {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #555;
+}
+
 /* The classification line under the name. */
 .card-taxonomy {
   margin: 3px 0 0;

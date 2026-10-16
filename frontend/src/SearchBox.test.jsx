@@ -242,6 +242,28 @@ describe('what each result shows', () => {
     expect(text).not.toContain('Common name from BCSEE')
   })
 
+  it("labels a merged key's old name as an earlier name, and keeps BCSEE as the common-name source", async () => {
+    const hawk = makeResult({
+      specieskey: 'CVW5J', col_name: 'Astur cooperii', col_authorship: '(Bonaparte, 1828)',
+      english_name: "Cooper's Hawk", family: 'Accipitridae', record_count: 104703,
+      match: { field: 'merged_name', text: 'Accipiter cooperii', kind: 'exact',
+               bcsee_entry_scientific_label: null },
+      display_names: [
+        { text: 'Astur cooperii', field: 'col_name', source: COL },
+        { text: "Cooper's Hawk", field: 'english_name', source: BCSEE },
+        { text: 'Accipiter cooperii', field: 'merged_name', source: COL },
+      ],
+    })
+    stubSearch([hawk])
+    const { input } = renderBox()
+    type(input, 'Accipiter cooperii')
+    await wait(250)
+    expect(listedTexts()).toHaveLength(1)
+    expect(listedTexts()[0]).toContain('Accipiter cooperiiEarlier name (Catalogue of Life synonym)')
+    expect(document.querySelector('.search-sources').textContent)
+      .toContain(`Common names and BCSEE names from ${BCSEE}.`)
+  })
+
   it('tells apart two species with the same scientific name by authorship and records', async () => {
     const first = makeResult({ specieskey: 'L1', col_name: 'Lomatium dissectum',
       col_authorship: '(Nutt. ex Torr. & A.Gray) Mathias & Constance', record_count: 356,

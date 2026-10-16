@@ -96,17 +96,46 @@ function CardBody({ card, meta }) {
   return (
     <>
       <CardTitle card={card} />
-      {card.merged_from && (
-        <p className="card-note">
-          You searched for {card.merged_from}, an old key that was merged into{' '}
-          {card.specieskey}: both keys have exactly the same species name.
-        </p>
-      )}
+      {card.merged_from && <MergedKeyNote card={card} />}
       <SpeciesImage image={card.image} name={card.name.col_name} />
       <BcseeSection bcsee={card.bcsee} />
       <RecordsSection card={card} />
       <SourcesSection card={card} meta={meta} />
     </>
+  )
+}
+
+// The names of the keys merged into this card under another name (the
+// Catalogue of Life lists each as a synonym of this species), by key. Empty
+// for a card with only same-name merges, and for an API from before
+// merged_names.
+function synonymNames(card) {
+  return new Map((card.name.merged_names ?? []).map((merged) => [merged.key, merged]))
+}
+
+// A name with its authorship, the name in italics.
+function NameWithAuthor({ name }) {
+  return (
+    <>
+      <i>{name.col_name}</i>
+      {name.col_authorship && ` ${name.col_authorship}`}
+    </>
+  )
+}
+
+// Said when the card was opened from an old key that was merged into it:
+// why it was merged. Placeholder wording until it is decided.
+function MergedKeyNote({ card }) {
+  const synonym = synonymNames(card).get(card.merged_from)
+  return (
+    <p className="card-note">
+      You searched for {card.merged_from}, an old key that was merged into{' '}
+      {card.specieskey}:{' '}
+      {synonym
+        ? <>the Catalogue of Life lists its name, <NameWithAuthor name={synonym} />, as a
+          synonym of this species.</>
+        : 'both keys have exactly the same species name.'}
+    </p>
   )
 }
 
@@ -133,6 +162,13 @@ function CardTitle({ card }) {
           </>
         )}
       </h2>
+      {/* The old names of keys merged into this card. Placeholder wording
+          until it is decided. */}
+      {[...synonymNames(card).values()].map((merged) => (
+        <p className="card-previous-name" key={merged.key}>
+          Previously known as: <NameWithAuthor name={merged} />
+        </p>
+      ))}
       <TaxonomyLine taxonomy={card.taxonomy} />
       {card.english_name && (
         <p className="card-common-name">
@@ -367,6 +403,29 @@ export function noDateSentence(count) {
     : `${count.toLocaleString()} of these records have no date.`
 }
 
+// How many records came from keys merged into this card, and why each key was
+// merged: the same species name, or a name the Catalogue of Life lists as a
+// synonym of this species. Placeholder wording until it is decided.
+function MergedRecordsNote({ card }) {
+  const { records } = card
+  const synonyms = synonymNames(card)
+  const sameName = records.merged_keys.filter((key) => !synonyms.has(key))
+  const synonymKeys = records.merged_keys.filter((key) => synonyms.has(key))
+  const SAME = 'because the species name is exactly the same'
+  const SYNONYM = 'because the Catalogue of Life lists its name as a synonym of this species'
+  const why = sameName.length === 0 ? ` ${SYNONYM}`
+    : synonymKeys.length === 0 ? ` ${SAME}`
+      : `: ${sameName.join(', ')} ${SAME}, ${synonymKeys.join(', ')} ${SYNONYM}`
+  return (
+    <p className="card-note">
+      Includes {records.merged_record_count.toLocaleString()}{' '}
+      {records.merged_record_count === 1 ? 'record' : 'records'} filed under{' '}
+      {records.merged_keys.length === 1 ? 'key' : 'keys'} {records.merged_keys.join(', ')}, merged
+      into this species{why}.
+    </p>
+  )
+}
+
 // The records section: how many, over which years, from how many datasets,
 // how many have no date, and the biggest datasets. Says how many records
 // came from keys merged into this one.
@@ -383,14 +442,7 @@ function RecordsSection({ card }) {
         {records.n_datasets.toLocaleString()} {records.n_datasets === 1 ? 'dataset' : 'datasets'}.
         {noDate && ` ${noDate}`}
       </p>
-      {records.merged_keys.length > 0 && (
-        <p className="card-note">
-          Includes {records.merged_record_count.toLocaleString()}{' '}
-          {records.merged_record_count === 1 ? 'record' : 'records'} filed under{' '}
-          {records.merged_keys.length === 1 ? 'key' : 'keys'} {records.merged_keys.join(', ')}, merged
-          into this species because the species name is exactly the same.
-        </p>
-      )}
+      {records.merged_keys.length > 0 && <MergedRecordsNote card={card} />}
       {card.top_datasets.length > 0 && (
         <>
           <h4>Largest datasets</h4>

@@ -13,11 +13,14 @@ const RESULT_LIMIT = 20
 // The id of the results list, so the input can point screen readers at it.
 const LIST_ID = 'species-search-results'
 
-// The fields of display_names that are names from a BCSEE entry rather than
-// the species' own names, and how each is labelled in the list.
+// The fields of display_names that are not the species' own names (a name
+// from a BCSEE entry, or the name of a key merged into this one), and how
+// each is labelled in the list. The merged name's label is a placeholder
+// until the wording is decided.
 const ENTRY_NAME_LABELS = {
   bcsee_entry_english_name: 'Common name of a BCSEE entry',
   bcsee_scientific_label: 'Scientific name from BCSEE',
+  merged_name: 'Earlier name (Catalogue of Life synonym)',
 }
 
 // The search box: a text field with a list of matching species under it.
@@ -253,7 +256,7 @@ function SourceNote({ results }) {
   const nameSource = results[0]?.name_source
   const bcseeSource = results
     .flatMap((result) => result.display_names)
-    .find((name) => name.field !== 'col_name')?.source
+    .find((name) => name.field !== 'col_name' && name.field !== 'merged_name')?.source
 
   return (
     <div className="search-sources">

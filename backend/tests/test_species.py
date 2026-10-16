@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from api.settings import Settings
-from conftest import BCSEE_WITH_NO_STATUS_SQL, write_test_data
+from conftest import BCSEE_WITH_NO_STATUS_SQL, CARD_SQL, write_test_data
 
 BCSEE_SOURCE = {
     "status_source": "BC Species and Ecosystems Explorer (BCSEE)",
@@ -27,6 +27,7 @@ def test_card_name_and_counts(client):
         "scientificname": "Turdus migratorius Linnaeus, 1766",
         "name_source": "Catalogue of Life, via GBIF",
         "col_release": "COL26.6 XR (ChecklistBank 315557)",
+        "merged_names": [],
     }
     assert card["records"] == {
         "record_count": 5, "records_no_year": 2, "first_year": 2020,
@@ -201,3 +202,25 @@ def test_bcsee_entry_level_is_passed_on(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
         entries = client.get("/api/species/CCCC").json()["bcsee"]["entries"]
     assert [e["classification_level"] for e in entries] == ["Species"]
+
+
+# BBBB with its merged key OLD1 under another name, as after a synonym merge
+# (Accipiter cooperii into Astur cooperii), and CCCC with a merged key whose
+# name differs only by the subgenus.
+SYNONYM_CARDS = f"""
+    SELECT * REPLACE (CASE specieskey
+        WHEN 'BBBB' THEN [{{'key': 'OLD1', 'name': 'Salix oldname', 'authorship': '(Hook.) Test'}}]
+        WHEN 'CCCC' THEN [{{'key': 'OLD9', 'name': 'Bombus vosnesenskii', 'authorship': ''}}]
+        END AS merged_names) FROM ({CARD_SQL})
+"""
+
+
+def test_merged_names_list_only_other_names(tmp_path):
+    """A merged key under another name is listed with its own name and
+    authorship; a name that differs only by a subgenus is not."""
+    write_test_data(tmp_path, card_sql=SYNONYM_CARDS)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        assert client.get("/api/species/BBBB").json()["name"]["merged_names"] == [
+            {"key": "OLD1", "col_name": "Salix oldname", "col_authorship": "(Hook.) Test"}]
+        assert client.get("/api/species/CCCC").json()["name"]["merged_names"] == []
+        assert client.get("/api/species/OLD1").json()["merged_from"] == "OLD1"

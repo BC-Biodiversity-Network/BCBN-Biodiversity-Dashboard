@@ -12,6 +12,12 @@ Where each part comes from:
 
 A key that was merged into another (listed in a card's merged_keys) gets
 the kept key's card, with merged_from saying which key was asked for.
+name.merged_names lists the merged keys whose Catalogue of Life name is not
+the card's own (a key merged because the Catalogue of Life lists its name
+as a synonym, such as Accipiter cooperii in Astur cooperii), from the
+card's merged_names column. A name that differs only by a subgenus in
+brackets ("Acyrthosiphon pisum" for "Acyrthosiphon (Acyrthosiphon) pisum")
+is left out: it is the same name.
 
 The BCSEE block's state is one of:
     listed              BCSEE gives the species at least one shown status
@@ -28,6 +34,8 @@ Every state carries the BCSEE source, its date and the date it was pulled,
 so "not in BCSEE" is always "not in BCSEE as of that export".
 """
 
+import re
+
 from api.db import SHOWN_STATUSES
 from api.images import card_image
 
@@ -39,7 +47,12 @@ CARD_COLUMNS = [
     "min_lat", "max_lat", "min_lon", "max_lon",
     "image_identifier", "image_references", "image_creator", "image_rightsholder",
     "image_license_code", "top_datasets", "merged_keys", "merged_record_count",
+    "merged_names",
 ]
+
+# A subgenus in brackets inside a name, such as " (Pyrobombus)". The same
+# pattern as the subgenus-free names in search.py.
+SUBGENUS = re.compile(r"\s*\([^)]*\)")
 
 # The BCSEE columns the endpoint reads. bcsee_key is NULL when the species
 # has no BCSEE row.
@@ -84,6 +97,22 @@ def bcsee_state(row, includes_without_status):
     if any(status in SHOWN_STATUSES for status in row["statuses"] or []):
         return "listed"
     return "in_bcsee_no_status"
+
+
+def without_subgenus(name):
+    """Return a name without any subgenus in brackets."""
+    return SUBGENUS.sub("", name or "").strip()
+
+
+def merged_names(row):
+    """Return the names of the keys merged into this card that are not the
+    card's own name, as [{key, col_name, col_authorship}]. Names that differ
+    only by a subgenus are the same name and are left out."""
+    own = without_subgenus(row["col_name"])
+    return [{"key": item["key"], "col_name": item["name"],
+             "col_authorship": item["authorship"] or ""}
+            for item in row["merged_names"] or []
+            if without_subgenus(item["name"]) != own]
 
 
 def english_name(entries):
@@ -157,6 +186,7 @@ def build_species_card(data, key):
             "scientificname": row["scientificname"],
             "name_source": row["name_source"],
             "col_release": row["col_release"],
+            "merged_names": merged_names(row),
         },
         "english_name": english_name(row["entries"]),
         "english_name_source": source["status_source"],

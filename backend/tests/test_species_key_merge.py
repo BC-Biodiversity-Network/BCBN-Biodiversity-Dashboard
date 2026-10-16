@@ -286,3 +286,27 @@ def test_the_old_extra_key_row_cannot_come_back_after_the_merge(tmp_path):
                            "checked_by": "c", "checked_date": "d"}])
     with pytest.raises(ValueError, match="ABNKC12040 is already on CVW5J"):
         bcsee.check_extra_keys(extra, kept, {"ABNKC12040": "Accipiter cooperii"}, {"VP2T6"})
+
+
+REAL_API = BACKEND / "data" / "api"
+
+
+@pytest.mark.skipif(not (REAL_API / "species_card_gbif.parquet").exists(),
+                    reason="the real data is not in backend/data/api")
+def test_real_data_has_one_coopers_hawk_with_yellow_once():
+    """In the real data, VP2T6 has no card and no BCSEE row of its own; CVW5J
+    lists it as merged, under its old name, and has Yellow exactly once."""
+    con = duckdb.connect()
+    card = f"read_parquet('{REAL_API / 'species_card_gbif.parquet'}')"
+    status = f"read_parquet('{REAL_API / 'bcsee_status_by_gbif_species.parquet'}')"
+    assert con.execute(f"SELECT count(*) FROM {card} WHERE specieskey = 'VP2T6'").fetchone()[0] == 0
+    keys, names = con.execute(
+        f"SELECT merged_keys, [m.name FOR m IN merged_names] FROM {card} "
+        f"WHERE specieskey = 'CVW5J'").fetchone()
+    assert keys == ["VP2T6"] and names == ["Accipiter cooperii"]
+    assert con.execute(f"SELECT count(*) FROM {status} "
+                       f"WHERE gbif_species_key = 'VP2T6'").fetchone()[0] == 0
+    statuses, entries = con.execute(
+        f"SELECT statuses, [e.status FOR e IN entries] FROM {status} "
+        f"WHERE gbif_species_key = 'CVW5J'").fetchone()
+    assert statuses == ["Yellow"] and entries == ["Yellow"]

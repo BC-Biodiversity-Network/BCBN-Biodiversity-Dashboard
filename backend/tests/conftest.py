@@ -37,7 +37,10 @@ CARD_SQL = """
     -- Written as 49.1, the coordinates would be DECIMAL; the real file has
     -- DOUBLE.
     SELECT * REPLACE (min_lat::DOUBLE AS min_lat, max_lat::DOUBLE AS max_lat,
-                      min_lon::DOUBLE AS min_lon, max_lon::DOUBLE AS max_lon)
+                      min_lon::DOUBLE AS min_lon, max_lon::DOUBLE AS max_lon),
+           -- No card has a merged key under another name; tests that need
+           -- one replace this column.
+           NULL::STRUCT("key" VARCHAR, name VARCHAR, authorship VARCHAR)[] AS merged_names
     FROM (VALUES
         ('AAAA', 'Turdus migratorius Linnaeus, 1766', 'Turdus migratorius',
          'Linnaeus, 1766', 'Catalogue of Life, via GBIF',

@@ -19,6 +19,11 @@ with no records in BC have no card and are never found):
                                 card, but it is not the species' English
                                 name, and the result says so.
     bcsee_scientific_label      the scientific label of each BCSEE entry
+    merged_name                 the Catalogue of Life name of a key merged
+                                into the card under another name (a
+                                synonym, such as Accipiter cooperii for
+                                Astur cooperii); names that differ only by a
+                                subgenus are left out, as on the card
     the species key             typed exactly (any letter case); an old key
                                 that was merged finds the kept key's card,
                                 with merged_from, as on the card endpoint
@@ -36,11 +41,12 @@ starts with the query, then a name that holds the query anywhere. Ties go
 to the species with more records. A typed species key comes before all of
 them. Each species appears once, under its best-matching name; between
 names that match equally well, the card name wins, then the English name,
-then a BCSEE scientific label, then a BCSEE entry's English name.
+then a merged name, then a BCSEE scientific label, then a BCSEE entry's
+English name.
 
 Every result lists its names in the agreed order (display_names): the card
-name, then the English name, then the BCSEE name that matched if it is
-neither of those, each with where it comes from.
+name, then the English name, then the merged name or BCSEE name that
+matched if it is neither of those, each with where it comes from.
 
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
@@ -100,6 +106,13 @@ SEARCH_INDEX_SQL = r"""
                e.scientific_label
         FROM entries
         WHERE trim(coalesce(e.scientific_label, '')) <> ''
+        UNION ALL
+        -- A merged key's own name, when it is not the card's name (leaving
+        -- out names that differ only by a subgenus, as the card does).
+        SELECT specieskey, 'merged_name', m.name, NULL, m.name
+        FROM (SELECT specieskey, col_name, unnest(merged_names) AS m FROM species_card)
+        WHERE regexp_replace(m.name, '\s*\([^)]*\)', '', 'g')
+              <> regexp_replace(col_name, '\s*\([^)]*\)', '', 'g')
     )
     SELECT DISTINCT specieskey, field, name, entry_label, search_norm(match_text) AS norm
     FROM names
@@ -116,7 +129,8 @@ SEARCH_SQL = """
                     WHEN n.norm LIKE q.q || '%' OR n.norm LIKE '% ' || q.q || '%' THEN 1
                     ELSE 2 END AS tier,
                CASE n.field WHEN 'col_name' THEN 0 WHEN 'english_name' THEN 1
-                            WHEN 'bcsee_scientific_label' THEN 2 ELSE 3 END AS field_order
+                            WHEN 'merged_name' THEN 2 WHEN 'bcsee_scientific_label' THEN 3
+                            ELSE 4 END AS field_order
         FROM search_names AS n, q
         WHERE n.norm LIKE '%' || q.q || '%'
     ),
@@ -173,13 +187,19 @@ def normalise(cursor, query):
 
 def display_names(details, match, name_source, status_source):
     """The names to show for a result, in the agreed order: the card name,
-    the English name, then the BCSEE name that matched if it is neither.
-    Each says which field it is and where it comes from."""
+    the English name, then the merged name or BCSEE name that matched if
+    it is neither. Each says which field it is and where it comes from: a
+    merged name from the card's name source (the Catalogue of Life), a
+    BCSEE name from BCSEE."""
     names = [{"text": details["col_name"], "field": "col_name", "source": name_source}]
     english = english_name(details["entries"])
     if english:
         names.append({"text": english, "field": "english_name", "source": status_source})
 
+    if match["field"] == "merged_name":
+        shown = {name["text"].lower() for name in names}
+        if match["text"].lower() not in shown:
+            names.append({"text": match["text"], "field": "merged_name", "source": name_source})
     if match["field"] in ("bcsee_scientific_label", "bcsee_entry_english_name"):
         shown = {name["text"].lower() for name in names}
         if match["text"].lower() not in shown:

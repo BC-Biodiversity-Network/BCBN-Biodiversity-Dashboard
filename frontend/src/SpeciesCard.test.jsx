@@ -425,6 +425,53 @@ describe('records and merged keys', () => {
     expect(panel.textContent).toContain('You searched for VM8MB, an old key that was merged into 79DVG')
     expect(panel.textContent).toContain('Includes 116 records filed under key VM8MB, merged into this species')
     expect(panel.textContent).not.toContain('no date')
+    expect(panel.querySelector('.card-previous-name')).toBeNull()
+  })
+
+  // Cooper's Hawk after VP2T6 (Accipiter cooperii) was merged into CVW5J.
+  function hawkCard(overrides = {}) {
+    return makeCard({
+      specieskey: 'CVW5J', requested_key: 'CVW5J',
+      name: {
+        col_name: 'Astur cooperii', col_authorship: '(Bonaparte, 1828)',
+        scientificname: 'Astur cooperii (Bonaparte, 1828)',
+        name_source: 'Catalogue of Life, via GBIF', col_release: 'COL26.6 XR (ChecklistBank 315557)',
+        merged_names: [{ key: 'VP2T6', col_name: 'Accipiter cooperii', col_authorship: '(Bonaparte, 1828)' }],
+      },
+      records: { record_count: 104703, records_no_year: 9, first_year: 1887, last_year: 2026,
+                 n_datasets: 25, merged_keys: ['VP2T6'], merged_record_count: 667 },
+      ...overrides,
+    })
+  }
+
+  it('shows the old name of a key merged as a synonym, and says why it was merged', async () => {
+    const { panel } = await showCard(hawkCard())
+    expect(panel.querySelector('.card-previous-name').textContent)
+      .toBe('Previously known as: Accipiter cooperii (Bonaparte, 1828)')
+    expect(panel.querySelector('.card-previous-name i').textContent).toBe('Accipiter cooperii')
+    const records = within(panel).getByRole('region', { name: 'Records' }).textContent
+    expect(records).toContain('Includes 667 records filed under key VP2T6, merged into this species ' +
+      'because the Catalogue of Life lists its name as a synonym of this species.')
+    expect(records).not.toContain('exactly the same')
+  })
+
+  it('says the old key was a synonym when it was typed', async () => {
+    stubCard(hawkCard({ requested_key: 'VP2T6', merged_from: 'VP2T6' }))
+    render(<SpeciesCard requestedKey="VP2T6" meta={META} onClose={() => {}} />)
+    await screen.findByRole('heading', { level: 2 })
+    expect(screen.getByRole('complementary').textContent).toContain(
+      'You searched for VP2T6, an old key that was merged into CVW5J: the Catalogue of Life lists ' +
+      'its name, Accipiter cooperii (Bonaparte, 1828), as a synonym of this species.')
+  })
+
+  it('names the reason for each key when same-name and synonym merges are mixed', async () => {
+    const card = hawkCard()
+    card.records = { ...card.records, merged_keys: ['OLD1', 'VP2T6'], merged_record_count: 670 }
+    const { panel } = await showCard(card)
+    expect(within(panel).getByRole('region', { name: 'Records' }).textContent).toContain(
+      'Includes 670 records filed under keys OLD1, VP2T6, merged into this species: OLD1 because the ' +
+      'species name is exactly the same, VP2T6 because the Catalogue of Life lists its name as a ' +
+      'synonym of this species.')
   })
 })
 

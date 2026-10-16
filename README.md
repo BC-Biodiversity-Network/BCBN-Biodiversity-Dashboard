@@ -761,6 +761,11 @@ the Catalogue of Life name and authorship with `name_source` and
 top datasets and the BCSEE statuses. An old key that was merged gives the
 kept key's card with `merged_from` set; any other key without a card,
 including a species BCSEE lists but with no records in BC, gives 404.
+`name.merged_names` lists each key merged in under another Catalogue of Life
+name (a synonym merge, such as Accipiter cooperii into Astur cooperii) as
+`key`, `col_name` and `col_authorship`, from the card's `merged_names`
+column; a name that differs only by a subgenus in brackets is the same name
+and is left out, so it is empty for every same-name merge.
 
 - Every BCSEE status entry, and the BCSEE block itself, carries
   `status_source`, `status_source_date` and `status_pulled_on`. The English
@@ -787,7 +792,9 @@ including a species BCSEE lists but with no records in BC, gives 404.
 best first, up to `limit` (default 20, at most 50). It searches the card's
 Catalogue of Life name (also without its subgenus, so "Culex pipiens" finds
 "Culex (Culex) pipiens"), the BCSEE English name of the species, the English
-names of its other BCSEE entries, the BCSEE scientific labels, and an exact
+names of its other BCSEE entries, the BCSEE scientific labels, the name of a
+key merged in under another name (`merged_name`, as in `name.merged_names`
+on the card, so "Accipiter cooperii" finds Astur cooperii), and an exact
 species key in any letter case (an old merged key gives the kept card with
 `merged_from`). Names and query are compared case-insensitively, without
 accents, apostrophes or punctuation, and with a hybrid sign or a lone "x"
@@ -796,8 +803,8 @@ tolerance. A typed key comes first, then names equal to the query, then names
 with a word starting with it, then names holding it anywhere; ties go to the
 species with more records, and each species appears once. Each result says
 which name matched (`match`) and lists its names in order (`display_names`:
-the card name, the English name, then the BCSEE name that matched), each with
-its source; an English name that belongs to one BCSEE entry rather than the
+the card name, the English name, then the merged name or BCSEE name that
+matched), each with its source; an English name that belongs to one BCSEE entry rather than the
 whole species is marked `bcsee_entry_english_name`. Species BCSEE lists but
 with no records in BC have no card and are never found. A query with fewer
 than 2 letters or digits gives 400.
@@ -987,7 +994,9 @@ shows, top to bottom:
   included) in italics, with its authorship exactly as in the Catalogue of
   Life file and a "?" that explains it, using the card's own authorship and
   name, with a sentence on what parentheses mean only when the authorship has
-  them (cards with no authorship, 454 of 38,992, show no "?"); the
+  them (cards with no authorship, 454 of 38,992, show no "?"); under it,
+  for a key merged in under another name, "Previously known as:" with that
+  name and authorship (placeholder wording, to be decided); the
   classification from kingdom to genus; and the common name labelled "Common name from
   BCSEE". When BCSEE lists separate species on the key, no common name is
   shown here; each BCSEE entry shows its own.
@@ -1004,7 +1013,10 @@ shows, top to bottom:
   same, and under each entry when they differ. "Not in BCSEE" has its own
   message.
 - the records: count, years, how many have no date, datasets and the
-  largest datasets (linked to GBIF), and how many came from merged keys.
+  largest datasets (linked to GBIF), and how many came from merged keys and
+  why each was merged: the same species name, or a name the Catalogue of
+  Life lists as a synonym of this species (placeholder wording). A card
+  opened from a typed old key says the same.
 - a Sources section: the Catalogue of Life release with its official
   citation and licence, where the classification comes from, BCSEE cited the
   way the Conservation Data Centre asks, the GBIF download cited the way GBIF

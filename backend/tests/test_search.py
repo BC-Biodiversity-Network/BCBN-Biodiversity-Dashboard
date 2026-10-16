@@ -203,3 +203,25 @@ def test_query_is_normalised_in_the_response(client):
     """The response shows the query as it was searched."""
     response = search(client, "  Scouler's   WILLOW ")
     assert response["normalised_query"] == "scoulers willow"
+
+
+def test_merged_name_finds_only_the_kept_card(tmp_path):
+    """The name of a key merged under another name finds the kept card, says
+    it matched a merged name with the Catalogue of Life as its source, and
+    lists it after the card name. A name that differs only by a subgenus
+    stays a card-name match."""
+    cards = (f"SELECT * REPLACE (CASE specieskey "
+             f"WHEN 'BBBB' THEN [{{'key': 'OLD1', 'name': 'Salix oldname', 'authorship': ''}}] "
+             f"WHEN 'CCCC' THEN [{{'key': 'OLD9', 'name': 'Bombus vosnesenskii', 'authorship': ''}}] "
+             f"END AS merged_names) FROM ({CARD_SQL})")
+    write_test_data(tmp_path, card_sql=cards)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        found = search(client, "Salix oldname")
+        assert keys(found) == ["BBBB"]
+        result = found["results"][0]
+        assert result["match"]["field"] == "merged_name"
+        assert result["display_names"][0]["field"] == "col_name"
+        assert result["display_names"][-1] == {
+            "text": "Salix oldname", "field": "merged_name",
+            "source": "Catalogue of Life, via GBIF"}
+        assert search(client, "Bombus vosnesenskii")["results"][0]["match"]["field"] == "col_name"

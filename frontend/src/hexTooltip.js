@@ -15,3 +15,17 @@ export function getTooltip({ object }) {
     `,
   }
 }
+
+// Builds the box that appears when the pointer is over a hexagon on the
+// species map: how many records of this species are in it. Returning null
+// means no hexagon is under the pointer, so no box is shown.
+export function getSpeciesTooltip({ object }) {
+  if (!object) {
+    return null
+  }
+
+  const count = object.occurrences
+  return {
+    html: `<div><strong>${count.toLocaleString()}</strong> ${count === 1 ? 'record' : 'records'} of this species</div>`,
+  }
+}

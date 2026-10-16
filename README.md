@@ -795,6 +795,67 @@ The overview map reads `frontend/public/data/bc_hex_r4.csv.gz` to
 committed. They are plain files, so the overview map works with no API behind
 it; only the species search needs the API, and says so if it cannot reach it.
 
+While a species card is open, the map shows that species' own hexagons
+instead of the overview (`GET /api/species/{key}/hexes?res=N`, with no year
+filter). It uses the same zoom tiers as the overview (resolution 4 to 7,
+`frontend/src/zoomTiers.js`). Each resolution is fetched the first time its
+tier is reached and then kept, so zooming back costs nothing. An answer that
+arrives after the user has moved on is kept but not shown. When a species is
+picked, the map moves to fit its hexagons beside the card, no closer than zoom
+8. Closing the card brings back the overview at the current view. If the
+species map cannot load, the legend says so and the card still works. The
+legend gives the species name, the colours, the records and hexagons at the
+current resolution ("964,801 records in 17,412 hexagons"), and the note that
+the maps show recording effort. The hover box gives the number of records of
+that species in the hexagon.
+
+All three maps use fixed log-scale bins (`frontend/src/colours.js`). Each bin
+starts at the number shown in the legend, and the last bin has no upper limit:
+
+| Map | Bins start at | Colours |
+| --- | --- | --- |
+| Overview, species | 1, 3, 10, 30, 100, 300, 1K, 3K+ | 8 blues |
+| Overview, records | 1, 10, 100, 1K, 10K, 100K, 1M+ | 7 oranges |
+| One species | 1, 3, 10, 30, 100, 300, 1K, 3K+ | 8 pinks to purples |
+
+The blue and orange ramps are the earlier 9-step ramps, resampled into 8 and
+7 evenly spaced steps (by CIEDE2000 colour difference), so neighbouring bins
+stay about equally far apart.
+
+All three maps draw hexagons nearly solid, like the Biodiversité Québec Atlas:
+opacity rises from 0.85 in the first bin to 0.95 in the last. With the white
+outlines below keeping hexagons apart, near-solid fills make each colour look
+the way the legend shows it, and every colour comparison came out better than
+at the earlier 0.55 to 0.82. Place names are drawn above the hexagons, so
+they stay readable; the terrain and lakes under the hexagons do not show.
+
+The species map goes from saturated pink through magenta and purple to a very
+dark purple, in the style of the Biodiversité Québec Atlas "Number of
+species" map. It was chosen after comparing single-hue ramps and established
+palettes (viridis, inferno, ColorBrewer YlOrRd and YlGnBu). It never looks
+like either overview, and its darkest step stops short of black so it still
+reads as a colour. Its first bin is deliberately strong, a saturated pink
+rather than a pale tint, because most species are rare: the 1-to-2-record bin
+is the colour most species maps are mostly made of, and a lone hexagon of a
+rare species has to be easy to find on forest, parks and water.
+
+Every hexagon on all three maps has a 1-pixel white outline, so each one
+stands apart from its neighbours. The width is in screen pixels, so it stays
+thin at every zoom. Each zoom tier starts with hexagons about 30 pixels
+across, so the line is always a thin edge. Only when zooming out past the
+opening view, where hexagons shrink below 20 pixels, does it fade out, and it
+is gone at 8 pixels, so the far-out views do not turn into a white mesh.
+
+The legend draws each swatch with its bin's opacity over the basemap's land
+colour, with a thin white line between swatches like the outlines, so it
+matches the map.
+
+The map code is split by job: `HexMap.jsx` (the map, its layers and moving to
+a species), `Legend.jsx`, `colours.js` (bins and colours), `zoomTiers.js`
+(which resolution each zoom shows), `speciesHexes.js` (fetching and keeping
+the species map) and `hexTooltip.js` (the hover boxes). `App.jsx` loads the
+overview files and holds which species is open.
+
 The search box (`frontend/src/SearchBox.jsx`) searches a quarter of a second
 after the last key press, and only once there are at least 2 letters or
 digits, the API's own rule. The arrow keys move through the results, Enter
@@ -860,10 +921,9 @@ npx -y npm@11 install --package-lock-only --save-dev <package>@<version>
 npm ci
 ```
 
-Vitest 4.1 lists Node 20, 22 and 24 or later, not this Mac's Node 23.3, so
-`npm ci` prints an EBADENGINE warning; the tests run fine. Moving to Node 24
-(the current long-term support version) would remove the warning and allow
-Vitest 5 and newer jsdom.
+This Mac now runs Node 26.12 and npm 11.20 (npm 11 is the version the steps
+above call for), which also clears the EBADENGINE warning Vitest gave under
+Node 23.3.
 
 **maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with
 `react-map-gl` 8.1.3: the basemap style never finishes loading, so no tiles are

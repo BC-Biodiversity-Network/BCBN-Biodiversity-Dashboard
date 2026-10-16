@@ -101,3 +101,10 @@ export function fetchSpecies(key, { signal } = {}) {
 export function fetchMeta({ signal } = {}) {
   return fetchJson('/meta', signal)
 }
+
+// Fetches the species map at one resolution (/api/species/{key}/hexes?res=).
+// key can be an old merged key: the API then sends the kept key's map. No
+// year filter yet, so every record is counted.
+export function fetchSpeciesHexes(key, resolution, { signal } = {}) {
+  return fetchJson(`/species/${encodeURIComponent(key)}/hexes?res=${resolution}`, signal)
+}

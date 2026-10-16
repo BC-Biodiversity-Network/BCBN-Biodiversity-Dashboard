@@ -147,9 +147,23 @@ body {
   display: flex;
 }
 
+/* The swatches are see-through like the hexagons, so they sit on the
+   basemap's land colour (#f8f4f0, the OpenFreeMap "bright" background) and
+   look like a hexagon of that bin on bare land. */
+.legend-swatches {
+  background: #f8f4f0;
+}
+
 .legend-swatch {
   flex: 1;
   height: 12px;
+}
+
+/* A 1-pixel white line between swatches, like the outline between hexagons
+   on the map. Drawn inside the swatch, so the numbers underneath stay lined
+   up with the colours. */
+.legend-swatch + .legend-swatch {
+  box-shadow: inset 1px 0 0 #fff;
 }
 
 .legend-edge {
@@ -158,6 +172,19 @@ body {
   font-size: 10px;
   color: #555;
   text-align: left;
+}
+
+/* Under the species map's colours: how many records in how many hexagons,
+   and whether the map is loading or failed. */
+.legend-summary,
+.legend-status {
+  margin-top: 5px;
+  font-size: 11px;
+  color: #333;
+}
+
+.legend-status.error {
+  color: #a3261b;
 }
 
 .legend-note {

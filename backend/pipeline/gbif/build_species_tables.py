@@ -25,8 +25,11 @@ Output, in --outdir:
                                 Life name and authorship, taxonomy,
                                 record counts, first and last year, number
                                 of datasets, map extent, the species image
-                                and the top 5 datasets, and which keys were
-                                merged into it. This is also the separate
+                                and the top 5 datasets, which keys were
+                                merged into it, and (merged_names) the
+                                Catalogue of Life name and authorship of
+                                each merged key whose name is not the
+                                card's own. This is also the separate
                                 species table, so the taxonomy columns could
                                 later be dropped from bc_occurrence.
 
@@ -56,8 +59,13 @@ Merging keys (--key-merge):
   the same species entered twice. make_species_key_merge.py lists the pairs
   to merge. As a safety check, every row is refused unless both of its keys
   have records in bc_occurrence under exactly one species name, and it is
-  the same name for both keys; any refused row stops the run before
-  anything is built. With --key-merge, every record of an
+  the same name for both keys, or else the Catalogue of Life file
+  (--col-names) lists the old key's exact name and authorship as a synonym
+  (not an ambiguous one) whose parent is the kept key: the rule
+  make_species_key_merge.py applies to its hand-checked rows, checked again
+  here with the same code (col_synonym_problems). Any refused row stops the
+  run before anything is built. Such a card gets the old key's name and
+  authorship in merged_names, so the page can show it. With --key-merge, every record of an
   old_key is counted under its kept_key before anything is built, so a
   merged species has one row in the card, one set of hexagons and its
   records summed. The card takes the kept key's own taxonomy and
@@ -138,6 +146,7 @@ import time
 
 import duckdb
 
+from make_species_key_merge import col_synonym_problems, read_col_entries
 from safe_outputs import (clear_temporary, replace_outputs, report_not_replaced,
                           temporary_path)
 
@@ -207,12 +216,15 @@ def read_key_merge(path):
     return pairs
 
 
-def check_merge_species(con, occurrence_path, merge_pairs, path):
+def check_merge_species(con, occurrence_path, merge_pairs, path, col_names_path):
     """Stop the run, listing every bad row, unless each merge row's two keys
     have records in bc_occurrence under exactly one species name each, and
-    the two names are exactly the same. A key with no records, or with more
-    than one species name, makes its row bad too, because the names cannot
-    be confirmed."""
+    the two names are exactly the same or the old key's name is a Catalogue
+    of Life synonym of the kept key (col_synonym_problems, the rule
+    make_species_key_merge.py uses for hand-checked rows). A key with no
+    records, or with more than one species name, makes its row bad too,
+    because the names cannot be confirmed. Prints every row accepted as a
+    synonym."""
     keys = sorted({k for old, kept, _ in merge_pairs for k in (old, kept)})
     if not keys:
         return
@@ -226,19 +238,32 @@ def check_merge_species(con, occurrence_path, merge_pairs, path):
                 GROUP BY specieskey"""
         ).fetchall()
     }
-    bad = []
+    bad, differ = [], []
     for old, kept, _ in merge_pairs:
         problems = [f"{key} has no records in bc_occurrence" for key in (old, kept)
                     if key not in names]
         problems += [f"{key} has {len(names[key])} species names {sorted(names[key])}"
                      for key in (old, kept) if key in names and len(names[key]) != 1]
-        if not problems and names[old] != names[kept]:
-            problems.append(f"species names differ: '{names[old][0]}' vs '{names[kept][0]}'")
         if problems:
             bad.append(f"{old} -> {kept}: " + "; ".join(problems))
+        elif names[old] != names[kept]:
+            differ.append((old, kept))
+    # Different names are only allowed for a Catalogue of Life synonym.
+    if differ:
+        by_id, synonyms_under = read_col_entries(col_names_path, [k for pair in differ for k in pair])
+        for old, kept in differ:
+            problems = col_synonym_problems(old, kept, by_id, synonyms_under)
+            if problems:
+                bad.append(f"{old} -> {kept}: species names differ: '{names[old][0]}' vs "
+                           f"'{names[kept][0]}', and " + "; ".join(problems))
+            else:
+                print(f"Key merge: {old} ({names[old][0]}) -> {kept} ({names[kept][0]}) accepted: "
+                      f"the Catalogue of Life lists the old name as a synonym of {kept}")
     if bad:
         raise SystemExit(f"{path}: {len(bad)} merge row(s) refused, the two keys of a merge "
-                         f"must have exactly the same species name:\n  " + "\n  ".join(bad))
+                         f"must have exactly the same species name, or the old key's name "
+                         f"must be a Catalogue of Life synonym of the kept key:\n  "
+                         + "\n  ".join(bad))
 
 
 def register_records(con, occurrence_path, merge_pairs):
@@ -298,6 +323,12 @@ def build_species_card(con, image_path, datasets_path, col_names_path, col_relea
 
     The image is the best of the images of the key and the keys merged
     into it: lowest license_rank, then the kept key's own image.
+
+    merged_names lists, for each key merged into this one whose Catalogue
+    of Life name is not the card's own (a synonym merge such as Accipiter
+    cooperii into Astur cooperii), that key with its Catalogue of Life name
+    and authorship, as key, name and authorship. It is NULL when there is
+    none, which is every same-name merge.
     """
     con.execute(
         f"""
@@ -373,6 +404,23 @@ def build_species_card(con, image_path, datasets_path, col_names_path, col_relea
                             ORDER BY records DESC, datasetkey) AS top_datasets
                 FROM dataset_counts
                 GROUP BY specieskey
+            ),
+            merge_col AS (
+                SELECT id, scientific_name, coalesce(authorship, '') AS authorship
+                FROM read_parquet('{col_names_path}')
+                WHERE id IN (SELECT old_key FROM key_merge)
+                   OR id IN (SELECT kept_key FROM key_merge)
+            ),
+            merged_names AS (
+                SELECT m.kept_key AS specieskey,
+                       list(struct_pack(key := m.old_key, name := o.scientific_name,
+                                        authorship := o.authorship)
+                            ORDER BY m.old_key) AS merged_names
+                FROM key_merge AS m
+                JOIN merge_col AS o ON o.id = m.old_key
+                JOIN merge_col AS k ON k.id = m.kept_key
+                WHERE o.scientific_name <> k.scientific_name
+                GROUP BY m.kept_key
             )
             SELECT s.specieskey,
                    CASE WHEN c.id IS NULL THEN t.species
@@ -399,12 +447,13 @@ def build_species_card(con, image_path, datasets_path, col_names_path, col_relea
                    i.license_source AS image_license_source,
                    i.image_specieskey,
                    d.top_datasets,
-                   s.merged_keys, s.merged_record_count
+                   s.merged_keys, s.merged_record_count, n.merged_names
             FROM stats AS s
             LEFT JOIN taxonomy AS t ON t.specieskey = s.specieskey
             LEFT JOIN col AS c ON c.id = s.specieskey
             LEFT JOIN images AS i ON i.specieskey = s.specieskey
             LEFT JOIN top_datasets AS d ON d.specieskey = s.specieskey
+            LEFT JOIN merged_names AS n ON n.specieskey = s.specieskey
             ORDER BY t.species, s.specieskey
         ) TO '{out_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """
@@ -694,7 +743,7 @@ def main():
     release = read_col_release(col_names_path)
     col_release_label = f"{release.get('alias')} (ChecklistBank {release.get('key')})".replace("'", "")
     merge_pairs = read_key_merge(args.key_merge) if args.key_merge else []
-    check_merge_species(con, occurrence_path, merge_pairs, args.key_merge)
+    check_merge_species(con, occurrence_path, merge_pairs, args.key_merge, col_names_path)
     register_records(con, occurrence_path, merge_pairs)
     os.makedirs(args.outdir, exist_ok=True)
     clear_temporary(outputs)

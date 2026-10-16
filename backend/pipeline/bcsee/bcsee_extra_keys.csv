@@ -1,2 +1,1 @@
 element_code,extra_gbif_species_key,bcsee_scientific_name,extra_gbif_scientific_name,reason,checked_by,checked_date
-ABNKC12040,CVW5J,Accipiter cooperii,Astur cooperii,"Cooper's Hawk. Catalogue of Life 315557 lists Accipiter cooperii (Bonaparte, 1828) as synonym 64FV9 under Astur cooperii (CVW5J), but also as its own accepted key VP2T6, which GBIF matched BCSEE's name to. CVW5J holds most BC records (104,036 against 667).",Lucia,2026-10-16

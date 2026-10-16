@@ -1,1 +1,2 @@
-old_key,kept_key,species,evidence
+old_key,kept_key,old_name,old_authorship,kept_name,kept_authorship,col_synonym_id,reason,checked_by,checked_date
+VP2T6,CVW5J,Accipiter cooperii,"(Bonaparte, 1828)",Astur cooperii,"(Bonaparte, 1828)",64FV9,"Cooper's Hawk. Catalogue of Life 315557 has Accipiter cooperii (Bonaparte, 1828) both as its own accepted key VP2T6 and as synonym 64FV9 under Astur cooperii CVW5J. BCSEE's Yellow (ABNKC12040) was matched to VP2T6 (667 records) while CVW5J holds 104,036.",Lucia,2026-10-16

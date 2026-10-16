@@ -291,6 +291,7 @@ def test_extra_keys_file_must_exist_and_be_complete(tmp_path):
 
 
 def test_the_tracked_extra_keys_file_reads():
-    """The real bcsee_extra_keys.csv next to the script is well formed."""
+    """The real bcsee_extra_keys.csv next to the script is well formed (it
+    may hold only its header)."""
     extra = bcsee.read_extra_keys(bcsee.EXTRA_KEYS_FILE)
-    assert len(extra) >= 1
+    assert list(extra.columns) == bcsee.EXTRA_KEY_COLUMNS

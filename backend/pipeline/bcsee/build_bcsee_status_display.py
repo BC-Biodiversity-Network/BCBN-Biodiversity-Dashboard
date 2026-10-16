@@ -115,9 +115,11 @@ The species key merge (--key-merge, off by default):
 
 Extra keys (bcsee_extra_keys.csv):
   GBIF matches each BCSEE entry to one key. Sometimes the same species also
-  has a second key under another name, with most of the records on it: BCSEE
-  calls Cooper's Hawk Accipiter cooperii, which is matched to VP2T6, while
-  most records are on Astur cooperii, CVW5J. Each row of bcsee_extra_keys.csv
+  has a second key under another name, with most of the records on it. (The
+  first case, Cooper's Hawk, was BCSEE's Accipiter cooperii matched to VP2T6
+  while most records were on Astur cooperii, CVW5J; the two keys are now
+  merged by the species key merge instead, so the list is empty.) Each row
+  of bcsee_extra_keys.csv
   says that one BCSEE entry also applies to one more key, after a person has
   checked it. The keys are never merged: the entry stays on its own key and
   a copy is added on the extra key, after the overrides and the key merge.

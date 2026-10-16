@@ -4,15 +4,20 @@ make_species_key_merge.py
 Decide which pairs of specieskeys that share a species name are the same
 species, and write them as a merge list for build_species_tables.py
 (--key-merge). Only pairs that pass every rule are merged; anything else
-stays as two separate species.
+stays as two separate species. Pairs checked by hand can add a key whose
+name the Catalogue of Life lists as a synonym of the kept key (see below).
 
 Input:  duplicate_species_lookup.csv, from
         backend/exploration/gbif/lookup_duplicate_species_keys.py: one row per
         key, with its classification (kingdom to species), record count, and
         the Catalogue of Life status and authorship.
         species_key_merge_manual.csv (next to this script): pairs checked by
-        hand, with columns old_key, kept_key, species, evidence. It may be
-        empty (header only).
+        hand, with columns old_key, kept_key, old_name, old_authorship,
+        kept_name, kept_authorship, col_synonym_id, reason, checked_by and
+        checked_date. It may be empty (header only).
+        col_names_<release>.parquet (--col-names), from fetch_col_names.py:
+        the Catalogue of Life release the download used. Only needed when
+        the manual file has rows, to check them.
 Output, next to the input:
         species_key_merge.csv       one row per merged pair: old_key (the key
                                     not kept), kept_key, species, the status,
@@ -49,13 +54,32 @@ Which key is kept: the accepted one over any other status; then the one
 with more records; then the key that sorts first alphabetically, only so
 that every run gives the same answer.
 
-Pairs checked by hand go in species_key_merge_manual.csv. A manual row may
-skip the iron rule and the empty-values rule, and its kept_key is used as
-given, but both of its keys must be in the lookup with exactly the same
-species name as each other and as the row's species column, or the script
-stops with an error. A manual row replaces an automatic decision on the same
-keys. The script also stops if the list would map a key twice, or map a key
-onto a key that is itself mapped away, so the merge is always one step.
+Pairs checked by hand go in species_key_merge_manual.csv. They are the only
+exception to the iron rule, and a manual row is accepted only if all of
+these hold (MANUAL_ROW_RULES, checked against the Catalogue of Life file
+given with --col-names):
+  1. COL synonym: the Catalogue of Life lists the old key's exact name and
+     exact authorship as a synonym (status "synonym", not "ambiguous
+     synonym") whose parent is the kept key, and that synonym's id is the
+     row's col_synonym_id. Comparing the synonym's authorship with the old
+     key's own keeps out a different species that only shares the name
+     (Lasius niger listed under Tetramorium caespitum, with another
+     author). The two keys' own authorships are not compared, because a
+     plant moved to another genus gets a new combining author
+     (Rhytidiadelphus triquetrus (Hedw.) Warnst. and Hylocomiadelphus
+     triquetrus (Hedw.) Ochyra & Stebel).
+  2. Documented: reason, checked_by and checked_date are not blank.
+  3. Typo guard: both keys are in the Catalogue of Life file, the kept key
+     is accepted there, and old_name, old_authorship, kept_name and
+     kept_authorship are exactly the names and authorships it gives.
+If any row fails, the script stops with every problem listed and writes
+nothing. build_species_tables.py checks rule 1 again before it merges two
+keys whose species names differ. A manual row's kept_key is used as given,
+and it replaces an automatic decision on the same keys. Its record counts
+are left blank in species_key_merge.csv, because its keys are usually not in
+the lookup; build_species_tables.py prints the records moved. The script also
+stops if the list would map a key twice, or map a key onto a key that is
+itself mapped away, so the merge is always one step.
 
 How author_match normalises the authors (the same normalising used before):
   - In "A ex B" only B counts (the author after the last "ex"), inside and
@@ -79,7 +103,9 @@ Run order:
         -> build_hex_aggregates.py
 
 Run (from backend/):
-    python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
+    python pipeline/gbif/make_species_key_merge.py \\
+        --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv \\
+        --col-names ~/bcbn/data/col/315557/col_names_315557.parquet
 """
 
 import argparse
@@ -365,6 +391,9 @@ def read_lookup(path):
     return names, {row["specieskey"]: row for row in rows}
 
 
+MANUAL_COLUMNS = ["old_key", "kept_key", "old_name", "old_authorship", "kept_name",
+                  "kept_authorship", "col_synonym_id", "reason", "checked_by", "checked_date"]
+
 MERGE_COLUMNS = [
     "old_key", "kept_key", "species",
     "old_status", "kept_status", "old_record_count", "kept_record_count",
@@ -413,36 +442,147 @@ def not_merged_row(species, keys, details):
 
 
 def read_manual(path):
-    """Read the hand-checked pairs, if the file exists, as a list of dicts.
-    A file with only its header row gives an empty list."""
+    """Read the hand-checked pairs, if the file exists, as a list of dicts
+    with every value stripped of spaces. A file with only its header row
+    gives an empty list. Stops if a column is missing."""
     if not os.path.exists(path):
         return []
     with open(path, newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
-        missing = {"old_key", "kept_key", "species", "evidence"} - set(reader.fieldnames or [])
+        missing = [c for c in MANUAL_COLUMNS if c not in (reader.fieldnames or [])]
         if missing:
-            raise SystemExit(f"{path} has no column(s) {sorted(missing)}")
-        return [row for row in reader if any((v or "").strip() for v in row.values())]
+            raise SystemExit(f"{path} has no column(s) {missing}")
+        rows = [{k: (v or "").strip() for k, v in row.items()} for row in reader]
+    return [row for row in rows if any(row.values())]
 
 
-def check_manual(manual, by_key, path):
-    """Stop with a clear error if a manual row's keys are not both in the
-    lookup, or their species names are not exactly the same as each other
-    and as the row's species column."""
+def read_col_entries(col_names_path, keys):
+    """Return what the Catalogue of Life file says about the given keys and
+    about the synonyms listed under them, as (by_id, synonyms_under):
+    by_id maps each key found to its row (id, parent_id, status, rank,
+    scientific_name, authorship), and synonyms_under maps each key to the
+    synonym and ambiguous synonym rows whose parent it is. Authorships are
+    text, empty when the file has none. Plain SQL, so it runs on DuckDB
+    0.10.3."""
+    import duckdb  # only needed when there are rows to check
+
+    keys = sorted(set(keys))
+    if not keys:
+        return {}, {}
+    con = duckdb.connect()
+    con.execute("CREATE TEMP TABLE wanted (id VARCHAR)")
+    con.executemany("INSERT INTO wanted VALUES (?)", [(k,) for k in keys])
+    columns = ["id", "parent_id", "status", "rank", "scientific_name", "authorship"]
+    select = ", ".join(f"coalesce(c.{col}, '')" for col in columns)
+    by_id = {row[0]: dict(zip(columns, row)) for row in con.execute(
+        f"SELECT {select} FROM read_parquet('{col_names_path}') AS c "
+        f"JOIN wanted AS w ON w.id = c.id").fetchall()}
+    synonyms_under = defaultdict(list)
+    for row in con.execute(
+            f"SELECT {select} FROM read_parquet('{col_names_path}') AS c "
+            f"JOIN wanted AS w ON w.id = c.parent_id "
+            f"WHERE c.status IN ('synonym', 'ambiguous synonym')").fetchall():
+        entry = dict(zip(columns, row))
+        synonyms_under[entry["parent_id"]].append(entry)
+    con.close()
+    return by_id, synonyms_under
+
+
+def col_synonym_problems(old_key, kept_key, by_id, synonyms_under, synonym_id=None):
+    """Rule 1, the COL synonym rule: return what is wrong (an empty list if
+    nothing) with merging old_key into kept_key. The Catalogue of Life must
+    list the old key's exact name and exact authorship as a synonym (not an
+    ambiguous one) whose parent is the kept key. With synonym_id, that
+    synonym's id must also be synonym_id. build_species_tables.py calls this
+    too, without synonym_id. by_id and synonyms_under come from
+    read_col_entries()."""
+    old = by_id.get(old_key)
+    if old is None or kept_key not in by_id:
+        return ["the keys must both be in the Catalogue of Life file to check the synonym"]
+    same_name = [s for s in synonyms_under.get(kept_key, [])
+                 if s["scientific_name"] == old["scientific_name"]]
+    exact = [s for s in same_name if s["authorship"] == old["authorship"]]
+    plain = [s for s in exact if s["status"] == "synonym"]
+    shown = f"{old['scientific_name']} {old['authorship']}".strip()
+    if not same_name:
+        return [f"the Catalogue of Life does not list {shown} as a synonym of {kept_key}"]
+    if not exact:
+        others = "; ".join(f"{s['id']} with authorship '{s['authorship']}'" for s in same_name)
+        return [f"the Catalogue of Life lists {old['scientific_name']} under {kept_key} only "
+                f"with another authorship than {old_key}'s '{old['authorship']}' ({others})"]
+    if not plain:
+        return [f"the Catalogue of Life lists {shown} under {kept_key} only as an ambiguous "
+                f"synonym ({', '.join(s['id'] for s in exact)})"]
+    if synonym_id is not None and synonym_id not in {s["id"] for s in plain}:
+        return [f"the synonym is {', '.join(s['id'] for s in plain)}, not "
+                f"col_synonym_id {synonym_id or '(blank)'}"]
+    return []
+
+
+def rule_col_synonym(row, by_id, synonyms_under):
+    """Rule 1 for one manual row (see col_synonym_problems)."""
+    return col_synonym_problems(row["old_key"], row["kept_key"], by_id, synonyms_under,
+                                synonym_id=row["col_synonym_id"])
+
+
+def rule_documented(row, by_id, synonyms_under):
+    """Rule 2: the row says why the pair is merged, who checked it and when."""
+    return [f"{column} is blank" for column in ("reason", "checked_by", "checked_date")
+            if not row[column]]
+
+
+def rule_matches_col(row, by_id, synonyms_under):
+    """Rule 3, the typo guard: both keys are in the Catalogue of Life file,
+    the kept key is accepted there, and the names and authorships written in
+    the row are exactly the ones it gives."""
+    problems = []
+    for side in ("old", "kept"):
+        entry = by_id.get(row[f"{side}_key"])
+        if entry is None:
+            problems.append(f"{side}_key {row[f'{side}_key']} is not in the Catalogue of Life file")
+            continue
+        for field, col in (("name", "scientific_name"), ("authorship", "authorship")):
+            if row[f"{side}_{field}"] != entry[col]:
+                problems.append(f"{side}_{field} is '{row[f'{side}_{field}']}', the Catalogue "
+                                f"of Life gives '{entry[col]}'")
+    kept = by_id.get(row["kept_key"])
+    if kept is not None and kept["status"] != "accepted":
+        problems.append(f"kept_key {row['kept_key']} is {kept['status']}, not accepted, in the "
+                        f"Catalogue of Life")
+    return problems
+
+
+# The rules every manual row must pass, in the order their problems are
+# listed. Kept in one list so a rule can be added or dropped in one place.
+MANUAL_ROW_RULES = [rule_col_synonym, rule_documented, rule_matches_col]
+
+
+def check_manual(manual, col_names_path, path):
+    """Check every manual row against MANUAL_ROW_RULES and return what the
+    Catalogue of Life file says about their keys (by_id). Stops with every
+    problem listed if any row fails, or if there are rows and no
+    --col-names to check them with."""
+    if not manual:
+        return {}
+    if not col_names_path or not os.path.exists(col_names_path):
+        raise SystemExit(f"{path} has {len(manual)} row(s); give the Catalogue of Life file "
+                         f"with --col-names to check them (not found: {col_names_path})")
+    keys = [row[k] for row in manual for k in ("old_key", "kept_key")]
+    by_id, synonyms_under = read_col_entries(col_names_path, keys)
     problems = []
     for row in manual:
-        old, kept = by_key.get(row["old_key"]), by_key.get(row["kept_key"])
-        if old is None or kept is None:
-            absent = [k for k in (row["old_key"], row["kept_key"]) if k not in by_key]
-            problems.append(f"{row['old_key']} -> {row['kept_key']}: key(s) {absent} not in "
-                            f"the lookup, so the species names cannot be checked")
-        elif not (old["species"] == kept["species"] == row["species"]):
-            problems.append(f"{row['old_key']} -> {row['kept_key']}: species names differ: "
-                            f"'{old['species']}' vs '{kept['species']}' (row says "
-                            f"'{row['species']}')")
+        found = [p for rule in MANUAL_ROW_RULES for p in rule(row, by_id, synonyms_under)]
+        problems += [f"{row['old_key']} -> {row['kept_key']}: {p}" for p in found]
     if problems:
-        raise SystemExit(f"{path}: manual rows refused, a manual merge must join two keys with "
-                         f"exactly the same species name:\n  " + "\n  ".join(problems))
+        raise SystemExit(f"{path}: manual rows refused:\n  " + "\n  ".join(problems))
+    return by_id
+
+
+def manual_key_row(entry):
+    """Return a Catalogue of Life entry in the shape of a lookup row, for
+    merge_row(). The record count is not known here, so it is None."""
+    return {"specieskey": entry["id"], "status": entry["status"], "record_count": None,
+            "authorship": entry["authorship"]}
 
 
 def check_one_step(merge):
@@ -483,13 +623,17 @@ def main():
     parser.add_argument("--manual", default=DEFAULT_MANUAL,
                         help="the hand-checked pairs (default: species_key_merge_manual.csv "
                              "next to this script)")
+    parser.add_argument("--col-names", default=None,
+                        help="col_names_<release>.parquet from fetch_col_names.py, the release "
+                             "the download used. Needed only when the manual file has rows.")
     args = parser.parse_args()
 
     lookup_path = os.path.expanduser(args.lookup)
     folder = os.path.dirname(os.path.abspath(lookup_path))
     names, by_key = read_lookup(lookup_path)
     manual = read_manual(args.manual)
-    check_manual(manual, by_key, args.manual)
+    col_names_path = os.path.expanduser(args.col_names) if args.col_names else None
+    col_by_id = check_manual(manual, col_names_path, args.manual)
 
     merge, separate = [], []
     for species in sorted(names):
@@ -507,8 +651,12 @@ def main():
         replaced = [m for m in merge if {m["old_key"], m["kept_key"]} & pair]
         merge = [m for m in merge if m not in replaced]
         separate = [s for s in separate if not ({s.get("key_1"), s.get("key_2")} & pair)]
-        merge.append(merge_row(by_key[row["kept_key"]], by_key[row["old_key"]], row["species"],
-                               "chosen by hand", f"manual: {row['evidence']}"))
+        merge.append(merge_row(
+            manual_key_row(col_by_id[row["kept_key"]]), manual_key_row(col_by_id[row["old_key"]]),
+            row["kept_name"], "chosen by hand",
+            f"manual: COL synonym {row['col_synonym_id']} "
+            f"({row['old_name']} {row['old_authorship']}); {row['reason']} "
+            f"(checked by {row['checked_by']}, {row['checked_date']})"))
         for m in replaced:
             print(f"NOTE: manual row {row['old_key']} -> {row['kept_key']} replaces "
                   f"{m['old_key']} -> {m['kept_key']} ({m['merge_reason']})")
@@ -523,13 +671,18 @@ def main():
 
     # Summary.
     auto = [m for m in merge if m["merge_reason"].startswith("automatic")]
-    moved = sum(m["old_record_count"] for m in merge)
+    # Manual rows have no record count here (see the top of this file).
+    moved = sum(m["old_record_count"] or 0 for m in merge)
     print(f"Lookup:  {lookup_path} ({len(names):,} names, {len(by_key):,} keys)")
     print(f"Manual:  {args.manual} ({len(manual)} rows)")
     print(f"Written: {merge_path}")
     print(f"         {separate_path}\n")
     print(f"Merged: {len(merge):,} pairs ({len(auto):,} automatic, {len(manual)} manual), "
-          f"{moved:,} records move to the kept key")
+          f"{moved:,} records move to the kept key"
+          + (" (not counting the manual rows)" if manual else ""))
+    for m in merge:
+        if m["merge_reason"].startswith("manual"):
+            print(f"  manual: {m['old_key']} -> {m['kept_key']} {m['species']}: {m['merge_reason']}")
     for label, column in [("why merged", "merge_reason"), ("which key was kept", "kept_reason"),
                           ("author_match", "author_match"), ("year_match", "year_match")]:
         counts = Counter(m[column] or "(empty)" for m in auto)

@@ -239,17 +239,45 @@ which pairs are merged. A pair merges automatically only if:
 Authors and years are not used to decide anything; `author_match` and
 `year_match` columns record them for review. The key kept is the accepted
 one, then the one with more records, then the one that sorts first
-alphabetically. Pairs checked by hand go in
-`backend/pipeline/gbif/species_key_merge_manual.csv` (empty for now): a
-manual row may skip rules 1 and 2, but the script refuses one whose two keys
-do not have exactly the same species name. `species_key_merge.csv` keeps the
-status, record count and authorship of both keys, so a merge can be switched
-or undone; `species_key_not_merged.csv` says which rule stopped each pair
-and, for a conflict, the level and the two values.
+alphabetically. `species_key_merge.csv` keeps the status, record count and
+authorship of both keys, so a merge can be switched or undone;
+`species_key_not_merged.csv` says which rule stopped each pair and, for a
+conflict, the level and the two values.
+
+**The one exception to the iron rule** is a hand-checked row in
+`backend/pipeline/gbif/species_key_merge_manual.csv` (columns `old_key`,
+`kept_key`, `old_name`, `old_authorship`, `kept_name`, `kept_authorship`,
+`col_synonym_id`, `reason`, `checked_by`, `checked_date`). It is accepted only
+if all of these hold, checked by the script against the Catalogue of Life
+file given with `--col-names`:
+
+1. The Catalogue of Life lists the old key's exact name and exact authorship
+   as a synonym (status "synonym", not "ambiguous synonym") whose parent is
+   the kept key, and that synonym's id is `col_synonym_id`. Comparing the
+   synonym's authorship with the old key's keeps out a different species
+   that only shares the name (Lasius niger listed under Tetramorium
+   caespitum with another author). The two keys' own authorships are not
+   compared, since a plant moved to another genus gets a new combining
+   author (Rhytidiadelphus triquetrus (Hedw.) Warnst. and Hylocomiadelphus
+   triquetrus (Hedw.) Ochyra & Stebel).
+2. `reason`, `checked_by` and `checked_date` are filled in.
+3. Both keys are in the Catalogue of Life file, the kept key is accepted
+   there, and the names and authorships in the row are exactly its own.
+
+Any row that fails stops the script with every problem listed. The rules
+are listed once, in `MANUAL_ROW_RULES`, so they are easy to change.
+`build_species_tables.py` checks rule 1 again, with the same code, before it
+merges two keys whose species names differ. A manual row's record counts are
+left blank in `species_key_merge.csv`; `build_species_tables.py` prints the
+records moved. The file holds one row: Cooper's Hawk, `VP2T6` Accipiter
+cooperii (Bonaparte, 1828) into `CVW5J` Astur cooperii (Bonaparte, 1828),
+through synonym `64FV9`.
 
 ```
 cd backend
-python pipeline/gbif/make_species_key_merge.py --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv
+python pipeline/gbif/make_species_key_merge.py \
+    --lookup ~/bcbn/data/gbif_tables/duplicate_species_lookup.csv \
+    --col-names ~/bcbn/data/col/315557/col_names_315557.parquet
 ```
 
 **`backend/pipeline/gbif/build_species_tables.py` -> `species_hex.parquet`, `species_card_gbif.parquet`**
@@ -265,8 +293,12 @@ be a subspecies, another spelling or a BOLD id); `name_source` says
 "Catalogue of Life, via GBIF" and `col_release` names the release, so the
 page can label the author. A key missing from that file is a FAIL. As a
 safety check it stops, before building anything, if a merge row's
-two keys do not have exactly one and the same species name in
-`bc_occurrence`. Its checks compare the totals with `bc_occurrence`, and, for
+two keys do not have exactly one species name each in `bc_occurrence`, and
+the two names are not the same, unless the Catalogue of Life lists the old
+key's name and authorship as a synonym of the kept key (rule 1 above). The
+card's `merged_names` lists each merged key whose Catalogue of Life name is
+not the card's own, with that name and authorship (`key`, `name`,
+`authorship`), and is empty for a same-name merge. Its checks compare the totals with `bc_occurrence`, and, for
 each resolution, the per-hexagon occurrences and distinct specieskey worked
 out straight from the records with `species_hex` grouped the same way.
 
@@ -355,8 +387,9 @@ both. Each row and each entry keep `matched_species_keys`, the key or keys
 before the merge. Entries that end up the same are combined, keeping all
 their element_codes; entries with different statuses on one kept key are
 kept side by side, never one picked over the other, and the run prints them
-for review. With the current merge list, only one shown status moves
-(Massalongia carnosa, Yellow, from `VL5W8` to `737CH`).
+for review. With the current merge list, two shown statuses move
+(Massalongia carnosa, Yellow, from `VL5W8` to `737CH`, and Cooper's Hawk,
+Accipiter cooperii, Yellow, from `VP2T6` to `CVW5J`).
 
 **Extra keys.** GBIF matches each BCSEE entry to one species key. When the
 same species also has a second key under another name, with the records on
@@ -372,10 +405,10 @@ code is not a shown BCSEE entry or its name does not match, the entry is not
 at species level, the extra key is the entry's own key or an old key of the
 merge, already has a BCSEE entry or is named by two rows, or GBIF's name for
 it is not the one in the row; it prints every row applied with both names.
-The list holds one row: Cooper's Hawk (`ABNKC12040`, Accipiter cooperii,
-Yellow) stays on `VP2T6` and also applies to `CVW5J`, Astur cooperii, which
-holds most of its records. The Catalogue of Life lists Accipiter cooperii
-both as its own key and as a synonym under Astur cooperii.
+The list holds only its header now. Its first row, Cooper's Hawk
+(`ABNKC12040` also on `CVW5J`), was removed when the species key merge put
+`VP2T6` into `CVW5J`: the status now follows the merge, and the checks would
+refuse the old row, since the entry is already on `CVW5J`.
 
 `backend/pipeline/bcsee/bcsee_extra_key_candidates.csv` lists 104 more pairs
 found the same way (93 `strong`, 11 `medium`, column `tier`), waiting for

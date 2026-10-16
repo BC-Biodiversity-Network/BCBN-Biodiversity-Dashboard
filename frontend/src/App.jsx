@@ -8,6 +8,7 @@ import { getHexagonEdgeLengthAvg } from 'h3-js'
 // zoom buttons and the attribution line in the corner come out unstyled.
 import 'maplibre-gl/dist/maplibre-gl.css'
 
+import { getTooltip } from './hexTooltip'
 import { loadHexData } from './loadHexData'
 import SearchBox from './SearchBox'
 import SelectedSpecies from './SelectedSpecies'
@@ -383,22 +384,6 @@ function buildHexagonLayer(resolution, rows, visible, variableName) {
     pickable: true,
     beforeId: FIRST_LABEL_LAYER_ID,
   })
-}
-
-// Builds the little box that appears when the pointer is over a hexagon.
-// Returning null means no hexagon is under the pointer, so no box is shown.
-function getTooltip({ object }) {
-  if (!object) {
-    return null
-  }
-
-  return {
-    html: `
-      <div><strong>${object.occurrences.toLocaleString()}</strong> records</div>
-      <div><strong>${object.distinctSpecies.toLocaleString()}</strong> species</div>
-      <div style="opacity:0.6;margin-top:4px">${object.h3Cell}</div>
-    `,
-  }
 }
 
 // Puts the deck.gl layers onto the MapLibre map.

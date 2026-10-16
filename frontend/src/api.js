@@ -88,3 +88,16 @@ export function searchSpecies(query, { limit = 20, signal } = {}) {
   const params = new URLSearchParams({ q: query, limit: String(limit) })
   return fetchJson(`/search?${params}`, signal)
 }
+
+// Fetches one species card. key can be an old merged key: the API then sends
+// the kept key's card with merged_from set. A key with no card fails with an
+// ApiError of kind 'rejected' and status 404.
+export function fetchSpecies(key, { signal } = {}) {
+  return fetchJson(`/species/${encodeURIComponent(key)}`, signal)
+}
+
+// Fetches what the data is and where it comes from (/api/meta), including
+// the GBIF download to cite.
+export function fetchMeta({ signal } = {}) {
+  return fetchJson('/meta', signal)
+}

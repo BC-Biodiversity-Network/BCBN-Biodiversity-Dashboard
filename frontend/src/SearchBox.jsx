@@ -16,8 +16,8 @@ const LIST_ID = 'species-search-results'
 // The fields of display_names that are names from a BCSEE entry rather than
 // the species' own names, and how each is labelled in the list.
 const ENTRY_NAME_LABELS = {
-  bcsee_entry_english_name: 'BCSEE entry name',
-  bcsee_scientific_label: 'BCSEE scientific name',
+  bcsee_entry_english_name: 'Common name of a BCSEE entry',
+  bcsee_scientific_label: 'Scientific name from BCSEE',
 }
 
 // The search box: a text field with a list of matching species under it.
@@ -123,7 +123,7 @@ export default function SearchBox({ onSelect }) {
       <input
         type="search"
         className="search-input"
-        placeholder="Search species (scientific or English name)"
+        placeholder="Search species (scientific or common name)"
         value={query}
         onChange={(event) => {
           setQuery(event.target.value)
@@ -197,9 +197,9 @@ function SearchMessage({ status, query, errorMessage }) {
 }
 
 // One species in the list. The scientific name comes first, because many
-// English names are shared by several species; then the species' English
+// common names are shared by several species; then the species' common
 // name, if BCSEE gives one; then a BCSEE entry's name if that is what matched,
-// clearly labelled so it is never mistaken for the species' English name; then
+// clearly labelled so it is never mistaken for the species' common name; then
 // the family and record count, which tell apart two cards with the same name.
 function SearchResult({ result }) {
   const entryNames = result.display_names.filter((name) => ENTRY_NAME_LABELS[name.field])
@@ -216,7 +216,7 @@ function SearchResult({ result }) {
       {result.english_name && (
         <div className="result-line">
           {result.english_name}
-          <span className="result-tag">English name, BCSEE</span>
+          <span className="result-tag">Common name from BCSEE</span>
         </div>
       )}
 
@@ -257,8 +257,8 @@ function SourceNote({ results }) {
 
   return (
     <div className="search-sources">
-      {nameSource && `Scientific names: ${nameSource}.`}
-      {bcseeSource && ` English and BCSEE names: ${bcseeSource}.`}
+      {nameSource && `Scientific names from ${nameSource}.`}
+      {bcseeSource && ` Common names and BCSEE names from ${bcseeSource}.`}
     </div>
   )
 }

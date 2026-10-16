@@ -2,7 +2,6 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SearchBox from './SearchBox'
-import SelectedSpecies from './SelectedSpecies'
 
 const COL = 'Catalogue of Life, via GBIF'
 const BCSEE = 'BC Species and Ecosystems Explorer (BCSEE)'
@@ -210,7 +209,7 @@ describe('keyboard use', () => {
 })
 
 describe('what each result shows', () => {
-  it('shows the scientific name first, the English name labelled as BCSEE, and the family and records', async () => {
+  it('shows the scientific name first, the common name labelled as from BCSEE, and the family and records', async () => {
     stubSearch([ROBIN])
     const { input } = renderBox()
     type(input, 'robin')
@@ -218,11 +217,11 @@ describe('what each result shows', () => {
     const text = listedTexts()[0]
     expect(text.indexOf('Turdus migratorius')).toBe(0)
     expect(text).toContain('Linnaeus, 1766')
-    expect(text).toContain('American RobinEnglish name, BCSEE')
+    expect(text).toContain('American RobinCommon name from BCSEE')
     expect(text).toContain('Turdidae · 964,801 records')
   })
 
-  it('labels a BCSEE entry name as such, never as the species English name', async () => {
+  it('labels a BCSEE entry name as such, never as the species common name', async () => {
     const fiddleneck = makeResult({
       specieskey: 'HHHH', col_name: 'Amsinckia menziesii', col_authorship: '(Lehm.) A.Nelson & J.F.Macbr.',
       english_name: null, english_name_source: null, family: 'Boraginaceae', record_count: 144,
@@ -239,8 +238,8 @@ describe('what each result shows', () => {
     type(input, 'small-flowered fiddleneck')
     await wait(250)
     const text = listedTexts()[0]
-    expect(text).toContain('small-flowered fiddleneckBCSEE entry name')
-    expect(text).not.toContain('English name, BCSEE')
+    expect(text).toContain('small-flowered fiddleneckCommon name of a BCSEE entry')
+    expect(text).not.toContain('Common name from BCSEE')
   })
 
   it('tells apart two species with the same scientific name by authorship and records', async () => {
@@ -270,6 +269,17 @@ describe('what each result shows', () => {
     const panel = screen.getByRole('listbox').parentElement.textContent
     expect(panel).not.toMatch(/\bRed\b|Blue|Yellow|Exotic|status/i)
   })
+
+  it('says "common name" everywhere, never "English name"', async () => {
+    stubSearch([ROBIN])
+    const { input } = renderBox()
+    expect(input.getAttribute('placeholder')).toBe('Search species (scientific or common name)')
+    type(input, 'robin')
+    await wait(250)
+    const panel = screen.getByRole('listbox').parentElement.textContent
+    expect(panel).not.toMatch(/English/)
+    expect(panel).toContain('Scientific names from Catalogue of Life, via GBIF.')
+  })
 })
 
 describe('messages', () => {
@@ -292,16 +302,5 @@ describe('messages', () => {
     await wait(250)
     expect(screen.getByText(
       'Species search is not available: the API could not be reached.')).toBeTruthy()
-  })
-})
-
-describe('the selected species placeholder', () => {
-  it('says which old key was typed when it was merged', () => {
-    render(<SelectedSpecies
-      species={makeResult({ specieskey: '79DVG', col_name: 'Salix scouleriana', merged_from: 'VM8MB' })}
-      onClear={() => {}} />)
-    expect(screen.getByText('key 79DVG')).toBeTruthy()
-    expect(screen.getByText(
-      'You searched for VM8MB, an old key that was merged into 79DVG.')).toBeTruthy()
   })
 })

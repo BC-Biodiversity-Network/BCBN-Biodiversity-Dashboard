@@ -14,6 +14,36 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* The page: the map area takes all the height the footer does not, so the
+   footer sits below the map and never covers the controls, the legend or
+   the map credits. The controls are placed inside the map area. */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.map-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The footer along the bottom of every page. */
+.site-footer {
+  flex: none;
+  padding: 5px 12px 6px;
+  border-top: 1px solid #ddd;
+  background: #fafafa;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #555;
+}
+
+.site-footer a {
+  color: #184f95;
+}
+
 /* The box that shows while the CSV is still downloading. */
 .status-message {
   position: absolute;
@@ -137,18 +167,26 @@ body {
   color: #777;
 }
 
-/* The search box and the selected species, top right. The top left holds the
-   map controls and the bottom left the legend, so this corner is free. The
-   width shrinks on a narrow screen so the box never runs off the side. */
+/* The search box and the species card, down the right side. The top left
+   holds the map controls and the bottom left the legend, so this side is
+   free. The column runs the full height so a long card scrolls inside its
+   panel; the empty part of the column lets clicks through to the map. The
+   width shrinks on a narrow screen so nothing runs off the side. */
 .top-right-controls {
   position: absolute;
   top: 12px;
   right: 12px;
+  bottom: 34px;
   z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: min(380px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.top-right-controls > * {
+  pointer-events: auto;
 }
 
 .search-box {
@@ -258,40 +296,319 @@ body {
   color: #777;
 }
 
-/* The placeholder for the selected species, until the card (step 6). */
-.selected-species {
-  padding: 8px 10px;
+/* The species card. It takes the space left under the search box and
+   scrolls when it is longer. */
+.species-card {
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 10px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
   font-size: 13px;
+  line-height: 1.4;
   color: #1a1a1a;
 }
 
-.selected-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: #777;
-}
-
-.selected-clear {
+.card-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
   border: 0;
-  padding: 0 2px;
+  padding: 2px 4px;
   background: none;
-  font-size: 16px;
+  font-size: 20px;
   line-height: 1;
   color: #777;
   cursor: pointer;
 }
 
-.selected-clear:hover {
+.card-close:hover {
   color: #1a1a1a;
 }
 
-.selected-note {
-  margin-top: 4px;
+.card-message {
+  margin: 4px 24px 4px 0;
   color: #555;
+}
+
+.card-message.error {
+  color: #a3261b;
+}
+
+.card-title h2 {
+  margin: 0 24px 2px 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.card-authorship {
+  font-size: 14px;
+  font-weight: 400;
+  color: #555;
+}
+
+/* The classification line under the name. */
+.card-taxonomy {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: #666;
+}
+
+.card-common-name {
+  margin: 6px 0 0;
+  font-size: 15px;
+}
+
+.card-tag {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #777;
+}
+
+.card-note {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: #f3f6fa;
+  color: #333;
+}
+
+/* The photo is always shown whole (object-fit: contain), never cropped,
+   which ND licences require; it is the same for every photo. */
+.card-image {
+  margin: 10px 0 0;
+}
+
+.whole-image {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: #f4f4f4;
+}
+
+.card-credit {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #555;
+}
+
+.card-no-image {
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 3px;
+  background: #f4f4f4;
+  font-size: 12px;
+  color: #666;
+}
+
+.card-section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #e6e6e6;
+}
+
+.card-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.card-section h4 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #444;
+}
+
+.card-section p {
+  margin: 0;
+}
+
+.bcsee-summary {
+  color: #333;
+}
+
+.bcsee-entries {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bcsee-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 4px 0;
+}
+
+.bcsee-label {
+  flex: 1 1 160px;
+}
+
+/* The line under an entry saying what it applies to, when the entries on a
+   card apply to different things. */
+.bcsee-scope {
+  flex-basis: 100%;
+  padding-left: 2px;
+  font-size: 11px;
+  color: #666;
+}
+
+/* A BCSEE value, as a small label that always names BCSEE. It is a button,
+   so its definition opens on hover, with the keyboard and on a tap. The
+   colours follow the status names; values that are not statuses stay grey. */
+.status-chip {
+  flex: none;
+  border: 0;
+  margin: 0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.status-red {
+  background: #f9d6d2;
+  color: #8a1c12;
+}
+
+.status-blue {
+  background: #d6e6fa;
+  color: #184f95;
+}
+
+.status-yellow {
+  background: #fbefb8;
+  color: #6b5200;
+}
+
+.status-exotic {
+  background: #e8e1f2;
+  color: #4b2f7a;
+}
+
+.status-none {
+  background: #ececec;
+  color: #555;
+}
+
+.card-datasets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.card-datasets li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.dataset-count {
+  flex: none;
+  color: #555;
+}
+
+/* The Sources section at the bottom of the card, in small text. */
+.card-sources {
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid #e6e6e6;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #666;
+}
+
+.card-sources h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #444;
+}
+
+.card-sources p {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+
+/* Each name in the classification line is a button that opens its rank;
+   it looks like plain text with a dotted underline. */
+.rank-button {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted #aaa;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.rank-button:focus-visible {
+  outline: 2px solid #3987e5;
+  outline-offset: 1px;
+}
+
+/* The "?" next to the name and authorship. */
+.help-button {
+  margin-left: 6px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #999;
+  border-radius: 50%;
+  padding: 0;
+  background: #fff;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #555;
+  vertical-align: 3px;
+  cursor: help;
+}
+
+/* A short explanation that opens next to its button. It is placed on the
+   page itself (position: fixed, set by InfoTip), so the scrolling card
+   never cuts it off. */
+.info-tip {
+  display: inline;
+}
+
+.info-tip-text {
+  position: fixed;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border-radius: 4px;
+  background: #1f2933;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.4;
+  color: #fff;
+  white-space: normal;
+}
+
+.status-chip:focus-visible,
+.help-button:focus-visible {
+  outline: 2px solid #3987e5;
+  outline-offset: 1px;
+}
+
+.species-card a {
+  color: #184f95;
 }

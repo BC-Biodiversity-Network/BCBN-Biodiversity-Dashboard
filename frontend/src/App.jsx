@@ -10,8 +10,10 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { getTooltip } from './hexTooltip'
 import { loadHexData } from './loadHexData'
+import { fetchMeta } from './api'
 import SearchBox from './SearchBox'
-import SelectedSpecies from './SelectedSpecies'
+import SiteFooter from './SiteFooter'
+import SpeciesCard from './SpeciesCard'
 
 // The basemap style. Swap this one line to change providers.
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/bright'
@@ -460,11 +462,22 @@ export default function App() {
     pickResolution(INITIAL_VIEW_STATE.zoom, null),
   )
   const [variableName, setVariableName] = useState(DEFAULT_VARIABLE)
-  // The species picked in the search box, as the API's search result, or null.
-  // For now it only fills the placeholder; the card (step 6) and the species
-  // map (step 7) will use it.
-  const [selectedSpecies, setSelectedSpecies] = useState(null)
+  // The key of the species whose card is open, or null for the plain
+  // overview. When an old merged key was typed, this is that old key, so the
+  // card can say it was merged.
+  const [selectedKey, setSelectedKey] = useState(null)
+  // What the data is and where it comes from (/api/meta), for the GBIF
+  // download citation on the card; null until it arrives or if it fails.
+  const [meta, setMeta] = useState(null)
   const [error, setError] = useState(null)
+
+  // Fetches /api/meta once, when the page first appears. If the API is not
+  // there, the overview still works and the card says the citation is loading.
+  useEffect(() => {
+    fetchMeta()
+      .then(setMeta)
+      .catch((metaError) => console.error(metaError))
+  }, [])
 
   // Download all three files once, when the page first appears.
   //
@@ -517,41 +530,49 @@ export default function App() {
 
   const stillLoading = !error && Object.keys(rowsByResolution).length === 0
 
+  // The map with its controls fills the window above the footer, so the
+  // footer never covers the legend, the controls or the map credits.
   return (
-    <>
-      {error && <div className="status-message">Could not load the data: {error}</div>}
-      {stillLoading && <div className="status-message">Loading hexagons...</div>}
+    <div className="app-layout">
+      <div className="map-area">
+        {error && <div className="status-message">Could not load the data: {error}</div>}
+        {stillLoading && <div className="status-message">Loading hexagons...</div>}
 
-      {!stillLoading && !error && (
-        <div className="top-left-controls">
-          <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
-          <VariableToggle current={variableName} onChange={setVariableName} />
-        </div>
-      )}
-
-      {!stillLoading && !error && (
-        <Legend variable={COLOUR_VARIABLES[variableName]} />
-      )}
-
-      <div className="top-right-controls">
-        <SearchBox onSelect={setSelectedSpecies} />
-        {selectedSpecies && (
-          <SelectedSpecies
-            species={selectedSpecies}
-            onClear={() => setSelectedSpecies(null)}
-          />
+        {!stillLoading && !error && (
+          <div className="top-left-controls">
+            <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
+            <VariableToggle current={variableName} onChange={setVariableName} />
+          </div>
         )}
-      </div>
 
-      <Map
-        initialViewState={INITIAL_VIEW_STATE}
-        mapStyle={BASEMAP_STYLE}
-        style={{ width: '100%', height: '100%' }}
-        onMove={handleMove}
-        maxZoom={MAX_ZOOM}
-      >
-        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={getTooltip} />
-      </Map>
-    </>
+        {!stillLoading && !error && (
+          <Legend variable={COLOUR_VARIABLES[variableName]} />
+        )}
+
+        <div className="top-right-controls">
+          <SearchBox
+            onSelect={(result) => setSelectedKey(result.merged_from ?? result.specieskey)}
+          />
+          {selectedKey && (
+            <SpeciesCard
+              requestedKey={selectedKey}
+              meta={meta}
+              onClose={() => setSelectedKey(null)}
+            />
+          )}
+        </div>
+
+        <Map
+          initialViewState={INITIAL_VIEW_STATE}
+          mapStyle={BASEMAP_STYLE}
+          style={{ width: '100%', height: '100%' }}
+          onMove={handleMove}
+          maxZoom={MAX_ZOOM}
+        >
+          <DeckGLOverlay layers={layers} interleaved={true} getTooltip={getTooltip} />
+        </Map>
+      </div>
+      <SiteFooter />
+    </div>
   )
 }

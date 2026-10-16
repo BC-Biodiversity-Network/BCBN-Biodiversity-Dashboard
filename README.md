@@ -131,8 +131,10 @@ metadata of every dataset.
   (`backend/shared/image_credit.py`). Among those, the best licence wins,
   then the most recent record. The licences, preferred in this order: CC0
   or the Public Domain Mark, CC BY, CC BY-SA, CC BY-ND, CC BY-NC, CC
-  BY-NC-SA, CC BY-NC-ND (any version, or none stated). Beaty Museum images
-  provided without a licence keep their place in the ranking (rank 8), but
+  BY-NC-SA, CC BY-NC-ND. A CC licence must name its version: CC BY asks for
+  a link to the licence, and without a version that link would be a guess.
+  Beaty Museum images provided without a licence keep their place in the
+  ranking (rank 8), but
   fail the check, so none is picked for now. `license_rank` and
   `license_source` say which case applies. The selection is in
   `build_species_image.py`, which this script calls, and which can also
@@ -330,7 +332,9 @@ out, as the GBIF cleaning leaves out extinct taxa, and so is the one Other
 entry for now; the run lists them. `statuses` holds only the shown statuses
 (empty for a species without one), and every entry keeps its own BCSEE value
 as its `status`, so a Not Reviewed subspecies is never mixed up with its
-species' status. Run it with the same species key merge as
+species' status. Every entry also keeps BCSEE's own `classification_level`
+(Species, Subspecies, Variety or Population), so the card can tell a separate
+BCSEE species from a subspecies. Run it with the same species key merge as
 `build_species_tables.py`, so the statuses join to the species cards:
 
 ```
@@ -784,9 +788,40 @@ first, with its authorship, then the BCSEE English name (labelled as BCSEE),
 then any BCSEE entry name that matched (labelled as an entry name, never as the
 species' English name), then the family and record count, which tell apart two
 cards with the same scientific name. No conservation status is shown in the
-list. Picking a species shows a small placeholder with its name and key
-(`SelectedSpecies.jsx`), until the species card is built; an old merged key
-selects the kept key and the placeholder says which key was typed.
+list. Picking a species opens its card.
+
+The species card (`frontend/src/SpeciesCard.jsx`, from `GET /api/species/{key}`)
+shows, top to bottom:
+
+- the Catalogue of Life name exactly as stored (a subgenus in brackets
+  included) in italics, with its authorship exactly as in the Catalogue of
+  Life file and a "?" that explains what the authorship is; the classification
+  from kingdom to genus; and the common name labelled "Common name from
+  BCSEE". When BCSEE lists separate species on the key, no common name is
+  shown here; each BCSEE entry shows its own.
+- the photo, only when the API sends one, always whole (never cropped, as ND
+  licences require), with creator, the copyright holder for CC BY licences,
+  the licence link and a link to the original; otherwise "No fully credited
+  photo available".
+- the BC conservation status: each BCSEE entry as "BCSEE: …" (a chip that
+  opens BCSEE's own definition of the value on hover, keyboard focus or a
+  tap, from `frontend/src/bcseeDefinitions.js`) with its scientific name and
+  common name. What the statuses apply to (the whole species, a subspecies,
+  variety or population, or a separate BCSEE species, using BCSEE's own
+  `classification_level`) is said once at the top when every entry is the
+  same, and under each entry when they differ. "Not in BCSEE" has its own
+  message.
+- the records: count, years, how many have no date, datasets and the
+  largest datasets (linked to GBIF), and how many came from merged keys.
+- a Sources section: the Catalogue of Life release with its official
+  citation and licence, where the classification comes from, BCSEE cited the
+  way the Conservation Data Centre asks, the GBIF download cited the way GBIF
+  asks, and the species key (`frontend/src/sources.js`).
+
+It does not show the extent box (waiting for the sensitive-species decision).
+A footer below the map on every page (`frontend/src/SiteFooter.jsx`) says
+where the data comes from, that BCBN does not set conservation statuses, and
+that the sources do not endorse the site.
 
 **Front-end tests.** `npm test` (in `frontend/`) runs the tests once with
 Vitest 4.1, React Testing Library 16.3 and jsdom 26.1, all dev dependencies, so

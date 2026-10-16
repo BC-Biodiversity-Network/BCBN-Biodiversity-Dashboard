@@ -788,6 +788,33 @@ list. Picking a species shows a small placeholder with its name and key
 (`SelectedSpecies.jsx`), until the species card is built; an old merged key
 selects the kept key and the placeholder says which key was typed.
 
+**Front-end tests.** `npm test` (in `frontend/`) runs the tests once with
+Vitest 4.1, React Testing Library 16.3 and jsdom 26.1, all dev dependencies, so
+none of it goes into the built site. They use fake API answers, so the API does
+not need to be running. They live next to the code as `src/*.test.js(x)`:
+for example `api.test.js` (the letter-and-digit count, checked against the
+API's own rule, and how failures are reported) and `SearchBox.test.jsx` (the
+250 ms wait, the 2-character minimum, stale answers, keyboard use, labels and
+messages).
+
+**Adding npm packages: use npm 11 for the lock file.** npm 10.9 stops with
+"Cannot read properties of null (reading 'edgesOut')" when a package is added,
+because of a peer version conflict inside deck.gl's own packages
+(`@loaders.gl/core`). Do not use `--legacy-peer-deps` to get around it: it
+removes `@deck.gl/layers` and other packages the map needs. Instead, let npm 11
+write `package.json` and the lock file, then install from them as usual:
+
+```
+cd frontend
+npx -y npm@11 install --package-lock-only --save-dev <package>@<version>
+npm ci
+```
+
+Vitest 4.1 lists Node 20, 22 and 24 or later, not this Mac's Node 23.3, so
+`npm ci` prints an EBADENGINE warning; the tests run fine. Moving to Node 24
+(the current long-term support version) would remove the warning and allow
+Vitest 5 and newer jsdom.
+
 **maplibre-gl is pinned to 5.x on purpose.** Version 6 is incompatible with
 `react-map-gl` 8.1.3: the basemap style never finishes loading, so no tiles are
 requested and the map stays blank with no error in the console. deck.gl's

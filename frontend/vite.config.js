@@ -18,4 +18,11 @@ export default defineConfig({
       '/api': API_DEV_URL,
     },
   },
+  // The tests (`npm test`, run by Vitest) use this same setup, in a pretend
+  // browser page (jsdom). Only files ending in .test.js or .test.jsx are
+  // tests; nothing the site imports, so none of it goes into the build.
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 })

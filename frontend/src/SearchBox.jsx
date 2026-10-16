@@ -54,6 +54,12 @@ export default function SearchBox({ onSelect }) {
       setStatus('loading')
       searchSpecies(query, { limit: RESULT_LIMIT, signal: controller.signal })
         .then((answer) => {
+          // An answer to a search that has since been replaced is ignored.
+          // fetch already stops a cancelled request, so this is a second
+          // guard in case an answer still arrives.
+          if (controller.signal.aborted) {
+            return
+          }
           setResults(answer.results)
           setActiveIndex(answer.results.length > 0 ? 0 : -1)
           setStatus(answer.results.length > 0 ? 'results' : 'empty')

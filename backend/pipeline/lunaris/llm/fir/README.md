@@ -75,9 +75,9 @@ What the checks found on 2026-10-19, and what was done about it:
 
 - **A GPU model is required in every request.** Allowed: `h100` (a whole
   H100 80 GB) and the MIG slices `nvidia_h100_80gb_hbm3_1g.10gb`, `_2g.20gb`
-  and `_3g.40gb`. `fir/submit.sh` picks the slice from `WORKERS` and `NUM_CTX`
-  (the table is at the top of `submit.sh`), or takes `GPU=...`. Plain
-  `sbatch` gets the 1g.10gb default.
+  and `_3g.40gb`. `fir/submit.sh` picks the slice from `NUM_CTX` (the table is
+  at the top of `submit.sh`), or takes `GPU=...`. Plain `sbatch` gets the
+  1g.10gb default.
 - **The 1g.10gb slice was granted within seconds.** It has 9,984 MiB and 16
   SMs, driver 580.178.04, CUDA 13.0. The Ollama archive brings its own CUDA
   libraries and only needs the driver.
@@ -91,8 +91,11 @@ What the checks found on 2026-10-19, and what was done about it:
   `python/3.12` was found under it, so no StdEnv line is needed. Step 2 shows
   how to note which one it is. The `apptainer` module exists.
 - **Python packages.** `pandas` 3.0.5 has wheels for 3.12, the same version as
-  on the Mac. `vllm` is only 0.25.0, which is far too old for qwen3.5, so plan
-  B (vLLM) would have to run in an Apptainer container.
+  on the Mac. `vllm` 0.25.0 is there too. Its "cp38" tag is vLLM's usual
+  build that works on Python 3.8 and newer (cp38-abi3), and 0.25.0 (July
+  2026) is newer than 0.17, the first version that knows qwen3.5. So plan B
+  (vLLM) may install straight from the Alliance wheels, without Apptainer.
+  That still needs a test install.
 - **Internet.** The login node reaches GitHub and the Ollama registry. So
   does a compute node, but the jobs still never download: the model is pulled
   once on the login node, so every job uses the same copy.
@@ -151,51 +154,78 @@ ID and the quantization line from `ollama show`.
     ssh songyanf@fir.alliancecan.ca 'mkdir -p ~/lunaris_llm ~/scratch/lunaris_llm/runs'
     scp -r pipeline/lunaris/llm songyanf@fir.alliancecan.ca:lunaris_llm/code
     scp -r data/lunaris_llm_runs/test900 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
+    scp -r data/lunaris_llm_runs/test900_x4 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
 
 To send a newer copy of the code later, copy the folder's contents instead:
 `scp -r pipeline/lunaris/llm/* songyanf@fir.alliancecan.ca:lunaris_llm/code/`.
 
-On Fir, make the folder for the second test run now, before anything has run,
-so it starts empty:
+On Fir, once after each code copy:
 
-    cd ~/scratch/lunaris_llm/runs
-    cp -r test900 test900_par4
     chmod +x ~/lunaris_llm/code/fir/*.sh
 
 ## 4. Test runs: the 900 records, twice
 
-Run 1 asks one record at a time, the same as the Mac, on a 1g.10gb slice.
-Run 2 asks 4 at a time on a 2g.20gb slice. `submit.sh` picks the slices. They
-use separate GPU slices, so both can be submitted at once.
+**Ollama runs qwen3.5 one request at a time.** The architecture `qwen35` is
+on a fixed list in Ollama that ignores `OLLAMA_NUM_PARALLEL`; the server log
+says "model architecture does not currently support parallel requests". So
+there is no WORKERS=4 run. Speed comes from running many batches at once,
+each on its own 1g.10gb slice, and `submit.sh` refuses WORKERS above 1.
+
+- **Run 1, `test900`:** all 900 records in one batch, on one 1g.10gb slice.
+- **Run 2, `test900_x4`:** the same 900 records in 4 batches of 225, all 4 at
+  once, each on its own 1g.10gb slice. It repeats run 1 on other nodes, so the
+  two can be compared (Fir against Fir). It also tries out how the full run
+  will work: several servers starting at once, slices that share a GPU, and
+  the array, status and resubmit steps.
+
+Both can be submitted at once:
 
     cd ~/scratch/lunaris_llm/runs/test900
     ~/lunaris_llm/code/fir/submit.sh 0
 
-    cd ~/scratch/lunaris_llm/runs/test900_par4
-    WORKERS=4 ~/lunaris_llm/code/fir/submit.sh 0
+    cd ~/scratch/lunaris_llm/runs/test900_x4
+    ~/lunaris_llm/code/fir/submit.sh 0-3
 
 Watch them:
 
     squeue --me
     ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900
-    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_par4
-    tail -5 ~/scratch/lunaris_llm/runs/test900/logs/lunaris-llm_*_0.out
+    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_x4
+    tail -5 ~/scratch/lunaris_llm/runs/test900_x4/logs/lunaris-llm_*_*.out
 
-The job log shows the GPU slice, the Ollama version, the model digest,
-progress every 25 records and a summary at the end. The Ollama server's own
-log is in `logs/ollama_*.log`.
+The job log shows the GPU slice, the Ollama version, the model digest, whether
+the model is on the GPU (`model on the GPU: 100%`), progress every 25 records,
+and a summary at the end. The Ollama server's own log is in `logs/ollama_*.log`.
 
-The last line of each job log, `gpu use`, says how much of the model was on
-the GPU. It should say 100%. Less means part of the model ran on the CPU
-because the slice was too small. Resubmit that run with the next slice up, for
-example `GPU=nvidia_h100_80gb_hbm3_2g.20gb ~/lunaris_llm/code/fir/submit.sh 0`.
-If it says 0%, Ollama did not use the MIG slice at all; try `GPU=h100`.
+**If the model is not on the GPU.** On a busy node Ollama's GPU search can
+time out ("GPU discovery watchdog timed out"), and then Ollama runs on the
+CPU without stopping. Two things guard against that:
 
-    grep -h "gpu use\|WARNING" ~/scratch/lunaris_llm/runs/test900*/logs/lunaris-llm_*.out
+- The job script tells Ollama to try only its CUDA 13 libraries
+  (`OLLAMA_LLM_LIBRARY=cuda_v13`), so there is one try, not two.
+- After the first answer, `run_batch.py` checks that the whole model is on
+  the GPU. If not, it writes nothing, stops with exit code 5, and records the
+  node.
 
-If status shows records still failing, resubmit the same command. Only the
+`status.sh` then lists the node and prints the resubmit line with
+`EXCLUDE=<node>`, which keeps that batch away from the node.
+
+**Where the time goes.** Each answer now records Ollama's own split: seconds
+reading the prompt and seconds writing the answer. `status.sh` shows the
+medians, and the merged `.about.json` keeps them. For run 1, which started
+before this was added, look in the server log for llama.cpp's own timing
+lines, and for whether it can reuse the shared instructions between records:
+
+    grep -h -m 6 "prompt eval time\|eval time" ~/scratch/lunaris_llm/runs/test900/logs/ollama_*.log
+    grep -h -c "full prompt re-processing" ~/scratch/lunaris_llm/runs/test900/logs/ollama_*.log
+
+The second command counts how often the whole prompt was read again from the
+start, because this model type cannot keep the instructions from the record
+before.
+
+If status shows records still failing, resubmit the line it prints. Only the
 missing records are asked again. Records too long for the default context
-(`context_full`) need a bigger one:
+(`context_full`) need a bigger one, which `submit.sh` puts on a 2g.20gb slice:
 
     NUM_CTX=65536 ~/lunaris_llm/code/fir/submit.sh 0
 
@@ -203,18 +233,18 @@ When status says all done, merge each run into its CSV:
 
     module load python/3.12 && source ~/lunaris_llm/venv/bin/activate
     python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900
-    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_par4
+    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_x4
 
-This writes `trial_qwen3.5-4b-fir_v6_test900.csv` (and `..._test900_par4.csv`)
+This writes `trial_qwen3.5-4b-fir_v6_test900.csv` (and `..._test900_x4.csv`)
 in each run folder, with a `.about.json` beside it: digest, Ollama version,
-seconds per call.
+seconds per call, and the prompt and answer timings.
 
 ## 5. Compare with the Mac (Mac)
 
 Copy both runs back:
 
     scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900 data/lunaris_llm_runs/fir_test900
-    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900_par4 data/lunaris_llm_runs/fir_test900_par4
+    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900_x4 data/lunaris_llm_runs/fir_test900_x4
 
 Score the Fir run on its own:
 
@@ -231,8 +261,8 @@ Compare Mac and Fir record by record, then the two Fir runs with each other:
 
     python exploration/llm/compare_runs.py \
         --a data/lunaris_llm_runs/fir_test900/trial_qwen3.5-4b-fir_v6_test900.csv \
-        --b data/lunaris_llm_runs/fir_test900_par4/trial_qwen3.5-4b-fir_v6_test900_par4.csv \
-        --out data/lunaris_llm_runs/fir_test900/compare_fir_seq_vs_par4.csv
+        --b data/lunaris_llm_runs/fir_test900_x4/trial_qwen3.5-4b-fir_v6_test900_x4.csv \
+        --out data/lunaris_llm_runs/fir_test900/compare_fir_run1_vs_x4.csv
 
 If you load more than one trial into `score_trial.py`, always pass
 `--disagreements <a new file>`. Otherwise it overwrites
@@ -255,27 +285,33 @@ The full run starts only after Lucia approves this result.
 
 ## 6. The full October harvest (only after approval)
 
-**(Mac)** Make the batches: 161,278 records, 41 batches of 4,000, about 57 MB.
-Then copy them:
+This is the Ollama plan, sized for run 1's speed: 12.8 s per record on a
+1g.10gb slice. If the vLLM test is chosen instead, this step changes.
+
+- **Total:** 161,278 records x 12.8 s is about 573 slice-hours.
+- **Batch size 600:** about 2.1 hours of work per batch, inside the 3-hour
+  limit with room for slow records and model loading. That makes 269 batches
+  (0 to 268).
+- **16 at once:** about 36 hours of wall time. 32 at once would halve that,
+  if slices keep starting within seconds.
+
+**(Mac)** Make the batches and copy them:
 
     python pipeline/lunaris/llm/make_batches.py \
         --harvest exploration/lunaris/harvest_2026_10/lunaris_full_harvest.parquet \
-        --run-dir data/lunaris_llm_runs/harvest_2026_10
+        --run-dir data/lunaris_llm_runs/harvest_2026_10 --batch-size 600
     scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
 
-**(Fir)** Submit all 41 batches, 4 at a time. Use the `WORKERS` that the test
-runs showed works best. A 4,000-record batch must also finish within the
-3-hour limit, so check the test runs' speed first: at more than about 2.5
-seconds per record, use smaller batches (`--batch-size 2000` in make_batches).
+**(Fir)** Submit, then watch:
 
     cd ~/scratch/lunaris_llm/runs/harvest_2026_10
-    WORKERS=4 ~/lunaris_llm/code/fir/submit.sh 0-40%4
+    ~/lunaris_llm/code/fir/submit.sh 0-268%16
     ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/harvest_2026_10
 
 `status.sh` prints the exact `submit.sh` line that resubmits only unfinished
-batches. Then do the `NUM_CTX=65536` pass for the few long records
-(4 prompts are over 55,000 characters), merge, and copy back as in steps 4
-and 5.
+batches, with `EXCLUDE=` for any node where the model was off the GPU. Then
+do the `NUM_CTX=65536` pass for the few long records (4 prompts are over
+55,000 characters), merge, and copy back as in steps 4 and 5.
 
 ## When something goes wrong
 
@@ -290,6 +326,9 @@ and 5.
 - **"a prompt differs from the one made on the Mac".** The code on Fir is
   older or newer than the code that made the batches. Copy the code again
   (step 3).
+- **Exit code 5, "the model is not entirely on the GPU".** Ollama's GPU
+  search timed out on that node. Resubmit with the line `status.sh` prints;
+  it includes `EXCLUDE=<node>`.
 - **The server does not start.** Read `logs/ollama_*.log`. If the program will
   not run on Fir at all, the fallback is the Apptainer image
   `docker://ollama/ollama:0.40.0` (ask Claude to adapt the job script), and

@@ -55,6 +55,17 @@ def lock_path(run_dir, number):
     return Path(run_dir) / "results" / f"{batch_name(number)}.lock"
 
 
+def gpu_failures_path(run_dir):
+    """
+    Return the path of the run's list of jobs that found the model off the GPU.
+
+    run_batch.py adds a line here, with the node's name, whenever it stops
+    because part of the model was on the CPU. status.py reads it to suggest
+    which nodes to leave out (EXCLUDE= in fir/submit.sh).
+    """
+    return Path(run_dir) / "logs" / "gpu_failures.jsonl"
+
+
 def load_run(run_dir):
     """Read run.json, the description of the run written by make_batches.py."""
     path = Path(run_dir) / "run.json"

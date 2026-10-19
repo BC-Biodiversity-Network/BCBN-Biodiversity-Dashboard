@@ -17,8 +17,10 @@
 # context. The job prints a warning if the slice looks too small.
 #
 # Settings that can be given in front of submit.sh or sbatch (Slurm passes them on):
-#   WORKERS=4      questions in flight at once (default 1, one at a time)
 #   NUM_CTX=65536  context size, for the few records too long for 16,384
+#   OLLAMA_LLM_LIBRARY=cuda_v12   which of Ollama's CUDA libraries to use
+#                  (default cuda_v13, see below)
+# WORKERS stays 1: Ollama runs qwen3.5 one request at a time regardless.
 #
 # No passwords, keys or tokens are used or needed anywhere in this script.
 
@@ -62,12 +64,12 @@ if command -v nvidia-smi >/dev/null; then
     echo "gpu      $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
 fi
 
-# The 1g.10gb slice is sized for one slot of 16,384 tokens. More than that
+# The 1g.10gb slice is sized for a context of 16,384 tokens. More than that
 # might still fit, but if Ollama thinks it does not, it quietly runs part of
 # the model on the CPU, which is far slower. submit.sh avoids this.
 if [[ "$GPU_GIVEN" == *1g.10gb* && $((WORKERS * NUM_CTX)) -gt 16384 ]]; then
     echo "WARNING  WORKERS=$WORKERS x NUM_CTX=$NUM_CTX is more than the 1g.10gb slice is sized for."
-    echo "         Use fir/submit.sh, which picks a bigger slice. Watch the 'gpu use' line at the end."
+    echo "         Use fir/submit.sh, which picks a bigger slice."
 fi
 
 # Pick a free port for this job's server. Several tasks can share one GPU
@@ -78,6 +80,12 @@ export OLLAMA_HOST="127.0.0.1:$PORT"
 # As many parallel slots as workers, and keep the model loaded for the whole job.
 export OLLAMA_NUM_PARALLEL="$WORKERS"
 export OLLAMA_KEEP_ALIVE=-1
+# Ollama looks for the GPU by trying its CUDA 12 and its CUDA 13 libraries in
+# turn, each with a 30 second limit. On a busy node both tries can time out,
+# and Ollama then runs on the CPU without stopping. Fir's driver (580, CUDA
+# 13.0) works with the CUDA 13 libraries, so only those are tried. If
+# run_batch.py still finds the model off the GPU, it stops with exit code 5.
+export OLLAMA_LLM_LIBRARY="${OLLAMA_LLM_LIBRARY:-cuda_v13}"
 
 SERVER_LOG="$RUN_DIR/logs/ollama_${SLURM_ARRAY_JOB_ID:-local}_${BATCH}.log"
 "$OLLAMA_BIN" serve >"$SERVER_LOG" 2>&1 &
@@ -126,4 +134,8 @@ STATUS=$?
 set -e
 
 echo "end      $(date -u +%Y-%m-%dT%H:%M:%SZ)  exit $STATUS"
+if [[ $STATUS -eq 5 ]]; then
+    echo "NOTE     the model was not on the GPU on $(hostname -s). Resubmit this batch with"
+    echo "         EXCLUDE=$(hostname -s) fir/submit.sh (status.sh prints the full line)."
+fi
 exit $STATUS

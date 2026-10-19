@@ -142,7 +142,28 @@ def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOU
         # Ollama does not count reasoning separately. With think set to false
         # there should be none, so this is recorded as 0.
         "thinking_tokens": 0,
+        # Where the time went, as Ollama measured it, in seconds: loading the
+        # model, reading the prompt, and writing the answer.
+        "timings": reply_timings(reply),
     }
+
+
+def reply_timings(reply):
+    """
+    Return Ollama's own timings for one answer, in seconds.
+
+    Ollama reports them in nanoseconds: load_duration (loading the model, only
+    on the first request), prompt_eval_duration (reading the prompt) and
+    eval_duration (writing the answer, one token at a time). Splitting the
+    time this way shows whether a slow answer is slow to read or slow to
+    write. A value Ollama did not send is left out.
+    """
+    timings = {}
+    for key, name in [("load_duration", "load_s"), ("prompt_eval_duration", "prompt_s"),
+                      ("eval_duration", "answer_s"), ("total_duration", "total_s")]:
+        if isinstance(reply.get(key), (int, float)):
+            timings[name] = round(reply[key] / 1e9, 3)
+    return timings
 
 
 def get_json(url, path, timeout=10):
@@ -184,4 +205,25 @@ def model_digest(url, model):
     for entry in get_json(url, "/api/tags").get("models", []):
         if entry.get("name") == model or entry.get("model") == model:
             return entry.get("digest")
+    return None
+
+
+def gpu_share(url, model):
+    """
+    Return how much of the loaded model sits on the GPU, from 0.0 to 1.0.
+
+    Ollama's /api/ps lists each loaded model with its size and the part of it
+    in GPU memory (size_vram). Anything under 1.0 means part of the model runs
+    on the CPU, which is far slower. That happens on Fir when Ollama's GPU
+    discovery times out on a busy node. Returns None if the model is not
+    loaded or the server cannot say.
+    """
+    try:
+        models = get_json(url, "/api/ps").get("models", [])
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    for entry in models:
+        if entry.get("name") == model or entry.get("model") == model:
+            size = entry.get("size") or 0
+            return (entry.get("size_vram") or 0) / size if size else None
     return None

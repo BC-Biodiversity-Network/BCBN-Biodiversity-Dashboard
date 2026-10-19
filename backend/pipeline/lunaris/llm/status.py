@@ -3,7 +3,9 @@ Show how far a run has got, in one command.
 
 Prints: records done out of the total, batches done, part done and not
 started, which batches a job is working on now, open errors grouped by kind,
-the speed over the last hour and the time left at that speed, the model
+the speed over the last hour and the time left at that speed, where each
+record's time goes (reading the prompt or writing the answer), nodes where
+the model did not fit on the GPU, the model
 digests seen (there should be exactly one), your lunaris-llm jobs in the Slurm
 queue, and the fir/submit.sh command that resubmits only the unfinished batches.
 
@@ -22,12 +24,14 @@ import subprocess
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_files import (  # noqa: E402
     batch_numbers,
     errors_path,
+    gpu_failures_path,
     load_run,
     lock_path,
     parse_utc,
@@ -72,8 +76,8 @@ def main():
     """Print the run's progress and error summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("run_dir", help="the run folder")
-    parser.add_argument("--throttle", type=int, default=4,
-                        help="how many batches at once in the suggested resubmit command (default 4)")
+    parser.add_argument("--throttle", type=int, default=16,
+                        help="how many batches at once in the suggested resubmit command (default 16)")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -87,7 +91,7 @@ def main():
     open_errors = Counter()
     last_errors = []
     digests = Counter()
-    workers_seen = Counter()
+    timings = {"prompt_s": [], "answer_s": [], "output_tokens": []}
     last_hour = 0
     earliest = None
     seconds = []
@@ -99,8 +103,12 @@ def main():
         done_total += len(answers)
         for line in answers.values():
             digests[line.get("model_digest")] += 1
-            workers_seen[line.get("workers") or 1] += 1
             if line.get("finished") and parse_utc(line["finished"]) >= hour_ago:
+                for key in ("prompt_s", "answer_s"):
+                    if (line.get("timings") or {}).get(key) is not None:
+                        timings[key].append(line["timings"][key])
+                if line.get("output_tokens"):
+                    timings["output_tokens"].append(line["output_tokens"])
                 last_hour += 1
                 finished = parse_utc(line["finished"])
                 earliest = finished if earliest is None else min(earliest, finished)
@@ -163,6 +171,19 @@ def main():
             print("  speed: too early to tell (under two minutes of answers)")
     else:
         print("  last hour: no answers written")
+    if timings["prompt_s"] and timings["answer_s"]:
+        prompt_s, answer_s = median(timings["prompt_s"]), median(timings["answer_s"])
+        tokens = median(timings["output_tokens"]) if timings["output_tokens"] else 0
+        print(f"  per record (median, last hour): reading the prompt {prompt_s:.2f} s, writing the "
+              f"answer {answer_s:.2f} s" + (f" for {tokens:.0f} tokens ({tokens / answer_s:.0f} tokens/s)"
+                                             if tokens and answer_s else ""))
+
+    # Jobs that stopped because part of the model was on the CPU, by node.
+    off_gpu = Counter(str(line.get("host", "?")).split(".")[0]
+                      for line in read_jsonl(gpu_failures_path(run_dir)))
+    if off_gpu:
+        print("  model not on the GPU: " + ", ".join(f"{host} ({n}x)" for host, n in off_gpu.most_common()))
+        print(f"    leave these nodes out when resubmitting: EXCLUDE={','.join(off_gpu)}")
 
     if digests:
         print("  model digests: " + ", ".join(f"{(d or '?')[:12]} ({n:,})" for d, n in digests.items())
@@ -176,10 +197,9 @@ def main():
 
     unfinished = [n for n in partial + untouched if n not in in_progress]
     if unfinished:
-        # submit.sh picks the GPU slice. Keep the WORKERS the run has used so far.
+        # submit.sh picks the GPU slice and leaves out the nodes named in EXCLUDE.
         script = Path(__file__).resolve().parent / "fir" / "submit.sh"
-        workers = workers_seen.most_common(1)[0][0] if workers_seen else 1
-        prefix = f"WORKERS={workers} " if workers > 1 else ""
+        prefix = f"EXCLUDE={','.join(off_gpu)} " if off_gpu else ""
         print("  to (re)submit the unfinished batches:")
         print(f"    cd {run_dir} && {prefix}{script} {as_ranges(unfinished)}%{args.throttle}")
     elif done_total == total:

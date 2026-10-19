@@ -50,6 +50,13 @@ def safe_file_name(text):
     return re.sub(r"[^A-Za-z0-9._-]", "-", text)
 
 
+def median_of(lines, key):
+    """Return the median of one of Ollama's timings over the answers, or None if none have it."""
+    values = [(line.get("timings") or {}).get(key) for line in lines]
+    values = [value for value in values if value is not None]
+    return round(statistics.median(values), 3) if values else None
+
+
 def main():
     """Write the merged CSV and its .about.json, and print a short summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -123,6 +130,11 @@ def main():
         "hosts": sorted({str(line.get("host")) for line in used}),
         "seconds_per_call_median": round(statistics.median(seconds), 3) if seconds else None,
         "seconds_per_call_mean": round(statistics.mean(seconds), 3) if seconds else None,
+        # Ollama's own split of each call: reading the prompt and writing the answer.
+        "prompt_seconds_median": median_of(used, "prompt_s"),
+        "answer_seconds_median": median_of(used, "answer_s"),
+        "output_tokens_median": statistics.median([line["output_tokens"] for line in used
+                                                   if line.get("output_tokens")] or [0]),
         "first_answer": min((line["finished"] for line in used), default=None),
         "last_answer": max((line["finished"] for line in used), default=None),
     }

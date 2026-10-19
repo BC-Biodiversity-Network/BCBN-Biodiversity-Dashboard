@@ -12,7 +12,8 @@ What it does:
   2. Takes the batch's lock file, so two jobs never write the same batch.
   3. Checks the Ollama server is up and has the model, and records the
      model's digest. It never pulls a model: on Fir that is done once on the
-     login node.
+     login node. After the first answer it checks the whole model is on the
+     GPU, and stops before writing anything if it is not.
   4. Skips every record that already has a valid answer in
      results/batch_NNNN.jsonl, so rerunning a batch only does what is missing.
   5. For each remaining record, rebuilds the prompt, checks its fingerprint
@@ -30,6 +31,8 @@ Exit codes, so the Slurm log and sacct show how a batch ended:
   2  the server stopped answering part way; rerun the batch
   3  another job holds this batch's lock
   4  the run finished but some records still have no valid answer
+  5  the model was not entirely on the GPU, so nothing was written; resubmit
+     on another node (fir/submit.sh with EXCLUDE=<this node>)
 
 Usage:
 
@@ -57,6 +60,7 @@ from ollama_client import (  # noqa: E402
     OLLAMA_TIMEOUT,
     OllamaUnreachable,
     ask_ollama,
+    gpu_share,
     model_digest,
     wait_for_server,
 )
@@ -66,6 +70,7 @@ from run_files import (  # noqa: E402
     batch_name,
     error_kind,
     errors_path,
+    gpu_failures_path,
     load_run,
     lock_path,
     now_utc,
@@ -184,6 +189,8 @@ def main():
                         help=f"seconds to wait for one answer (default {OLLAMA_TIMEOUT})")
     parser.add_argument("--wait", type=int, default=180,
                         help="seconds to wait for the server to come up (default 180)")
+    parser.add_argument("--allow-cpu", action="store_true",
+                        help="carry on even if part of the model runs on the CPU (for tests only)")
     parser.add_argument("--limit", type=int, default=0,
                         help="only ask about this many of the remaining records (smoke test)")
     args = parser.parse_args()
@@ -268,6 +275,8 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
     seconds = []
     started = time.monotonic()
     stop_reason = None
+    stop_code = 0
+    gpu_checked = False
 
     pool = ThreadPoolExecutor(max_workers=args.workers)
     queue = iter(pending)
@@ -290,9 +299,31 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                 try:
                     record, result, took = future.result()
                 except OllamaUnreachable as error:
-                    stop_reason = stop_reason or f"the server stopped answering ({error})"
+                    if stop_reason is None:
+                        stop_reason, stop_code = f"the server stopped answering ({error})", 2
+                    continue
+                if stop_code == 5:
+                    # The model is not on the GPU: answers still in flight
+                    # are dropped, not written.
                     continue
                 record_id = record["record_id"]
+                if "answer" in result and not gpu_checked:
+                    # Once the model is loaded, make sure all of it is on the
+                    # GPU before keeping any answer. On a busy Fir node
+                    # Ollama's GPU discovery can time out, and then it runs
+                    # the model on the CPU without stopping.
+                    gpu_checked = True
+                    share = gpu_share(url, model)
+                    print(f"model on the GPU: {'unknown' if share is None else f'{share:.0%}'}")
+                    if (share is None or share < 0.999) and not args.allow_cpu:
+                        append_line(gpu_failures_path(run_dir), {
+                            "batch": number, "host": host, "job_id": job_id,
+                            "gpu_share": share, "finished": now_utc(),
+                        })
+                        stop_reason, stop_code = (f"the model is not entirely on the GPU on {host} "
+                                                  f"(GPU discovery probably timed out). Resubmit "
+                                                  f"with EXCLUDE={host.split('.')[0]}"), 5
+                        continue
                 if "answer" in result:
                     append_line(out_path, {
                         "record_id": record_id,
@@ -308,6 +339,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                         "output_tokens": result.get("output_tokens"),
                         "thinking_tokens": result.get("thinking_tokens"),
                         "seconds": round(took, 3),
+                        "timings": result.get("timings"),
                         "host": host,
                         "job_id": job_id,
                         "finished": now_utc(),
@@ -327,9 +359,9 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                     })
                     failed[record_id] = kind
                     print(f"    {record_id}: {result['error'][:150]}")
-                    if kind == "prompt_mismatch":
-                        stop_reason = stop_reason or ("a prompt differs from the one made on the "
-                                                      "Mac, so the code or its packages differ")
+                    if kind == "prompt_mismatch" and stop_reason is None:
+                        stop_reason, stop_code = ("a prompt differs from the one made on the Mac, "
+                                                  "so the code or its packages differ"), 1
                 fresh += 1
                 if fresh % REPORT_EVERY == 0:
                     rate = fresh / (time.monotonic() - started) * 3600
@@ -340,7 +372,8 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
     except BaseException:
         # Interrupted, for example by Slurm's time limit: note it, so the
         # questions still in flight are not waited for on the way out.
-        stop_reason = stop_reason or "interrupted"
+        if stop_reason is None:
+            stop_reason, stop_code = "interrupted", 2
         raise
     finally:
         # Do not wait for questions still in flight if the run is ending early.
@@ -365,7 +398,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
             print("  context_full records need a larger context: rerun with --num-ctx 65536")
     if stop_reason:
         print(f"STOPPED EARLY: {stop_reason}. Everything written so far is kept; rerun the batch.")
-        return 1 if "prompt" in stop_reason else 2
+        return stop_code
     return 0 if missing == 0 else 4
 
 

@@ -449,10 +449,23 @@ describe('records and merged keys', () => {
     expect(panel.querySelector('.card-previous-name').textContent)
       .toBe('Previously known as: Accipiter cooperii (Bonaparte, 1828)')
     expect(panel.querySelector('.card-previous-name i').textContent).toBe('Accipiter cooperii')
-    const records = within(panel).getByRole('region', { name: 'Records' }).textContent
-    expect(records).toContain('Includes 667 records filed under key VP2T6, merged into this species ' +
-      'because the Catalogue of Life lists its name as a synonym of this species.')
-    expect(records).not.toContain('exactly the same')
+    const records = within(panel).getByRole('region', { name: 'Records' })
+    expect(records.textContent).toContain('Includes 667 records filed under the name Accipiter ' +
+      'cooperii, merged into this species because the Catalogue of Life lists that name as a ' +
+      'synonym of this species.')
+    // The name is in italics, without its authorship, and the key is not named.
+    expect(records.querySelector('.card-note i').textContent).toBe('Accipiter cooperii')
+    expect(records.querySelector('.card-note').textContent).not.toContain('VP2T6')
+    expect(records.querySelector('.card-note').textContent).not.toContain('Bonaparte')
+    expect(records.textContent).not.toContain('exactly the same')
+  })
+
+  it('says "record" for a single record filed under the old name', async () => {
+    const card = hawkCard()
+    card.records = { ...card.records, merged_record_count: 1 }
+    const { panel } = await showCard(card)
+    expect(within(panel).getByRole('region', { name: 'Records' }).textContent).toContain(
+      'Includes 1 record filed under the name Accipiter cooperii, merged into this species')
   })
 
   it('says the old key was a synonym when it was typed', async () => {
@@ -469,9 +482,9 @@ describe('records and merged keys', () => {
     card.records = { ...card.records, merged_keys: ['OLD1', 'VP2T6'], merged_record_count: 670 }
     const { panel } = await showCard(card)
     expect(within(panel).getByRole('region', { name: 'Records' }).textContent).toContain(
-      'Includes 670 records filed under keys OLD1, VP2T6, merged into this species: OLD1 because the ' +
-      'species name is exactly the same, VP2T6 because the Catalogue of Life lists its name as a ' +
-      'synonym of this species.')
+      'Includes 670 records filed under key OLD1 and the name Accipiter cooperii, merged into this ' +
+      'species: OLD1 because the species name is exactly the same, Accipiter cooperii because the ' +
+      'Catalogue of Life lists that name as a synonym of this species.')
   })
 })
 

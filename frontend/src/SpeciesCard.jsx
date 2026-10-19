@@ -403,25 +403,60 @@ export function noDateSentence(count) {
     : `${count.toLocaleString()} of these records have no date.`
 }
 
-// How many records came from keys merged into this card, and why each key was
-// merged: the same species name, or a name the Catalogue of Life lists as a
-// synonym of this species. Placeholder wording until it is decided.
+// A list of names in italics, joined the way a sentence lists them: "A",
+// "A and B", "A, B and C".
+function ItalicNames({ names }) {
+  return names.map((name, index) => (
+    <Fragment key={name}>
+      {index > 0 && (index === names.length - 1 ? ' and ' : ', ')}
+      <i>{name}</i>
+    </Fragment>
+  ))
+}
+
+// How many records came from keys merged into this card, and why each was
+// merged. A key merged because the Catalogue of Life lists its name as a
+// synonym of this species is named by that name (from merged_names, in
+// italics, without authorship); a key with exactly the same species name is
+// named by its key, since the names are identical. Placeholder wording until
+// it is decided.
 function MergedRecordsNote({ card }) {
   const { records } = card
   const synonyms = synonymNames(card)
   const sameName = records.merged_keys.filter((key) => !synonyms.has(key))
-  const synonymKeys = records.merged_keys.filter((key) => synonyms.has(key))
-  const SAME = 'because the species name is exactly the same'
-  const SYNONYM = 'because the Catalogue of Life lists its name as a synonym of this species'
-  const why = sameName.length === 0 ? ` ${SYNONYM}`
-    : synonymKeys.length === 0 ? ` ${SAME}`
-      : `: ${sameName.join(', ')} ${SAME}, ${synonymKeys.join(', ')} ${SYNONYM}`
-  return (
-    <p className="card-note">
+  const synonymNamesList = records.merged_keys.filter((key) => synonyms.has(key))
+    .map((key) => synonyms.get(key).col_name)
+  const count = (
+    <>
       Includes {records.merged_record_count.toLocaleString()}{' '}
       {records.merged_record_count === 1 ? 'record' : 'records'} filed under{' '}
-      {records.merged_keys.length === 1 ? 'key' : 'keys'} {records.merged_keys.join(', ')}, merged
-      into this species{why}.
+    </>
+  )
+  const keys = `${sameName.length === 1 ? 'key' : 'keys'} ${sameName.join(', ')}`
+  const nameWord = synonymNamesList.length === 1 ? 'the name' : 'the names'
+  const SAME = 'because the species name is exactly the same'
+  const synonymWhy = synonymNamesList.length === 1
+    ? 'because the Catalogue of Life lists that name as a synonym of this species'
+    : 'because the Catalogue of Life lists those names as synonyms of this species'
+
+  if (synonymNamesList.length === 0) {
+    return <p className="card-note">{count}{keys}, merged into this species {SAME}.</p>
+  }
+  if (sameName.length === 0) {
+    return (
+      <p className="card-note">
+        {count}{nameWord} <ItalicNames names={synonymNamesList} />, merged into this
+        species {synonymWhy}.
+      </p>
+    )
+  }
+  // Both kinds on one card: the record count cannot be split by key, so one
+  // sentence names both and says why for each.
+  return (
+    <p className="card-note">
+      {count}{keys} and {nameWord} <ItalicNames names={synonymNamesList} />, merged into
+      this species: {sameName.join(', ')} {SAME}, <ItalicNames names={synonymNamesList} />{' '}
+      {synonymWhy}.
     </p>
   )
 }

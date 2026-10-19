@@ -1,0 +1,187 @@
+"""
+Talk to an Ollama server: ask one question, and check the server is ready.
+
+Shared by exploration/llm/run_trial.py (the Mac run) and run_batch.py (the
+cluster run on Fir), so both send exactly the same request. ask_ollama was
+moved here from run_trial.py word for word.
+
+Only the Python standard library is used for the HTTP calls, so nothing extra
+has to be installed on the cluster.
+"""
+
+import json
+import time
+import urllib.error
+import urllib.request
+
+from prompt_v6 import RESPONSE_SCHEMA
+
+
+# How much text Ollama is allowed to hold for one request, in tokens: the
+# prompt plus the answer. Ollama's own default is small and when a prompt is
+# longer it cuts it without any error, so the model would be answering about
+# half a record. The v6 instructions are about 3,500 tokens, and the longest
+# records in the test set add about 7,000 more, so 8,192 is not enough for
+# them. 16,384 leaves room for those and for the answer.
+OLLAMA_NUM_CTX = 16384
+
+# How long to wait for one answer before giving up on that call, in seconds.
+# A small model on a laptop answers in a few seconds. A large model on a busy
+# node can take much longer, so this is generous, and it can be raised with
+# --ollama-timeout.
+OLLAMA_TIMEOUT = 300
+
+
+class OllamaUnreachable(Exception):
+    """
+    Raised when nothing answers at the Ollama address.
+
+    That is not something a retry fixes. The server is not started, or the
+    address is wrong, so the run stops with a message saying so instead of
+    trying every record and failing each one.
+    """
+
+
+def plain_json_schema(schema):
+    """
+    Return a copy of the answer schema in plain JSON Schema, for Ollama.
+
+    RESPONSE_SCHEMA is written for Gemini. It can carry keys only Gemini
+    understands, such as propertyOrdering, and Gemini also accepts type names
+    in capitals such as "STRING". Ollama wants standard JSON Schema, so those
+    keys are dropped and type names are put in lower case. Everything else is
+    kept as it is, including the order of the properties, so "reason" stays
+    first. Ollama fills the fields in the order they appear here.
+    """
+    if isinstance(schema, dict):
+        plain = {}
+        for key, value in schema.items():
+            if key == "propertyOrdering":
+                continue
+            if key == "type" and isinstance(value, str):
+                plain[key] = value.lower()
+            else:
+                plain[key] = plain_json_schema(value)
+        return plain
+    if isinstance(schema, list):
+        return [plain_json_schema(item) for item in schema]
+    return schema
+
+
+def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT):
+    """
+    Send one prompt to an Ollama server and return the answer and token counts.
+
+    This plays the same part as ask_model does for Gemini and returns the same
+    shape, so the rest of the script does not care which one answered. Another
+    local server, such as vLLM, would be added as one more small function like
+    this one.
+
+    It uses Ollama's own chat endpoint, /api/chat, and asks for:
+      the same prompt text Gemini gets, as a single user message
+      format: the answer schema, so Ollama forces the reply into that shape
+      think: false, so a model with a thinking mode answers straight away
+          instead of first writing out long reasoning that is not wanted
+      temperature 0, the same as for Gemini
+      num_ctx: room for the whole prompt, see OLLAMA_NUM_CTX
+
+    A call that times out or fails is tried once more. If the server cannot be
+    reached at all, OllamaUnreachable is raised to stop the run. If the prompt
+    filled the whole context, Ollama may have cut it, so the answer is
+    returned as an error rather than trusted.
+    """
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "think": False,
+        "format": plain_json_schema(RESPONSE_SCHEMA),
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+    }
+    request = urllib.request.Request(
+        url.rstrip("/") + "/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            # The server is there but refused the request. A missing model is
+            # the common case, and retrying will not pull it.
+            detail = error.read().decode("utf-8", errors="replace")[:200]
+            return {"error": f"Ollama said {error.code}: {detail}"}
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (ConnectionRefusedError, FileNotFoundError)):
+                raise OllamaUnreachable(str(error.reason))
+            last_error = error
+        except (TimeoutError, OSError) as error:
+            last_error = error
+        if attempt == 0:
+            print(f"    call failed ({last_error}), trying once more")
+    else:
+        return {"error": f"gave up after 2 attempts: {last_error}"}
+
+    input_tokens = reply.get("prompt_eval_count")
+    if input_tokens and input_tokens >= num_ctx - 16:
+        return {"error": f"the prompt filled the whole context ({input_tokens} of "
+                         f"{num_ctx} tokens) and may have been cut, raise --num-ctx"}
+    content = reply.get("message", {}).get("content", "")
+    try:
+        answer = json.loads(content)
+    except json.JSONDecodeError as error:
+        return {"error": f"reply was not valid JSON: {error}"}
+    return {
+        "answer": answer,
+        "input_tokens": input_tokens,
+        "output_tokens": reply.get("eval_count"),
+        # Ollama does not count reasoning separately. With think set to false
+        # there should be none, so this is recorded as 0.
+        "thinking_tokens": 0,
+    }
+
+
+def get_json(url, path, timeout=10):
+    """Fetch one of Ollama's small JSON pages, such as /api/version, and return it."""
+    with urllib.request.urlopen(url.rstrip("/") + path, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def wait_for_server(url, seconds):
+    """
+    Wait until an Ollama server answers, and return its version.
+
+    On the cluster the server is started by the job script a moment before
+    the Python run, and it takes a few seconds to come up. This asks every two
+    seconds. If nothing answers in time, OllamaUnreachable is raised.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return get_json(url, "/api/version").get("version")
+        except (urllib.error.URLError, OSError) as error:
+            if time.monotonic() >= deadline:
+                raise OllamaUnreachable(f"nothing answered at {url} after {seconds} s ({error})")
+        time.sleep(2)
+
+
+def model_digest(url, model):
+    """
+    Return the digest of the model the server holds under this name, or None.
+
+    The digest identifies the exact weights. On the Mac, qwen3.5:4b is the MLX
+    build; on an NVIDIA machine the same name is the GGUF build, with another
+    digest. Recording it with every answer shows which weights produced it.
+
+    Nothing is pulled here. If the model is missing this returns None, and the
+    caller stops with a message, because on the cluster the compute nodes may
+    have no internet and the model must be pulled on the login node first.
+    """
+    for entry in get_json(url, "/api/tags").get("models", []):
+        if entry.get("name") == model or entry.get("model") == model:
+            return entry.get("digest")
+    return None

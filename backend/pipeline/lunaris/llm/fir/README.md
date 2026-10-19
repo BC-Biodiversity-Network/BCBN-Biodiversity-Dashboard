@@ -64,31 +64,41 @@ stores no secret):
     sacctmgr -n show assoc user=$USER format=account%30 | sort -u
 
 Then a 15-minute GPU session to see the GPU and whether compute nodes have
-internet:
+internet. Fir needs a GPU model in every request; plain `--gpus=1` is refused.
 
-    salloc --account=def-srivast --gpus=1 --cpus-per-task=2 --mem=4G --time=0:15:00
+    salloc --account=def-srivast --gpus=nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=2 --mem=4G --time=0:15:00
     nvidia-smi
     curl -sI --max-time 10 https://registry.ollama.ai/v2/ | head -1 || echo "no internet on compute nodes"
     exit
 
-What each answer changes:
+What the checks found on 2026-10-19, and what was done about it:
 
-- **GPU types.** Put the type in the `--gpus` line of `llm_array.sbatch` (for
-  example `--gpus=h100:1`). If MIG slices such as `2g.20gb` are listed, use the
-  smallest one. The model needs about 4 GB, and a slice is quicker to get and
-  uses less of the group's share.
-- **Time limits.** Keep `--time` at or under 3 hours if possible, because
-  short jobs start sooner.
-- **Python module name.** If it is not `python/3.12`, change the `module load`
-  line in `llm_array.sbatch`, `status.sh` and step 2.
-- **Login node downloads.** If GitHub or the Ollama registry is blocked, stop
-  and tell Claude. Nothing gets downloaded on the Mac without asking first.
-- **Compute nodes have no internet.** That is expected and fine: the model is
-  pulled on the login node, and the jobs never download anything.
-- **Quotas.** The model is about 3 to 4 GB and the Ollama program about 1 to
-  2 GB. If home is tight, put `ollama/` and `venv/` in scratch and set
-  `LUNARIS_OLLAMA_BIN` and `LUNARIS_LLM_VENV` when submitting.
-- **No Apptainer.** It only matters if the Ollama program will not run (step 2).
+- **A GPU model is required in every request.** Allowed: `h100` (a whole
+  H100 80 GB) and the MIG slices `nvidia_h100_80gb_hbm3_1g.10gb`, `_2g.20gb`
+  and `_3g.40gb`. `fir/submit.sh` picks the slice from `WORKERS` and `NUM_CTX`
+  (the table is at the top of `submit.sh`), or takes `GPU=...`. Plain
+  `sbatch` gets the 1g.10gb default.
+- **The 1g.10gb slice was granted within seconds.** It has 9,984 MiB and 16
+  SMs, driver 580.178.04, CUDA 13.0. The Ollama archive brings its own CUDA
+  libraries and only needs the driver.
+- **`--account=def-srivast` works.** Slurm picks def-srivast_gpu by itself.
+- **Partitions.** `gpubase_bygpu_b1` takes jobs up to 3 hours and starts
+  soonest, b2 up to 12 hours, b3 up to a day. The job script asks for 3 hours,
+  so it lands in b1. The interactive partition only has MIG slices.
+- **Modules.** `python/3.12` (3.12.4) exists; 3.11 is the default, and 3.13
+  and 3.14 are there too. The scripts load `python/3.12` only. Fir loads a
+  standard environment (StdEnv) by itself at login and in jobs, and
+  `python/3.12` was found under it, so no StdEnv line is needed. Step 2 shows
+  how to note which one it is. The `apptainer` module exists.
+- **Python packages.** `pandas` 3.0.5 has wheels for 3.12, the same version as
+  on the Mac. `vllm` is only 0.25.0, which is far too old for qwen3.5, so plan
+  B (vLLM) would have to run in an Apptainer container.
+- **Internet.** The login node reaches GitHub and the Ollama registry. So
+  does a compute node, but the jobs still never download: the model is pulled
+  once on the login node, so every job uses the same copy.
+- **Disk.** /home has 48 GiB, /scratch 19 TiB, and there is no `~/projects`
+  yet, so runs and the model live in scratch. Scratch is cleaned of old
+  files, so copy results back to the Mac when a run finishes.
 
 ## 2. One-time setup on the login node
 
@@ -107,9 +117,13 @@ https://github.com/ollama/ollama/releases/tag/v0.40.0 and use the
 `linux-amd64` file listed there. If it ends in `.tar.zst`, unpack it with
 `tar --zstd -C ollama -xf <file>`.
 
-The Python environment:
+The Python environment. The first line shows which standard environment Fir
+loaded for you; write it down. If Fir changes its default one day and the jobs
+start failing to import pandas, rebuild the environment with these same
+commands.
 
-    module load StdEnv/2023 python/3.12
+    module list 2>&1 | grep -o 'StdEnv/[0-9]*'
+    module load python/3.12
     virtualenv --no-download ~/lunaris_llm/venv
     source ~/lunaris_llm/venv/bin/activate
     pip install --no-index --upgrade pip
@@ -150,14 +164,15 @@ so it starts empty:
 
 ## 4. Test runs: the 900 records, twice
 
-Run 1 asks one record at a time, the same as the Mac. Run 2 asks 4 at a time.
-They use separate GPUs, so both can be submitted at once.
+Run 1 asks one record at a time, the same as the Mac, on a 1g.10gb slice.
+Run 2 asks 4 at a time on a 2g.20gb slice. `submit.sh` picks the slices. They
+use separate GPU slices, so both can be submitted at once.
 
     cd ~/scratch/lunaris_llm/runs/test900
-    sbatch --array=0 ~/lunaris_llm/code/fir/llm_array.sbatch
+    ~/lunaris_llm/code/fir/submit.sh 0
 
     cd ~/scratch/lunaris_llm/runs/test900_par4
-    WORKERS=4 sbatch --array=0 ~/lunaris_llm/code/fir/llm_array.sbatch
+    WORKERS=4 ~/lunaris_llm/code/fir/submit.sh 0
 
 Watch them:
 
@@ -166,19 +181,27 @@ Watch them:
     ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_par4
     tail -5 ~/scratch/lunaris_llm/runs/test900/logs/lunaris-llm_*_0.out
 
-The job log shows the GPU, the Ollama version, the model digest, progress
-every 25 records and a summary at the end. The Ollama server's own log is in
-`logs/ollama_*.log`.
+The job log shows the GPU slice, the Ollama version, the model digest,
+progress every 25 records and a summary at the end. The Ollama server's own
+log is in `logs/ollama_*.log`.
+
+The last line of each job log, `gpu use`, says how much of the model was on
+the GPU. It should say 100%. Less means part of the model ran on the CPU
+because the slice was too small. Resubmit that run with the next slice up, for
+example `GPU=nvidia_h100_80gb_hbm3_2g.20gb ~/lunaris_llm/code/fir/submit.sh 0`.
+If it says 0%, Ollama did not use the MIG slice at all; try `GPU=h100`.
+
+    grep -h "gpu use\|WARNING" ~/scratch/lunaris_llm/runs/test900*/logs/lunaris-llm_*.out
 
 If status shows records still failing, resubmit the same command. Only the
 missing records are asked again. Records too long for the default context
 (`context_full`) need a bigger one:
 
-    NUM_CTX=65536 sbatch --array=0 ~/lunaris_llm/code/fir/llm_array.sbatch
+    NUM_CTX=65536 ~/lunaris_llm/code/fir/submit.sh 0
 
 When status says all done, merge each run into its CSV:
 
-    module load StdEnv/2023 python/3.12 && source ~/lunaris_llm/venv/bin/activate
+    module load python/3.12 && source ~/lunaris_llm/venv/bin/activate
     python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900
     python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_par4
 
@@ -240,15 +263,17 @@ Then copy them:
         --run-dir data/lunaris_llm_runs/harvest_2026_10
     scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
 
-**(Fir)** Submit all 41 batches, 4 at a time. Use the `WORKERS` and `--time`
-that the test runs showed work best:
+**(Fir)** Submit all 41 batches, 4 at a time. Use the `WORKERS` that the test
+runs showed works best. A 4,000-record batch must also finish within the
+3-hour limit, so check the test runs' speed first: at more than about 2.5
+seconds per record, use smaller batches (`--batch-size 2000` in make_batches).
 
     cd ~/scratch/lunaris_llm/runs/harvest_2026_10
-    WORKERS=4 sbatch --array=0-40%4 ~/lunaris_llm/code/fir/llm_array.sbatch
+    WORKERS=4 ~/lunaris_llm/code/fir/submit.sh 0-40%4
     ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/harvest_2026_10
 
-`status.sh` prints the exact `sbatch --array=...` line that resubmits only
-unfinished batches. Then do the `NUM_CTX=65536` pass for the few long records
+`status.sh` prints the exact `submit.sh` line that resubmits only unfinished
+batches. Then do the `NUM_CTX=65536` pass for the few long records
 (4 prompts are over 55,000 characters), merge, and copy back as in steps 4
 and 5.
 

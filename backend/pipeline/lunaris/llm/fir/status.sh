@@ -7,6 +7,6 @@
 # loads the Python module and the environment first and then runs it. It only
 # reads files and asks squeue, so it is safe to run at any time.
 
-module load StdEnv/2023 python/3.12 >/dev/null 2>&1   # CONFIRM ON FIR: same modules as llm_array.sbatch
+module load python/3.12 >/dev/null 2>&1   # the same module as llm_array.sbatch
 source "${LUNARIS_LLM_VENV:-$HOME/lunaris_llm/venv}/bin/activate"
 python "$(dirname "$0")/../status.py" "${1:-.}" "${@:2}"

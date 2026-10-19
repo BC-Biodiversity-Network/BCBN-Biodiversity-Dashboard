@@ -5,7 +5,7 @@ Prints: records done out of the total, batches done, part done and not
 started, which batches a job is working on now, open errors grouped by kind,
 the speed over the last hour and the time left at that speed, the model
 digests seen (there should be exactly one), your lunaris-llm jobs in the Slurm
-queue, and the sbatch command that resubmits only the unfinished batches.
+queue, and the fir/submit.sh command that resubmits only the unfinished batches.
 
 It only reads files, so it is safe to run at any time, also while jobs are
 writing.
@@ -87,6 +87,7 @@ def main():
     open_errors = Counter()
     last_errors = []
     digests = Counter()
+    workers_seen = Counter()
     last_hour = 0
     earliest = None
     seconds = []
@@ -98,6 +99,7 @@ def main():
         done_total += len(answers)
         for line in answers.values():
             digests[line.get("model_digest")] += 1
+            workers_seen[line.get("workers") or 1] += 1
             if line.get("finished") and parse_utc(line["finished"]) >= hour_ago:
                 last_hour += 1
                 finished = parse_utc(line["finished"])
@@ -141,7 +143,7 @@ def main():
         for line in sorted(last_errors, key=lambda l: l.get("finished", ""))[-3:]:
             print(f"    {line.get('finished')} {line.get('record_id')}: {str(line.get('error'))[:110]}")
         if open_errors.get("context_full"):
-            print("    context_full: once the rest is done, resubmit with NUM_CTX=65536 (fir/README.md)")
+            print("    context_full: once the rest is done, resubmit with NUM_CTX=65536 fir/submit.sh (fir/README.md)")
     else:
         print("  open errors: none")
 
@@ -174,9 +176,12 @@ def main():
 
     unfinished = [n for n in partial + untouched if n not in in_progress]
     if unfinished:
-        script = Path(__file__).resolve().parent / "fir" / "llm_array.sbatch"
+        # submit.sh picks the GPU slice. Keep the WORKERS the run has used so far.
+        script = Path(__file__).resolve().parent / "fir" / "submit.sh"
+        workers = workers_seen.most_common(1)[0][0] if workers_seen else 1
+        prefix = f"WORKERS={workers} " if workers > 1 else ""
         print("  to (re)submit the unfinished batches:")
-        print(f"    cd {run_dir} && sbatch --array={as_ranges(unfinished)}%{args.throttle} {script}")
+        print(f"    cd {run_dir} && {prefix}{script} {as_ranges(unfinished)}%{args.throttle}")
     elif done_total == total:
         print(f"  all done. Merge with: python {Path(__file__).resolve().parent / 'merge_results.py'} {run_dir}")
     return 0

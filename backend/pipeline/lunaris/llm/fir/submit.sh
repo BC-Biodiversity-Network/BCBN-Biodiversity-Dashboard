@@ -10,11 +10,13 @@
 #   NUM_CTX=65536 ~/lunaris_llm/code/fir/submit.sh 0      # long records, 2g.20gb
 #   EXCLUDE=fc10203 ~/lunaris_llm/code/fir/submit.sh 0-3  # leave out a node (comma list)
 #   GPU=h100 ~/lunaris_llm/code/fir/submit.sh 0           # choose the GPU yourself
+#   CPUS=8 NUM_THREAD=8 ~/lunaris_llm/code/fir/submit.sh 0  # more CPUs, and tell Ollama
+#   BACKEND=vllm ~/lunaris_llm/code/fir/submit.sh 0       # plan B: vLLM, 3g.40gb, 32 at once
 #
 # One request at a time only. Ollama always runs qwen3.5 (architecture qwen35)
 # one request at a time, whatever OLLAMA_NUM_PARALLEL says, so WORKERS above 1
 # only makes requests wait in line. Speed comes from running many batches at
-# once, each on its own small slice. WORKERS above 1 is refused here.
+# once, each on its own small slice. With Ollama, WORKERS above 1 is refused.
 #
 # How the slice is chosen. qwen3.5:4b needs 32 KiB of KV cache per token of
 # context (only 8 of its 32 layers keep one). On top of that come about 3 to
@@ -32,24 +34,39 @@
 #
 # CPUs and memory grow with the slice. Ollama needs little of either.
 
-WORKERS="${WORKERS:-1}"
+BACKEND="${BACKEND:-ollama}"
 NUM_CTX="${NUM_CTX:-16384}"
+NUM_THREAD="${NUM_THREAD:-}"
 ARRAY="${1:?give the batches to run, for example 0 or 0-268%16}"
 
-# NUM_CTX must be a whole number, or the slice below would be chosen wrong.
-if ! [[ "$NUM_CTX" =~ ^[1-9][0-9]*$ ]]; then
-    echo "ERROR: NUM_CTX ('$NUM_CTX') must be a whole number."
+# vLLM answers many records at once, so it gets 32 in flight by default.
+if [[ "$BACKEND" == vllm ]]; then
+    WORKERS="${WORKERS:-32}"
+elif [[ "$BACKEND" == ollama ]]; then
+    WORKERS="${WORKERS:-1}"
+else
+    echo "ERROR: BACKEND ('$BACKEND') must be ollama or vllm."
     exit 1
 fi
-if [[ "$WORKERS" != "1" ]]; then
+
+# The settings must be whole numbers, or the slice below would be chosen wrong.
+if ! [[ "$NUM_CTX" =~ ^[1-9][0-9]*$ && "$WORKERS" =~ ^[1-9][0-9]*$
+        && ( -z "$NUM_THREAD" || "$NUM_THREAD" =~ ^[1-9][0-9]*$ ) ]]; then
+    echo "ERROR: NUM_CTX ('$NUM_CTX'), WORKERS ('$WORKERS') and NUM_THREAD ('$NUM_THREAD') must be whole numbers."
+    exit 1
+fi
+if [[ "$BACKEND" == ollama && "$WORKERS" != "1" ]]; then
     echo "ERROR: WORKERS=$WORKERS. Ollama runs qwen3.5 one request at a time, so only WORKERS=1"
     echo "       makes sense. To go faster, run more batches at once, for example 0-268%16."
     exit 1
 fi
 
-# The slice, unless GPU was given.
+# The slice, unless GPU was given. vLLM holds the full bf16 weights (about
+# 9 GB) plus room for many records at once, so it starts at 3g.40gb.
 if [[ -z "${GPU:-}" ]]; then
-    if (( NUM_CTX <= 16384 )); then
+    if [[ "$BACKEND" == vllm ]]; then
+        GPU=nvidia_h100_80gb_hbm3_3g.40gb
+    elif (( NUM_CTX <= 16384 )); then
         GPU=nvidia_h100_80gb_hbm3_1g.10gb
     elif (( NUM_CTX <= 131072 )); then
         GPU=nvidia_h100_80gb_hbm3_2g.20gb
@@ -58,14 +75,20 @@ if [[ -z "${GPU:-}" ]]; then
     fi
 fi
 
-# CPUs and memory to go with it.
+# CPUs and memory to go with it. CPUS=... overrides the CPU count, for
+# example to test whether Ollama's answer writing is short of CPU.
 case "$GPU" in
-    *1g.10gb) CPUS=2; MEM=8G ;;
-    *2g.20gb) CPUS=4; MEM=16G ;;
-    *3g.40gb) CPUS=6; MEM=32G ;;
-    h100)     CPUS=8; MEM=64G ;;
+    *1g.10gb) DEFAULT_CPUS=2; MEM=8G ;;
+    *2g.20gb) DEFAULT_CPUS=4; MEM=16G ;;
+    *3g.40gb) DEFAULT_CPUS=6; MEM=32G ;;
+    h100)     DEFAULT_CPUS=8; MEM=64G ;;
     *) echo "ERROR: unknown GPU '$GPU'. Use h100 or nvidia_h100_80gb_hbm3_{1g.10gb,2g.20gb,3g.40gb}."; exit 1 ;;
 esac
+CPUS="${CPUS:-$DEFAULT_CPUS}"
+if ! [[ "$CPUS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: CPUS ('$CPUS') must be a whole number."
+    exit 1
+fi
 
 # Nodes to leave out, for example ones where Ollama's GPU discovery timed out
 # (status.sh lists them). A comma-separated list of node names.
@@ -78,7 +101,7 @@ if [[ -n "${EXCLUDE:-}" ]]; then
     EXTRA+=(--exclude="$EXCLUDE")
 fi
 
-echo "submitting batches $ARRAY: NUM_CTX=$NUM_CTX on $GPU ($CPUS CPUs, $MEM)${EXCLUDE:+, leaving out $EXCLUDE}"
-export WORKERS NUM_CTX
+echo "submitting batches $ARRAY: $BACKEND, WORKERS=$WORKERS NUM_CTX=$NUM_CTX${NUM_THREAD:+ NUM_THREAD=$NUM_THREAD} on $GPU ($CPUS CPUs, $MEM)${EXCLUDE:+, leaving out $EXCLUDE}"
+export BACKEND WORKERS NUM_CTX NUM_THREAD
 exec sbatch --array="$ARRAY" --gpus="$GPU:1" --cpus-per-task="$CPUS" --mem="$MEM" "${EXTRA[@]}" \
     "$(dirname "$0")/llm_array.sbatch"

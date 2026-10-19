@@ -117,7 +117,10 @@ def main():
         "label": label,
         "model": run["model"],
         "model_digest": digests[0] if digests else None,
-        "ollama_versions": sorted({str(line.get("ollama_version")) for line in used}),
+        "backends": sorted({str(line.get("backend") or "ollama") for line in used}),
+        "server_versions": sorted({str(line.get("server_version") or line.get("ollama_version"))
+                                   for line in used}),
+        "num_thread_values": sorted({line.get("num_thread") for line in used if line.get("num_thread")}),
         "prompt_version": PROMPT_VERSION,
         "source": run.get("source"),
         "source_sha1": run.get("source_sha1"),

@@ -28,6 +28,9 @@ model, so some answers can change. That is what test runs 1 and 2 measure.
 | `~/lunaris_llm/ollama/` | the Ollama 0.40.0 program |
 | `~/scratch/lunaris_llm/models/` | the downloaded model (`OLLAMA_MODELS`) |
 | `~/scratch/lunaris_llm/runs/<run>/` | one folder per run: `run.json`, `inputs/`, `results/`, `errors/`, `logs/` |
+| `~/lunaris_llm/venv_vllm/` | vLLM's own Python environment (plan B test only) |
+| `~/scratch/lunaris_llm/hf/Qwen3.5-4B/` | the Hugging Face weights for vLLM (plan B test only) |
+| `~/scratch/lunaris_llm/bench/` | the CPU benchmark's logs and CSVs (step 4b) |
 
 Scratch is cleaned of old files on Alliance clusters, so copy results back to
 the Mac when a run finishes. Once `/project` is ready for def-srivast, the code,
@@ -239,6 +242,60 @@ This writes `trial_qwen3.5-4b-fir_v6_test900.csv` (and `..._test900_x4.csv`)
 in each run folder, with a `.about.json` beside it: digest, Ollama version,
 seconds per call, and the prompt and answer timings.
 
+## 4b. Is answer writing short of CPU?
+
+Run 1's server log showed where the time goes. Reading the prompt takes about
+1 second, because the shared instructions are reused from the record before.
+Writing the answer (about 113 tokens) runs at only about 10 tokens a second,
+about 10 of the 12.8 seconds. The GPU slice should manage far more, so the
+suspect is the CPU side: picking each token from a 248,000-word vocabulary,
+the presence penalty, and the JSON schema check all run on the CPU, and the
+job had 2 CPUs. Ollama may also start many more threads than that.
+
+**Free look while run 1 is still going.** Put run 1's job id in `JOB`. This
+shows how many CPUs the job may use, how many the node has, how many threads
+Ollama's runner started (and its `--threads` setting), and how busy each
+process is:
+
+    JOB=<run 1 job id>
+    srun --jobid=$JOB --overlap bash -c 'echo "usable $(nproc) of $(nproc --all)"; for p in $(pgrep -u $USER -f "llama-server|ollama"); do echo "$p $(grep Threads /proc/$p/status) $(tr "\0" " " < /proc/$p/cmdline | grep -o -- "--threads [0-9]*")"; done; top -b -n 1 -u $USER | head -15'
+
+A runner with dozens of threads, or `--threads` far above 2, while `top`
+shows about 200% CPU, means the 2 CPUs are oversubscribed.
+
+**The benchmark.** Two short jobs, each sending the same 24 records to
+Ollama under four settings: as run, with `num_thread` set to the job's CPU
+count, also without the presence penalty, and also without the JSON schema.
+One job has 2 CPUs and one has 8. Each takes 10 to 25 minutes on a 1g.10gb
+slice; together about 0.1 H100-hours.
+
+    mkdir -p ~/scratch/lunaris_llm/bench/logs && cd ~/scratch/lunaris_llm/bench
+    sbatch --cpus-per-task=2 ~/lunaris_llm/code/fir/bench_decode.sbatch ~/scratch/lunaris_llm/runs/test900
+    sbatch --cpus-per-task=8 --mem=16G ~/lunaris_llm/code/fir/bench_decode.sbatch ~/scratch/lunaris_llm/runs/test900
+    tail -12 ~/scratch/lunaris_llm/bench/logs/lunaris-bench_*.out
+
+Each log ends with a table: answer tokens a second, prompt seconds, total
+seconds, how busy the CPUs were, and whether `threads` gives the same answers
+as `as_run`. Before deciding, also check what each job is billed:
+
+    scontrol show job <job id> | grep -o 'billing=[0-9]*'
+
+Asking for more CPUs than a 1g slice comes with may make each slice-hour
+cost more.
+
+How to read it:
+
+- **`threads` is much faster than `as_run` on 2 CPUs, with the same facts.**
+  Ollama started too many threads. Setting `num_thread` is free: submit with
+  `NUM_THREAD=2`, and it can then be made the default in `submit.sh`.
+- **Only the 8-CPU job is fast.** The work needs more CPUs: submit with
+  `CPUS=8 NUM_THREAD=8`, if the billing check allows it.
+- **`threads_no_schema` or `threads_no_penalty` is much faster.** The schema
+  or the penalty is the cost. Neither can simply be dropped, because both
+  change the answers, so this points to vLLM.
+- **Nothing helps, and the CPUs are not busy.** The slowness is on the GPU
+  side, in llama.cpp's code for this kind of model. That also points to vLLM.
+
 ## 5. Compare with the Mac (Mac)
 
 Copy both runs back:
@@ -285,24 +342,33 @@ The full run starts only after Lucia approves this result.
 
 ## 6. The full October harvest (only after approval)
 
-This is the Ollama plan, sized for run 1's speed: 12.8 s per record on a
-1g.10gb slice. If the vLLM test is chosen instead, this step changes.
+This is the Ollama plan, on 1g.10gb slices, 16 at once. Its size depends on
+how fast answers are written, which step 4b measures. Each record takes about
+1.2 s to read plus 113 tokens to write, plus about 0.3 s of overhead. Batches
+are sized to about 2.3 hours of work, inside the 3-hour limit with room for
+slow records and model loading.
 
-- **Total:** 161,278 records x 12.8 s is about 573 slice-hours.
-- **Batch size 600:** about 2.1 hours of work per batch, inside the 3-hour
-  limit with room for slow records and model loading. That makes 269 batches
-  (0 to 268).
-- **16 at once:** about 36 hours of wall time. 32 at once would halve that,
-  if slices keep starting within seconds.
+| answer speed | per record | slice-hours | batch size | batches | wall time at %16 |
+|---|---|---|---|---|---|
+| 10 tok/s (run 1) | 12.8 s | 573 | 600 | 269 (0-268) | 36 h |
+| 20 tok/s | 7.2 s | 320 | 1,100 | 147 (0-146) | 20 h |
+| 40 tok/s | 4.3 s | 194 | 1,900 | 85 (0-84) | 12 h |
+| 80 tok/s | 2.9 s | 130 | 2,800 | 58 (0-57) | 8 h |
 
-**(Mac)** Make the batches and copy them:
+A 1g slice is about 1/7 of an H100, so slice-hours divided by 7 is roughly
+the H100-hours used. That holds unless extra CPUs make each slice cost more.
+
+If the vLLM test (step 7) is chosen instead, this step changes.
+
+**(Mac)** Make the batches, with the batch size from the table, and copy them:
 
     python pipeline/lunaris/llm/make_batches.py \
         --harvest exploration/lunaris/harvest_2026_10/lunaris_full_harvest.parquet \
         --run-dir data/lunaris_llm_runs/harvest_2026_10 --batch-size 600
     scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
 
-**(Fir)** Submit, then watch:
+**(Fir)** Submit with the settings step 4b settled on (for example
+`NUM_THREAD=2`), then watch:
 
     cd ~/scratch/lunaris_llm/runs/harvest_2026_10
     ~/lunaris_llm/code/fir/submit.sh 0-268%16
@@ -312,6 +378,65 @@ This is the Ollama plan, sized for run 1's speed: 12.8 s per record on a
 batches, with `EXCLUDE=` for any node where the model was off the GPU. Then
 do the `NUM_CTX=65536` pass for the few long records (4 prompts are over
 55,000 characters), merge, and copy back as in steps 4 and 5.
+
+## 7. Plan B test: vLLM on the same 900 records
+
+vLLM serves the same model (Qwen3.5-4B) from Hugging Face's full-precision
+(bf16) weights, about 9 GB. It writes answers for many records at once and
+keeps the shared instructions cached. These are a third version of the
+weights, after the Mac's MLX build and Fir's GGUF build, so the test has to
+pass the same gates against the Mac on its own (step 5).
+
+**One-time setup on the login node** (about 30 minutes, mostly waiting):
+
+    module load python/3.12
+    avail_wheels vllm torch transformers xgrammar huggingface_hub
+    virtualenv --no-download ~/lunaris_llm/venv_vllm
+    source ~/lunaris_llm/venv_vllm/bin/activate
+    pip install --no-index --upgrade pip
+    pip install --no-index vllm==0.25.0 huggingface_hub
+    python -c "import vllm; print(vllm.__version__)"
+    mkdir -p ~/scratch/lunaris_llm/hf
+    hf download Qwen/Qwen3.5-4B --local-dir ~/scratch/lunaris_llm/hf/Qwen3.5-4B
+    du -sh ~/scratch/lunaris_llm/hf/Qwen3.5-4B
+    deactivate
+
+If `import vllm` fails over a missing library, check the Alliance vLLM page for
+the modules it needs. Name them in `VLLM_MODULES` when submitting, for example
+`VLLM_MODULES="cuda/12.6"`. If the `hf` command is missing, use
+`huggingface-cli download` with the same arguments.
+
+**Copy the test folder (Mac):**
+
+    scp -r data/lunaris_llm_runs/test900_vllm songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
+
+It holds the same 900 records as one batch. Its model is `Qwen/Qwen3.5-4B` and
+its label `qwen3.5-4b-vllm-bf16`.
+
+**Run it (Fir):** one job on a 3g.40gb slice, 32 records in flight.
+
+    cd ~/scratch/lunaris_llm/runs/test900_vllm
+    BACKEND=vllm ~/lunaris_llm/code/fir/submit.sh 0
+    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_vllm
+    tail -20 ~/scratch/lunaris_llm/runs/test900_vllm/logs/vllm_*_0.log
+
+vLLM takes several minutes to start. If its log says one of the extra flags
+is not accepted, resubmit with your own list, for example
+`VLLM_FLAGS='--enable-prefix-caching'`. The default list is in
+`llm_array.sbatch`. Then merge and compare as in steps 4 and 5:
+
+    module load python/3.12 && source ~/lunaris_llm/venv/bin/activate
+    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_vllm
+
+    # Mac, from backend/
+    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900_vllm data/lunaris_llm_runs/fir_test900_vllm
+    python exploration/llm/compare_runs.py \
+        --a exploration/llm/trial_qwen3.5-4b_v6_harvest_2026_10.csv \
+        --b data/lunaris_llm_runs/fir_test900_vllm/trial_qwen3.5-4b-vllm-bf16_v6_test900_vllm.csv \
+        --out data/lunaris_llm_runs/fir_test900_vllm/compare_mac_vs_vllm.csv
+
+The `.about.json` beside the merged CSV holds the run's start and end
+times, so records a second can be worked out from them.
 
 ## When something goes wrong
 

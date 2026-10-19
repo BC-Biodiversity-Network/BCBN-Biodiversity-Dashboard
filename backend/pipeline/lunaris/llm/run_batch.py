@@ -2,18 +2,20 @@
 Ask the model about every record in one batch, and save each answer as it comes.
 
 This is the cluster version of run_trial.py's loop. It is run by the Slurm
-job script fir/llm_array.sbatch, one batch per array task, against an Ollama
-server the job script starts on the same node. It also runs on the Mac against
-the local Ollama, which is how it was tested.
+job script fir/llm_array.sbatch, one batch per array task, against a server
+the job script starts on the same node: Ollama (the default) or, for the
+plan B test, vLLM (--backend vllm). It also runs on the Mac against the local
+Ollama, which is how it was tested.
 
 What it does:
 
   1. Reads run.json and the batch's input records.
   2. Takes the batch's lock file, so two jobs never write the same batch.
-  3. Checks the Ollama server is up and has the model, and records the
-     model's digest. It never pulls a model: on Fir that is done once on the
-     login node. After the first answer it checks the whole model is on the
-     GPU, and stops before writing anything if it is not.
+  3. Checks the server is up and has the model, and records the model's
+     digest (for vLLM, a fingerprint of the weight files). It never
+     downloads a model: on Fir that is done once on the login node. With
+     Ollama, after the first answer it checks the whole model is on the GPU,
+     and stops before writing anything if it is not.
   4. Skips every record that already has a valid answer in
      results/batch_NNNN.jsonl, so rerunning a batch only does what is missing.
   5. For each remaining record, rebuilds the prompt, checks its fingerprint
@@ -21,8 +23,10 @@ What it does:
      the schema, and appends it to the results file at once. A failure goes
      to errors/batch_NNNN.jsonl instead and is tried again next time.
 
-The request sent is the same as run_trial.py's: the shared ask_ollama, with
-temperature 0, thinking off, the answer schema, and a 16,384 token context.
+With Ollama the request is the same as run_trial.py's: the shared
+ask_ollama, with temperature 0, thinking off, the answer schema, and a 16,384
+token context. --num-thread adds Ollama's num_thread option, which does not
+change the answers. With vLLM, vllm_client.ask_vllm asks for the same things.
 
 Exit codes, so the Slurm log and sacct show how a batch ended:
   0  every record in the batch has a valid answer
@@ -40,6 +44,8 @@ Usage:
     python run_batch.py RUN_DIR --batch 0 --workers 4
     python run_batch.py RUN_DIR --batch 0 --limit 5          # smoke test
     python run_batch.py RUN_DIR --batch 0 --num-ctx 65536    # retry long records
+    python run_batch.py RUN_DIR --batch 0 --num-thread 8     # Ollama CPU threads
+    python run_batch.py RUN_DIR --batch 0 --backend vllm --ollama-url http://127.0.0.1:8000 --workers 32
 """
 
 import argparse
@@ -65,6 +71,7 @@ from ollama_client import (  # noqa: E402
     wait_for_server,
 )
 from prompt_v6 import PROMPT_VERSION, build_prompt, check_answer, prompt_sha1  # noqa: E402
+import vllm_client  # noqa: E402
 from run_files import (  # noqa: E402
     append_line,
     batch_name,
@@ -147,11 +154,12 @@ def take_lock(path):
     raise LockHeld("could not create the lock file")
 
 
-def ask_one(record, url, model, num_ctx, timeout):
+def ask_one(record, ask):
     """
     Build one record's prompt, check it, and ask the model.
 
-    Runs in a worker thread. Returns the record, the result in ask_ollama's
+    Runs in a worker thread. ask is the function that sends one prompt to the
+    server (Ollama or vLLM). Returns the record, the result in ask_ollama's
     shape ({"answer": ...} or {"error": ...}) and how many seconds the call
     took. A prompt whose fingerprint differs from the batch file is not sent.
     """
@@ -159,7 +167,7 @@ def ask_one(record, url, model, num_ctx, timeout):
     if prompt_sha1(prompt) != record["prompt_sha1"]:
         return record, {"error": "prompt differs from the one made on the Mac"}, 0.0
     started = time.monotonic()
-    result = ask_ollama(url, model, prompt, num_ctx=num_ctx, timeout=timeout)
+    result = ask(prompt)
     seconds = time.monotonic() - started
     if "answer" in result:
         problem = check_answer(result["answer"])
@@ -179,16 +187,22 @@ def main():
     parser.add_argument("run_dir", help="the run folder made by make_batches.py")
     parser.add_argument("--batch", type=int, default=os.environ.get("SLURM_ARRAY_TASK_ID"),
                         help="the batch number (default: the Slurm array task id)")
+    parser.add_argument("--backend", choices=["ollama", "vllm"], default="ollama",
+                        help="which kind of server answers (default ollama)")
     parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-                        help="the Ollama server (default: $OLLAMA_HOST, else localhost:11434)")
+                        help="the server's address, Ollama or vLLM (default: $OLLAMA_HOST, "
+                             "else localhost:11434)")
+    parser.add_argument("--num-thread", type=int, default=None,
+                        help="Ollama's num_thread: CPU threads for its runner (default: Ollama picks)")
     parser.add_argument("--workers", type=int, default=1,
                         help="questions in flight at once. Match OLLAMA_NUM_PARALLEL (default 1)")
     parser.add_argument("--num-ctx", type=int, default=OLLAMA_NUM_CTX,
                         help=f"Ollama context size in tokens (default {OLLAMA_NUM_CTX})")
     parser.add_argument("--timeout", type=int, default=OLLAMA_TIMEOUT,
                         help=f"seconds to wait for one answer (default {OLLAMA_TIMEOUT})")
-    parser.add_argument("--wait", type=int, default=180,
-                        help="seconds to wait for the server to come up (default 180)")
+    parser.add_argument("--wait", type=int, default=None,
+                        help="seconds to wait for the server to come up "
+                             "(default 180 for Ollama, 900 for vLLM, which starts slowly)")
     parser.add_argument("--allow-cpu", action="store_true",
                         help="carry on even if part of the model runs on the CPU (for tests only)")
     parser.add_argument("--limit", type=int, default=0,
@@ -206,7 +220,8 @@ def main():
     records = read_inputs(run_dir, number)
     name = batch_name(number)
     print(f"{name} of run {run_dir.name}: {len(records):,} records, model {model}, "
-          f"prompt v{PROMPT_VERSION}, {args.workers} worker(s), context {args.num_ctx:,}")
+          f"prompt v{PROMPT_VERSION}, {args.backend}, {args.workers} worker(s), "
+          f"context {args.num_ctx:,}" + (f", {args.num_thread} threads" if args.num_thread else ""))
 
     lock = lock_path(run_dir, number)
     try:
@@ -241,17 +256,29 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
         if cut:
             print(f"removed a half-written last line ({cut} bytes) from {path.name}")
 
+    vllm = args.backend == "vllm"
     try:
-        version = wait_for_server(url, args.wait)
-    except OllamaUnreachable as error:
+        if vllm:
+            version = vllm_client.wait_for_server(url, args.wait or 900)
+            digest = vllm_client.weights_fingerprint(url, model)
+        else:
+            version = wait_for_server(url, args.wait or 180)
+            digest = model_digest(url, model)
+    except (OllamaUnreachable, vllm_client.ServerUnreachable) as error:
         print(f"ERROR: {error}")
         return 1
-    digest = model_digest(url, model)
     if digest is None:
-        print(f"ERROR: the server at {url} does not have {model}. Pull it on the login node "
+        print(f"ERROR: the server at {url} does not have {model}. Download it on the login node "
               f"first (see fir/README.md). This job does not download anything.")
         return 1
-    print(f"Ollama {version} at {url}, {model} digest {digest[:12]}")
+    print(f"{args.backend} {version} at {url}, {model} digest {digest[:12]}")
+
+    def ask(prompt):
+        """Send one prompt to this run's server."""
+        if vllm:
+            return vllm_client.ask_vllm(url, model, prompt, timeout=args.timeout)
+        return ask_ollama(url, model, prompt, num_ctx=args.num_ctx, timeout=args.timeout,
+                          num_thread=args.num_thread)
 
     # Every answer in a run must come from the same weights. If this batch
     # already holds answers from another digest, stop instead of mixing them.
@@ -288,7 +315,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
             record = next(queue, None)
             if record is None:
                 return
-            running.add(pool.submit(ask_one, record, url, model, args.num_ctx, args.timeout))
+            running.add(pool.submit(ask_one, record, ask))
 
     try:
         top_up()
@@ -298,7 +325,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                 running.discard(future)
                 try:
                     record, result, took = future.result()
-                except OllamaUnreachable as error:
+                except (OllamaUnreachable, vllm_client.ServerUnreachable) as error:
                     if stop_reason is None:
                         stop_reason, stop_code = f"the server stopped answering ({error})", 2
                     continue
@@ -307,7 +334,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                     # are dropped, not written.
                     continue
                 record_id = record["record_id"]
-                if "answer" in result and not gpu_checked:
+                if "answer" in result and not gpu_checked and not vllm:
                     # Once the model is loaded, make sure all of it is on the
                     # GPU before keeping any answer. On a busy Fir node
                     # Ollama's GPU discovery can time out, and then it runs
@@ -329,7 +356,10 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                         "record_id": record_id,
                         "model": model,
                         "model_digest": digest,
-                        "ollama_version": version,
+                        "backend": args.backend,
+                        "server_version": version,
+                        "ollama_version": None if vllm else version,
+                        "num_thread": args.num_thread,
                         "prompt_version": PROMPT_VERSION,
                         "prompt_sha1": record["prompt_sha1"],
                         "num_ctx": args.num_ctx,

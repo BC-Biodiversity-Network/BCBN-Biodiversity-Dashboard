@@ -68,7 +68,29 @@ def plain_json_schema(schema):
     return schema
 
 
-def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT):
+def chat_request_body(model, prompt, num_ctx=OLLAMA_NUM_CTX, num_thread=None):
+    """
+    Return the body of one /api/chat request, as ask_ollama sends it.
+
+    Kept apart so bench_decode.py can send exactly the same request, then
+    change one setting at a time. num_thread is how many CPU threads Ollama's
+    runner may use. When it is not given, Ollama picks a number itself and the
+    request is exactly the one the Mac run sends.
+    """
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "think": False,
+        "format": plain_json_schema(RESPONSE_SCHEMA),
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+    }
+    if num_thread:
+        body["options"]["num_thread"] = num_thread
+    return body
+
+
+def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT, num_thread=None):
     """
     Send one prompt to an Ollama server and return the answer and token counts.
 
@@ -84,20 +106,14 @@ def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOU
           instead of first writing out long reasoning that is not wanted
       temperature 0, the same as for Gemini
       num_ctx: room for the whole prompt, see OLLAMA_NUM_CTX
+      num_thread: only if given, see chat_request_body
 
     A call that times out or fails is tried once more. If the server cannot be
     reached at all, OllamaUnreachable is raised to stop the run. If the prompt
     filled the whole context, Ollama may have cut it, so the answer is
     returned as an error rather than trusted.
     """
-    body = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "think": False,
-        "format": plain_json_schema(RESPONSE_SCHEMA),
-        "options": {"temperature": 0, "num_ctx": num_ctx},
-    }
+    body = chat_request_body(model, prompt, num_ctx, num_thread)
     request = urllib.request.Request(
         url.rstrip("/") + "/api/chat",
         data=json.dumps(body).encode("utf-8"),

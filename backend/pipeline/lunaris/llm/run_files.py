@@ -188,6 +188,8 @@ ERROR_KINDS = [
     ("reply was not valid JSON", "bad_json"),
     ("gave up after", "timeout_or_network"),
     ("Ollama said", "server_refused"),
+    ("vLLM said", "server_refused"),
+    ("answer was cut off", "too_long"),
     ("prompt differs", "prompt_mismatch"),
 ]
 

@@ -18,9 +18,11 @@
 #
 # Settings that can be given in front of submit.sh or sbatch (Slurm passes them on):
 #   NUM_CTX=65536  context size, for the few records too long for 16,384
+#   NUM_THREAD=8   Ollama's CPU threads for its runner (default: Ollama picks)
 #   OLLAMA_LLM_LIBRARY=cuda_v12   which of Ollama's CUDA libraries to use
 #                  (default cuda_v13, see below)
-# WORKERS stays 1: Ollama runs qwen3.5 one request at a time regardless.
+#   BACKEND=vllm   plan B: serve the model with vLLM instead (fir/README.md)
+# With Ollama, WORKERS stays 1: it runs qwen3.5 one request at a time anyway.
 #
 # No passwords, keys or tokens are used or needed anywhere in this script.
 
@@ -37,7 +39,8 @@
 
 # Modules first: some module scripts trip over "set -u". python/3.12 is the
 # same module the virtual environment was built with (fir/README.md step 2).
-module load python/3.12
+# VLLM_MODULES can name extra modules the vLLM test needs, if any.
+module load python/3.12 ${VLLM_MODULES:-}
 
 set -euo pipefail
 
@@ -47,8 +50,10 @@ CODE_DIR="${LUNARIS_LLM_CODE:-$HOME/lunaris_llm/code}"
 VENV="${LUNARIS_LLM_VENV:-$HOME/lunaris_llm/venv}"
 OLLAMA_BIN="${LUNARIS_OLLAMA_BIN:-$HOME/lunaris_llm/ollama/bin/ollama}"
 export OLLAMA_MODELS="${OLLAMA_MODELS:-$HOME/scratch/lunaris_llm/models}"
+BACKEND="${BACKEND:-ollama}"
 WORKERS="${WORKERS:-1}"
 NUM_CTX="${NUM_CTX:-16384}"
+NUM_THREAD="${NUM_THREAD:-}"
 BATCH="${SLURM_ARRAY_TASK_ID:?submit this as an array job, for example sbatch --array=0}"
 
 source "$VENV/bin/activate"
@@ -58,8 +63,8 @@ GPU_GIVEN=$(scontrol show job "${SLURM_JOB_ID:-0}" 2>/dev/null | grep -o 'gres/g
 
 echo "start    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "host     $(hostname)  job ${SLURM_JOB_ID:-?}  array ${SLURM_ARRAY_JOB_ID:-?}_${BATCH}"
-echo "run      $RUN_DIR  batch $BATCH  workers $WORKERS  context $NUM_CTX"
-echo "slice    ${GPU_GIVEN:-unknown}"
+echo "run      $RUN_DIR  batch $BATCH  backend $BACKEND  workers $WORKERS  context $NUM_CTX  threads ${NUM_THREAD:-auto}"
+echo "slice    ${GPU_GIVEN:-unknown}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 if command -v nvidia-smi >/dev/null; then
     echo "gpu      $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
 fi
@@ -67,29 +72,48 @@ fi
 # The 1g.10gb slice is sized for a context of 16,384 tokens. More than that
 # might still fit, but if Ollama thinks it does not, it quietly runs part of
 # the model on the CPU, which is far slower. submit.sh avoids this.
-if [[ "$GPU_GIVEN" == *1g.10gb* && $((WORKERS * NUM_CTX)) -gt 16384 ]]; then
+if [[ "$BACKEND" == ollama && "$GPU_GIVEN" == *1g.10gb* && $((WORKERS * NUM_CTX)) -gt 16384 ]]; then
     echo "WARNING  WORKERS=$WORKERS x NUM_CTX=$NUM_CTX is more than the 1g.10gb slice is sized for."
     echo "         Use fir/submit.sh, which picks a bigger slice."
 fi
 
 # Pick a free port for this job's server. Several tasks can share one GPU
-# node, and each needs its own server, so the default port 11434 cannot be
-# used by all of them.
+# node, and each needs its own server, so a fixed port cannot be used.
 PORT=$(python -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 export OLLAMA_HOST="127.0.0.1:$PORT"
-# As many parallel slots as workers, and keep the model loaded for the whole job.
-export OLLAMA_NUM_PARALLEL="$WORKERS"
-export OLLAMA_KEEP_ALIVE=-1
-# Ollama looks for the GPU by trying its CUDA 12 and its CUDA 13 libraries in
-# turn, each with a 30 second limit. On a busy node both tries can time out,
-# and Ollama then runs on the CPU without stopping. Fir's driver (580, CUDA
-# 13.0) works with the CUDA 13 libraries, so only those are tried. If
-# run_batch.py still finds the model off the GPU, it stops with exit code 5.
-export OLLAMA_LLM_LIBRARY="${OLLAMA_LLM_LIBRARY:-cuda_v13}"
+SERVER_LOG="$RUN_DIR/logs/${BACKEND}_${SLURM_ARRAY_JOB_ID:-local}_${BATCH}.log"
 
-SERVER_LOG="$RUN_DIR/logs/ollama_${SLURM_ARRAY_JOB_ID:-local}_${BATCH}.log"
-"$OLLAMA_BIN" serve >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
+if [[ "$BACKEND" == vllm ]]; then
+    # Plan B: vLLM serving Qwen3.5-4B from the Hugging Face download, offline.
+    # The served name is the run's model name, so run_batch.py can find it.
+    VLLM_BIN="${LUNARIS_VLLM_BIN:-$HOME/lunaris_llm/venv_vllm/bin/vllm}"
+    VLLM_MODEL_DIR="${VLLM_MODEL_DIR:-$HOME/scratch/lunaris_llm/hf/Qwen3.5-4B}"
+    MODEL=$(python -c 'import json, sys; print(json.load(open(sys.argv[1]))["model"])' "$RUN_DIR/run.json")
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    # Prefix caching keeps the shared instructions, text only (no image or
+    # video inputs), and thinking off by default as well as per request.
+    # VLLM_FLAGS replaces this list if a flag is not accepted (see README).
+    DEFAULT_VLLM_FLAGS='--enable-prefix-caching --limit-mm-per-prompt {"image":0,"video":0} --default-chat-template-kwargs {"enable_thinking":false}'
+    read -r -a FLAGS <<< "${VLLM_FLAGS:-$DEFAULT_VLLM_FLAGS}"
+    "$VLLM_BIN" serve "$VLLM_MODEL_DIR" --served-model-name "$MODEL" --host 127.0.0.1 --port "$PORT" \
+        --max-model-len "$NUM_CTX" --max-num-seqs "$WORKERS" --gpu-memory-utilization 0.90 \
+        "${FLAGS[@]}" >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    echo "vllm     $("$VLLM_BIN" --version 2>/dev/null | tail -1) serving $VLLM_MODEL_DIR as $MODEL on $OLLAMA_HOST, log $SERVER_LOG"
+else
+    # As many parallel slots as workers, and keep the model loaded for the whole job.
+    export OLLAMA_NUM_PARALLEL="$WORKERS"
+    export OLLAMA_KEEP_ALIVE=-1
+    # Ollama looks for the GPU by trying its CUDA 12 and its CUDA 13 libraries in
+    # turn, each with a 30 second limit. On a busy node both tries can time out,
+    # and Ollama then runs on the CPU without stopping. Fir's driver (580, CUDA
+    # 13.0) works with the CUDA 13 libraries, so only those are tried. If
+    # run_batch.py still finds the model off the GPU, it stops with exit code 5.
+    export OLLAMA_LLM_LIBRARY="${OLLAMA_LLM_LIBRARY:-cuda_v13}"
+    "$OLLAMA_BIN" serve >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    echo "ollama   $("$OLLAMA_BIN" --version 2>/dev/null | tail -1) on $OLLAMA_HOST, log $SERVER_LOG"
+fi
 
 # Report how much of the loaded model is on the GPU, from Ollama's /api/ps.
 # Anything under 100% means part of it ran on the CPU and the slice is too small.
@@ -115,21 +139,26 @@ for model in models:
 EOF
 }
 
-# However the job ends: report GPU use while the model is still loaded, then
-# stop the server.
+# However the job ends: report GPU use (Ollama only) while the model is still
+# loaded, then stop the server.
 finish() {
-    report_gpu_use
+    if [[ "$BACKEND" == ollama ]]; then
+        report_gpu_use
+    fi
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
 }
 trap finish EXIT
-echo "ollama   $("$OLLAMA_BIN" --version 2>/dev/null | tail -1) on $OLLAMA_HOST, log $SERVER_LOG"
 
 # run_batch.py waits for the server to come up, checks the model is there
 # (it never downloads one), and does the batch. Its exit code is the job's.
+ARGS=(--batch "$BATCH" --backend "$BACKEND" --ollama-url "http://$OLLAMA_HOST"
+      --workers "$WORKERS" --num-ctx "$NUM_CTX")
+if [[ -n "$NUM_THREAD" ]]; then
+    ARGS+=(--num-thread "$NUM_THREAD")
+fi
 set +e
-python "$CODE_DIR/run_batch.py" "$RUN_DIR" --batch "$BATCH" \
-    --ollama-url "http://$OLLAMA_HOST" --workers "$WORKERS" --num-ctx "$NUM_CTX"
+python "$CODE_DIR/run_batch.py" "$RUN_DIR" "${ARGS[@]}"
 STATUS=$?
 set -e
 

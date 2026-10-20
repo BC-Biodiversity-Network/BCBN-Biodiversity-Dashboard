@@ -7,11 +7,11 @@
 #
 #   cd /scratch/$USER/lunaris_llm/runs/test900_x4
 #   /scratch/$USER/lunaris_llm/code/fir/submit.sh 0-3                  # 4 batches at once, 1g.10gb each
-#   $B/code/fir/submit.sh 0-268%16             # 269 batches, 16 at once
+#   $B/code/fir/submit.sh 0-53%18               # 54 batches, 18 at once
 #   NUM_CTX=65536 $B/code/fir/submit.sh 0      # long records, 2g.20gb
 #   EXCLUDE=fc10203 $B/code/fir/submit.sh 0-3  # leave out a node (comma list)
 #   GPU=h100 $B/code/fir/submit.sh 0           # choose the GPU yourself
-#   CPUS=8 NUM_THREAD=8 $B/code/fir/submit.sh 0  # more CPUs, and tell Ollama
+#   NUM_THREAD=0 $B/code/fir/submit.sh 0       # let Ollama pick its threads (as in run 1)
 #   BACKEND=vllm $B/code/fir/submit.sh 0       # plan B: vLLM, 3g.40gb, 32 at once
 #
 # One request at a time only. Ollama always runs qwen3.5 (architecture qwen35)
@@ -37,8 +37,8 @@
 
 BACKEND="${BACKEND:-ollama}"
 NUM_CTX="${NUM_CTX:-16384}"
-NUM_THREAD="${NUM_THREAD:-}"
-ARRAY="${1:?give the batches to run, for example 0 or 0-268%16}"
+NUM_THREAD="${NUM_THREAD:-}"   # empty: the job's CPU count (set below); 0: Ollama picks
+ARRAY="${1:?give the batches to run, for example 0 or 0-53%18}"
 
 # vLLM answers many records at once, so it gets 32 in flight by default.
 if [[ "$BACKEND" == vllm ]]; then
@@ -52,13 +52,13 @@ fi
 
 # The settings must be whole numbers, or the slice below would be chosen wrong.
 if ! [[ "$NUM_CTX" =~ ^[1-9][0-9]*$ && "$WORKERS" =~ ^[1-9][0-9]*$
-        && ( -z "$NUM_THREAD" || "$NUM_THREAD" =~ ^[1-9][0-9]*$ ) ]]; then
+        && ( -z "$NUM_THREAD" || "$NUM_THREAD" =~ ^[0-9]+$ ) ]]; then
     echo "ERROR: NUM_CTX ('$NUM_CTX'), WORKERS ('$WORKERS') and NUM_THREAD ('$NUM_THREAD') must be whole numbers."
     exit 1
 fi
 if [[ "$BACKEND" == ollama && "$WORKERS" != "1" ]]; then
     echo "ERROR: WORKERS=$WORKERS. Ollama runs qwen3.5 one request at a time, so only WORKERS=1"
-    echo "       makes sense. To go faster, run more batches at once, for example 0-268%16."
+    echo "       makes sense. To go faster, run more batches at once, for example 0-53%18."
     exit 1
 fi
 
@@ -91,6 +91,14 @@ if ! [[ "$CPUS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
+# Ollama's CPU threads: by default as many as the job has CPUs. Left to
+# itself Ollama sizes its threads from the whole node (48 cores on Fir), and
+# on 2 CPUs that made answers 5.7 times slower with the same answers
+# (bench_decode: 10 vs 60 tokens/s). More CPUs did not help once this was set.
+if [[ -z "$NUM_THREAD" && "$BACKEND" == ollama ]]; then
+    NUM_THREAD="$CPUS"
+fi
+
 # Nodes to leave out, for example ones where Ollama's GPU discovery timed out
 # (status.sh lists them). A comma-separated list of node names.
 EXTRA=()
@@ -103,6 +111,9 @@ if [[ -n "${EXCLUDE:-}" ]]; then
 fi
 
 echo "submitting batches $ARRAY: $BACKEND, WORKERS=$WORKERS NUM_CTX=$NUM_CTX${NUM_THREAD:+ NUM_THREAD=$NUM_THREAD} on $GPU ($CPUS CPUs, $MEM)${EXCLUDE:+, leaving out $EXCLUDE}"
+if [[ "$NUM_THREAD" == 0 ]]; then
+    echo "         NUM_THREAD=0: Ollama picks its own thread count (about 5.7 times slower on 2 CPUs)"
+fi
 # The job copies its code from the folder this script lives in, written as
 # a physical path so it does not go through the ~/scratch link on /home.
 LUNARIS_LLM_CODE="$(cd "$(dirname "$0")/.." && pwd -P)"

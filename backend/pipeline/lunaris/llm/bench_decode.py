@@ -113,7 +113,16 @@ def cpu_seconds_of_user_processes():
 
 
 def runner_threads():
-    """Return a short note on Ollama's runner processes: their thread counts and --threads flag."""
+    """
+    Return a short note on Ollama's runner processes: their thread counts and any --threads flag.
+
+    Two cautions when reading it. Ollama 0.40 does not put the thread count
+    on the runner's command line; it hands num_thread over when it loads the
+    model, so "no --threads flag" does not mean num_thread was ignored. And a
+    process's thread count includes idle helpers (CUDA, HTTP, the Go runtime)
+    and can include a runner from the setting before that has not exited yet.
+    The speed and "CPU busy" columns are the reliable evidence.
+    """
     proc = Path("/proc")
     if not proc.exists():
         return "unknown (no /proc)"
@@ -129,8 +138,9 @@ def runner_threads():
                 continue
             threads = [line.split()[1] for line in (entry / "status").read_text().splitlines()
                        if line.startswith("Threads:")]
-            flag = command.split("--threads ")[1].split()[0] if "--threads " in command else "not set"
-            notes.append(f"pid {entry.name}: {threads[0] if threads else '?'} threads, --threads {flag}")
+            flag = command.split("--threads ")[1].split()[0] if "--threads " in command else None
+            notes.append(f"pid {entry.name}: {threads[0] if threads else '?'} threads, "
+                         + (f"--threads {flag}" if flag else "no --threads flag on its command line"))
         except (OSError, ValueError, IndexError):
             continue
     return "; ".join(notes) or "no runner process found"

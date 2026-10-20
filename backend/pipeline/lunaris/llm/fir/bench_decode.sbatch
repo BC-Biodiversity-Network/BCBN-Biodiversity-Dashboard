@@ -63,7 +63,9 @@ python "$CODE_DIR/bench_decode.py" "$RUN_DIR" --ollama-url "http://$OLLAMA_HOST"
 STATUS=$?
 set -e
 
-# What the runner was started with, from the server log.
-echo "runner   $(grep -o -- '--threads [0-9]*' "$SERVER_LOG" | sort | uniq -c | tr '\n' ' ')"
+# Any --threads flags in the server log. Ollama 0.40 sets the thread count
+# when it loads the model rather than on the command line, so this is often
+# empty even when num_thread took effect; the table's speeds are what count.
+echo "runner   --threads flags in the server log: $(grep -o -- '--threads [0-9]*' "$SERVER_LOG" | sort | uniq -c | tr '\n' ' ')"
 echo "end      $(date -u +%Y-%m-%dT%H:%M:%SZ)  exit $STATUS"
 exit $STATUS

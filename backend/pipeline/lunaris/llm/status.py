@@ -76,8 +76,8 @@ def main():
     """Print the run's progress and error summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("run_dir", help="the run folder")
-    parser.add_argument("--throttle", type=int, default=16,
-                        help="how many batches at once in the suggested resubmit command (default 16)")
+    parser.add_argument("--throttle", type=int, default=18,
+                        help="how many batches at once in the suggested resubmit command (default 18)")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve()

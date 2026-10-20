@@ -19,8 +19,11 @@
 #
 # Settings that can be given in front of submit.sh or sbatch (Slurm passes them on):
 #   NUM_CTX=65536  context size, for the few records too long for 16,384
-#   NUM_THREAD=2   Ollama's CPU threads for its runner (default: Ollama picks,
-#                  which on Fir means about 100 threads whatever the job's CPUs)
+#   NUM_THREAD=2   Ollama's CPU threads for its runner. Default: the job's CPU
+#                  count. Left to itself Ollama sizes its threads from the
+#                  whole node (48 cores on Fir), and on a 2-CPU job that made
+#                  answers 5.7 times slower (bench_decode, 10 vs 60 tokens/s,
+#                  same answers). NUM_THREAD=0 lets Ollama pick, as in run 1.
 #   OLLAMA_LLM_LIBRARY=cuda_v12   which of Ollama's CUDA libraries to use
 #                  (default cuda_v13)
 #   BACKEND=vllm   plan B: serve the model with vLLM instead (fir/README.md)
@@ -59,7 +62,7 @@ RUN_DIR="${RUN_DIR:-$SLURM_SUBMIT_DIR}"
 BACKEND="${BACKEND:-ollama}"
 WORKERS="${WORKERS:-1}"
 NUM_CTX="${NUM_CTX:-16384}"
-NUM_THREAD="${NUM_THREAD:-}"
+NUM_THREAD="${NUM_THREAD:-${SLURM_CPUS_PER_TASK:-0}}"
 BATCH="${SLURM_ARRAY_TASK_ID:?submit this as an array job, for example sbatch --array=0}"
 SERVER_PID=""
 
@@ -68,7 +71,7 @@ GPU_GIVEN=$(scontrol show job "${SLURM_JOB_ID:-0}" 2>/dev/null | grep -o 'gres/g
 
 echo "start    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "host     $(hostname)  job ${SLURM_JOB_ID:-?}  array ${SLURM_ARRAY_JOB_ID:-?}_${BATCH}"
-echo "run      $RUN_DIR  batch $BATCH  backend $BACKEND  workers $WORKERS  context $NUM_CTX  threads ${NUM_THREAD:-auto}"
+echo "run      $RUN_DIR  batch $BATCH  backend $BACKEND  workers $WORKERS  context $NUM_CTX  threads $([[ "$NUM_THREAD" == 0 ]] && echo "Ollama picks" || echo "$NUM_THREAD")"
 echo "slice    ${GPU_GIVEN:-unknown}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 if command -v nvidia-smi >/dev/null; then
     echo "gpu      $(timeout 60 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
@@ -157,7 +160,7 @@ ARGS=(--batch "$BATCH" --backend "$BACKEND" --ollama-url "http://$OLLAMA_HOST"
 if [[ "$BACKEND" == ollama ]]; then
     ARGS+=(--server-log "$SERVER_LOG" --load-timeout "${LOAD_TIMEOUT:-360}")
 fi
-if [[ -n "$NUM_THREAD" ]]; then
+if [[ "$BACKEND" == ollama && "$NUM_THREAD" != 0 ]]; then
     ARGS+=(--num-thread "$NUM_THREAD")
 fi
 set +e

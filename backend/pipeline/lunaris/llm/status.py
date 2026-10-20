@@ -5,7 +5,7 @@ Prints: records done out of the total, batches done, part done and not
 started, which batches a job is working on now, open errors grouped by kind,
 the speed over the last hour and the time left at that speed, where each
 record's time goes (reading the prompt or writing the answer), nodes where
-the model did not fit on the GPU, the model
+jobs stopped before their first record (and why), the model
 digests seen (there should be exactly one), your lunaris-llm jobs in the Slurm
 queue, and the fir/submit.sh command that resubmits only the unfinished batches.
 
@@ -178,12 +178,18 @@ def main():
               f"answer {answer_s:.2f} s" + (f" for {tokens:.0f} tokens ({tokens / answer_s:.0f} tokens/s)"
                                              if tokens and answer_s else ""))
 
-    # Jobs that stopped because part of the model was on the CPU, by node.
-    off_gpu = Counter(str(line.get("host", "?")).split(".")[0]
-                      for line in read_jsonl(gpu_failures_path(run_dir)))
+    # Jobs that stopped before their first record because the model was not
+    # on the GPU or did not load, by node, with the latest reason.
+    failures = read_jsonl(gpu_failures_path(run_dir))
+    off_gpu = Counter(str(line.get("host", "?")).split(".")[0] for line in failures)
     if off_gpu:
-        print("  model not on the GPU: " + ", ".join(f"{host} ({n}x)" for host, n in off_gpu.most_common()))
-        print(f"    leave these nodes out when resubmitting: EXCLUDE={','.join(off_gpu)}")
+        print("  jobs that stopped before their first record: "
+              + ", ".join(f"{host} ({n}x)" for host, n in off_gpu.most_common()))
+        for line in failures[-3:]:
+            print(f"    {line.get('finished')} {str(line.get('host', '?')).split('.')[0]} "
+                  f"exit {line.get('exit_code', 5)}: {str(line.get('reason', 'not on the GPU'))[:110]}")
+        print("    if one node keeps failing, leave it out when resubmitting (EXCLUDE=node);"
+              " if many fail at once, suspect the shared filesystem")
 
     if digests:
         print("  model digests: " + ", ".join(f"{(d or '?')[:12]} ({n:,})" for d, n in digests.items())
@@ -199,7 +205,8 @@ def main():
     if unfinished:
         # submit.sh picks the GPU slice and leaves out the nodes named in EXCLUDE.
         script = Path(__file__).resolve().parent / "fir" / "submit.sh"
-        prefix = f"EXCLUDE={','.join(off_gpu)} " if off_gpu else ""
+        repeat = [host for host, n in off_gpu.items() if n >= 2]
+        prefix = f"EXCLUDE={','.join(repeat)} " if repeat else ""
         print("  to (re)submit the unfinished batches:")
         print(f"    cd {run_dir} && {prefix}{script} {as_ranges(unfinished)}%{args.throttle}")
     elif done_total == total:

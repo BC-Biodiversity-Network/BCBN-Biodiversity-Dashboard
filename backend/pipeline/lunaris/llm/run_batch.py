@@ -14,8 +14,10 @@ What it does:
   3. Checks the server is up and has the model, and records the model's
      digest (for vLLM, a fingerprint of the weight files). It never
      downloads a model: on Fir that is done once on the login node. With
-     Ollama, after the first answer it checks the whole model is on the GPU,
-     and stops before writing anything if it is not.
+     Ollama it then checks, before asking about any record, that Ollama
+     found the GPU (from its log, --server-log), that the model loads within
+     --load-timeout seconds, and that all of it is on the GPU; it checks the
+     GPU once more after the first answer. Any failure stops the job at once.
   4. Skips every record that already has a valid answer in
      results/batch_NNNN.jsonl, so rerunning a batch only does what is missing.
   5. For each remaining record, rebuilds the prompt, checks its fingerprint
@@ -35,8 +37,13 @@ Exit codes, so the Slurm log and sacct show how a batch ended:
   2  the server stopped answering part way; rerun the batch
   3  another job holds this batch's lock
   4  the run finished but some records still have no valid answer
-  5  the model was not entirely on the GPU, so nothing was written; resubmit
-     on another node (fir/submit.sh with EXCLUDE=<this node>)
+  5  the model was not entirely on the GPU (Ollama fell back to the CPU, or
+     only part of it fit), so nothing was asked; resubmit, if need be on
+     another node (fir/submit.sh with EXCLUDE=<this node>)
+  6  the model did not load within --load-timeout seconds; nothing was asked
+
+A run also stops (exit 2) after CONSECUTIVE_SERVER_FAILURES requests in a
+row fail with a timeout or a server error, rather than failing every record.
 
 Usage:
 
@@ -67,6 +74,7 @@ from ollama_client import (  # noqa: E402
     OllamaUnreachable,
     ask_ollama,
     gpu_share,
+    prepare_ollama,
     model_digest,
     wait_for_server,
 )
@@ -90,6 +98,11 @@ from run_files import (  # noqa: E402
 
 # How many records between two progress lines in the log.
 REPORT_EVERY = 25
+
+# After this many requests in a row fail with a timeout or a server error, the
+# server is taken to be broken and the run stops instead of trying every
+# remaining record. Errors about one record (too long, bad JSON) do not count.
+CONSECUTIVE_SERVER_FAILURES = 5
 
 
 class LockHeld(Exception):
@@ -203,6 +216,10 @@ def main():
     parser.add_argument("--wait", type=int, default=None,
                         help="seconds to wait for the server to come up "
                              "(default 180 for Ollama, 900 for vLLM, which starts slowly)")
+    parser.add_argument("--server-log", default=None,
+                        help="Ollama's log file, read to check it found the GPU (the job script passes it)")
+    parser.add_argument("--load-timeout", type=int, default=360,
+                        help="seconds the model may take to load before the job gives up (default 360)")
     parser.add_argument("--allow-cpu", action="store_true",
                         help="carry on even if part of the model runs on the CPU (for tests only)")
     parser.add_argument("--limit", type=int, default=0,
@@ -273,6 +290,23 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
         return 1
     print(f"{args.backend} {version} at {url}, {model} digest {digest[:12]}")
 
+    job_id = os.environ.get("SLURM_JOB_ID")
+    host = socket.gethostname()
+
+    # Before asking about any record: Ollama must have found the GPU, the
+    # model must load in time, and all of it must be on the GPU.
+    if not vllm and not args.allow_cpu:
+        code, message = prepare_ollama(url, model, args.num_ctx, args.num_thread,
+                                       args.server_log, load_timeout=args.load_timeout)
+        if code:
+            append_line(gpu_failures_path(run_dir), {
+                "batch": number, "host": host, "job_id": job_id, "exit_code": code,
+                "reason": message, "finished": now_utc(),
+            })
+            print(f"STOPPED BEFORE THE FIRST RECORD on {host}: {message}")
+            return code
+        print(message)
+
     def ask(prompt):
         """Send one prompt to this run's server."""
         if vllm:
@@ -295,8 +329,6 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
         pending = pending[:args.limit]
     print(f"{len(done):,} already done, {len(pending):,} to ask now")
 
-    job_id = os.environ.get("SLURM_JOB_ID")
-    host = socket.gethostname()
     fresh = 0
     failed = {}
     seconds = []
@@ -304,6 +336,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
     stop_reason = None
     stop_code = 0
     gpu_checked = False
+    server_failures_in_a_row = 0
 
     pool = ThreadPoolExecutor(max_workers=args.workers)
     queue = iter(pending)
@@ -375,6 +408,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                         "finished": now_utc(),
                     })
                     failed.pop(record_id, None)
+                    server_failures_in_a_row = 0
                     seconds.append(took)
                 else:
                     kind = error_kind(result["error"])
@@ -389,6 +423,12 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
                     })
                     failed[record_id] = kind
                     print(f"    {record_id}: {result['error'][:150]}")
+                    if kind in ("timeout_or_network", "server_refused"):
+                        server_failures_in_a_row += 1
+                        if server_failures_in_a_row >= CONSECUTIVE_SERVER_FAILURES and stop_reason is None:
+                            stop_reason, stop_code = (f"{server_failures_in_a_row} requests in a row failed "
+                                                      f"with a timeout or a server error, so the server "
+                                                      f"looks broken"), 2
                     if kind == "prompt_mismatch" and stop_reason is None:
                         stop_reason, stop_code = ("a prompt differs from the one made on the Mac, "
                                                   "so the code or its packages differ"), 1

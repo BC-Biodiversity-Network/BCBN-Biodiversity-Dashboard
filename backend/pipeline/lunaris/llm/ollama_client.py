@@ -243,3 +243,96 @@ def gpu_share(url, model):
             size = entry.get("size") or 0
             return (entry.get("size_vram") or 0) / size if size else None
     return None
+
+
+# What Ollama writes in its log once it has looked for GPUs: one "inference
+# compute" line per device it will use. A line with library=cpu means it found
+# no usable GPU and will run on the CPU.
+DISCOVERY_LINE = "inference compute"
+
+
+def discovery_result(server_log, seconds):
+    """
+    Read Ollama's log until it says which device it will use, and return that.
+
+    Returns ("gpu", line), ("cpu", line) or ("unknown", note). Ollama looks
+    for GPUs when it starts. On Fir this search has timed out ("GPU discovery
+    watchdog timed out") when the shared filesystem was slow, and Ollama then
+    carried on with the CPU only, which makes every answer time out. Finding
+    that in the log within a minute or two lets the job stop at once instead.
+    "unknown" means no such line appeared in time; the caller then relies on
+    loading the model and checking it is on the GPU.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            lines = [line for line in open(server_log, encoding="utf-8", errors="replace")
+                     if DISCOVERY_LINE in line]
+        except OSError:
+            lines = []
+        if lines:
+            # Give Ollama a moment to write the line for every device.
+            time.sleep(1)
+            lines = [line for line in open(server_log, encoding="utf-8", errors="replace")
+                     if DISCOVERY_LINE in line]
+            gpu = [line for line in lines if "library=cpu" not in line.lower() and "id=cpu" not in line]
+            return ("gpu", gpu[0].strip()) if gpu else ("cpu", lines[0].strip())
+        time.sleep(2)
+    return "unknown", f"no '{DISCOVERY_LINE}' line in {server_log} after {seconds} s"
+
+
+def load_model(url, model, num_ctx=OLLAMA_NUM_CTX, num_thread=None, timeout=360):
+    """
+    Ask Ollama to load the model now, with the settings the answers will use.
+
+    A /api/generate request with no prompt only loads the model and keeps it
+    loaded. Doing this before the first record means a model that cannot
+    start is found once, within the time limit, instead of as one timeout per
+    record. The options match chat_request_body, so the first real request
+    reuses this load. Returns (seconds it took, None) or (None, the problem).
+    """
+    options = {"num_ctx": num_ctx}
+    if num_thread:
+        options["num_thread"] = num_thread
+    body = {"model": model, "keep_alive": -1, "stream": False, "options": options}
+    request = urllib.request.Request(url.rstrip("/") + "/api/generate",
+                                     data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:200]
+        return None, f"Ollama said {error.code} while loading the model: {detail}"
+    except (urllib.error.URLError, OSError) as error:
+        return None, f"the model did not load within {timeout} s ({error})"
+    return time.monotonic() - started, None
+
+
+def prepare_ollama(url, model, num_ctx=OLLAMA_NUM_CTX, num_thread=None, server_log=None,
+                   discovery_seconds=150, load_timeout=360):
+    """
+    Check an Ollama server is ready to answer on the GPU, before any record is asked.
+
+    Three checks, each failing fast:
+      1. if the server's log is given, it must report a GPU, not the CPU
+      2. the model must load within load_timeout seconds
+      3. once loaded, all of it must be in GPU memory
+
+    Returns (exit_code, message): 0 if all is well, 5 if the model would run
+    on the CPU (wholly or partly), 6 if the model did not load. run_batch.py
+    and bench_decode.py use these as their own exit codes.
+    """
+    if server_log:
+        found, line = discovery_result(server_log, discovery_seconds)
+        if found == "cpu":
+            return 5, f"Ollama found no usable GPU and fell back to the CPU: {line[:200]}"
+        print(f"GPU search: {found} ({line[:160]})")
+    seconds, problem = load_model(url, model, num_ctx, num_thread, load_timeout)
+    if problem:
+        return 6, problem
+    share = gpu_share(url, model)
+    if share is None or share < 0.999:
+        return 5, f"the model loaded, but {'an unknown share' if share is None else f'only {share:.0%}'} of it is on the GPU"
+    return 0, f"model loaded in {seconds:.1f} s, 100% on the GPU"

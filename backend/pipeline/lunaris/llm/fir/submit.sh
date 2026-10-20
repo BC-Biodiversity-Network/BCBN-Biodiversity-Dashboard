@@ -2,16 +2,17 @@
 # Submit batches of a run to Fir, choosing the GPU slice to fit the work.
 #
 # Run it from inside the run folder, so the job logs land in its logs/ folder.
+# In the examples, B=/scratch/$USER/lunaris_llm.
 # The one argument is the array: which batches, and optionally how many at once.
 #
-#   cd ~/scratch/lunaris_llm/runs/test900_x4
-#   ~/lunaris_llm/code/fir/submit.sh 0-3                  # 4 batches at once, 1g.10gb each
-#   ~/lunaris_llm/code/fir/submit.sh 0-268%16             # 269 batches, 16 at once
-#   NUM_CTX=65536 ~/lunaris_llm/code/fir/submit.sh 0      # long records, 2g.20gb
-#   EXCLUDE=fc10203 ~/lunaris_llm/code/fir/submit.sh 0-3  # leave out a node (comma list)
-#   GPU=h100 ~/lunaris_llm/code/fir/submit.sh 0           # choose the GPU yourself
-#   CPUS=8 NUM_THREAD=8 ~/lunaris_llm/code/fir/submit.sh 0  # more CPUs, and tell Ollama
-#   BACKEND=vllm ~/lunaris_llm/code/fir/submit.sh 0       # plan B: vLLM, 3g.40gb, 32 at once
+#   cd /scratch/$USER/lunaris_llm/runs/test900_x4
+#   /scratch/$USER/lunaris_llm/code/fir/submit.sh 0-3                  # 4 batches at once, 1g.10gb each
+#   $B/code/fir/submit.sh 0-268%16             # 269 batches, 16 at once
+#   NUM_CTX=65536 $B/code/fir/submit.sh 0      # long records, 2g.20gb
+#   EXCLUDE=fc10203 $B/code/fir/submit.sh 0-3  # leave out a node (comma list)
+#   GPU=h100 $B/code/fir/submit.sh 0           # choose the GPU yourself
+#   CPUS=8 NUM_THREAD=8 $B/code/fir/submit.sh 0  # more CPUs, and tell Ollama
+#   BACKEND=vllm $B/code/fir/submit.sh 0       # plan B: vLLM, 3g.40gb, 32 at once
 #
 # One request at a time only. Ollama always runs qwen3.5 (architecture qwen35)
 # one request at a time, whatever OLLAMA_NUM_PARALLEL says, so WORKERS above 1
@@ -102,6 +103,9 @@ if [[ -n "${EXCLUDE:-}" ]]; then
 fi
 
 echo "submitting batches $ARRAY: $BACKEND, WORKERS=$WORKERS NUM_CTX=$NUM_CTX${NUM_THREAD:+ NUM_THREAD=$NUM_THREAD} on $GPU ($CPUS CPUs, $MEM)${EXCLUDE:+, leaving out $EXCLUDE}"
-export BACKEND WORKERS NUM_CTX NUM_THREAD
+# The job copies its code from the folder this script lives in, written as
+# a physical path so it does not go through the ~/scratch link on /home.
+LUNARIS_LLM_CODE="$(cd "$(dirname "$0")/.." && pwd -P)"
+export BACKEND WORKERS NUM_CTX NUM_THREAD LUNARIS_LLM_CODE
 exec sbatch --array="$ARRAY" --gpus="$GPU:1" --cpus-per-task="$CPUS" --mem="$MEM" "${EXTRA[@]}" \
     "$(dirname "$0")/llm_array.sbatch"

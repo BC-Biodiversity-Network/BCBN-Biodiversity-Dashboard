@@ -21,16 +21,27 @@ model, so some answers can change. That is what test runs 1 and 2 measure.
 
 ## What is where
 
+Everything lives on /scratch, in one folder. On Fir, set this once per login
+(or add it to `~/.bashrc`); every Fir command below uses it:
+
+    export B=/scratch/$USER/lunaris_llm
+
+The full `/scratch/...` path is used on purpose rather than `~/scratch`.
+`~/scratch` is a link that sits on /home, and on 2026-10-19 /home was
+unreachable from some nodes for hours. Jobs also copy what they run to the
+node's own disk first (`fir/job_setup.sh`), so a slow shared disk stops a job
+in its first minute with a clear message instead of hanging.
+
 | On Fir | What |
 |---|---|
-| `~/lunaris_llm/code/` | this folder (`pipeline/lunaris/llm/`), copied from the Mac |
-| `~/lunaris_llm/venv/` | Python environment (pandas only) |
-| `~/lunaris_llm/ollama/` | the Ollama 0.40.0 program |
-| `~/scratch/lunaris_llm/models/` | the downloaded model (`OLLAMA_MODELS`) |
-| `~/scratch/lunaris_llm/runs/<run>/` | one folder per run: `run.json`, `inputs/`, `results/`, `errors/`, `logs/` |
-| `~/lunaris_llm/venv_vllm/` | vLLM's own Python environment (plan B test only) |
-| `~/scratch/lunaris_llm/hf/Qwen3.5-4B/` | the Hugging Face weights for vLLM (plan B test only) |
-| `~/scratch/lunaris_llm/bench/` | the CPU benchmark's logs and CSVs (step 4b) |
+| `$B/code/` | this folder (`pipeline/lunaris/llm/`), copied from the Mac |
+| `$B/venv/` | Python environment for the login node (status, merge); jobs build their own |
+| `$B/ollama/` | the Ollama 0.40.0 program |
+| `$B/models/` | the downloaded model (`OLLAMA_MODELS` when pulling) |
+| `$B/runs/<run>/` | one folder per run: `run.json`, `inputs/`, `results/`, `errors/`, `logs/` |
+| `$B/venv_vllm/` | vLLM's own Python environment (plan B test only) |
+| `$B/hf/Qwen3.5-4B/` | the Hugging Face weights for vLLM (plan B test only) |
+| `$B/bench/` | the CPU benchmark's logs and CSVs (step 4b) |
 
 Scratch is cleaned of old files on Alliance clusters, so copy results back to
 the Mac when a run finishes. Once `/project` is ready for def-srivast, the code,
@@ -108,20 +119,18 @@ What the checks found on 2026-10-19, and what was done about it:
 
 ## 2. One-time setup on the login node
 
-    mkdir -p ~/lunaris_llm ~/scratch/lunaris_llm/runs ~/scratch/lunaris_llm/models
+    mkdir -p $B/runs $B/models
 
 The Ollama 0.40.0 program, no root needed:
 
-    cd ~/lunaris_llm
-    curl -fL -o ollama-linux-amd64.tgz \
-        https://github.com/ollama/ollama/releases/download/v0.40.0/ollama-linux-amd64.tgz
-    mkdir -p ollama && tar -C ollama -xzf ollama-linux-amd64.tgz
-    ~/lunaris_llm/ollama/bin/ollama --version
+    cd $B
+    curl -fL -o ollama-linux-amd64.tar.zst \
+        https://github.com/ollama/ollama/releases/download/v0.40.0/ollama-linux-amd64.tar.zst
+    mkdir -p ollama && tar -I zstd -xf ollama-linux-amd64.tar.zst -C ollama
+    $B/ollama/bin/ollama --version
 
-If the download gives 404, open
-https://github.com/ollama/ollama/releases/tag/v0.40.0 and use the
-`linux-amd64` file listed there. If it ends in `.tar.zst`, unpack it with
-`tar --zstd -C ollama -xf <file>`.
+The v0.40.0 Linux file is a `.tar.zst` (there is no `.tgz` for this
+version), and `zstd` is available on Fir to unpack it.
 
 The Python environment. The first line shows which standard environment Fir
 loaded for you; write it down. If Fir changes its default one day and the jobs
@@ -130,41 +139,67 @@ commands.
 
     module list 2>&1 | grep -o 'StdEnv/[0-9]*'
     module load python/3.12
-    virtualenv --no-download ~/lunaris_llm/venv
-    source ~/lunaris_llm/venv/bin/activate
+    virtualenv --no-download $B/venv
+    source $B/venv/bin/activate
     pip install --no-index --upgrade pip
-    pip install --no-index pandas
+    pip install --no-index pandas==3.0.5
     deactivate
 
 The model. A server is started on the login node only to download, then
 stopped. It uses no GPU. If port 11555 is busy, pick another number.
 
-    export OLLAMA_MODELS=~/scratch/lunaris_llm/models
+    export OLLAMA_MODELS=$B/models
     export OLLAMA_HOST=127.0.0.1:11555
-    ~/lunaris_llm/ollama/bin/ollama serve > ~/scratch/lunaris_llm/pull_server.log 2>&1 &
+    $B/ollama/bin/ollama serve > $B/pull_server.log 2>&1 &
     sleep 5
-    ~/lunaris_llm/ollama/bin/ollama pull qwen3.5:4b
-    ~/lunaris_llm/ollama/bin/ollama list
-    ~/lunaris_llm/ollama/bin/ollama show qwen3.5:4b | head -12
+    $B/ollama/bin/ollama pull qwen3.5:4b
+    $B/ollama/bin/ollama list
+    $B/ollama/bin/ollama show qwen3.5:4b | head -12
     kill %1
     unset OLLAMA_HOST
 
 `ollama list` should show ID `d8b0f5e9760c` (the GGUF build). Write down the
 ID and the quantization line from `ollama show`.
 
+## 2b. Moving an existing setup off /home (once)
+
+Up to 2026-10-19 the Ollama program and the Python environment were in
+`~/lunaris_llm` on /home. The model and the runs were already on /scratch
+(`~/scratch/lunaris_llm` and `$B` are the same folder). To move the rest, on
+a login node where /home works, with no lunaris jobs queued (`squeue --me`):
+
+    export B=/scratch/$USER/lunaris_llm
+    ls $B/models $B/runs
+    cd $B
+    curl -fL -o ollama-linux-amd64.tar.zst \
+        https://github.com/ollama/ollama/releases/download/v0.40.0/ollama-linux-amd64.tar.zst
+    mkdir -p ollama && tar -I zstd -xf ollama-linux-amd64.tar.zst -C ollama
+    $B/ollama/bin/ollama --version
+    module load python/3.12
+    virtualenv --no-download $B/venv
+    source $B/venv/bin/activate
+    pip install --no-index --upgrade pip
+    pip install --no-index pandas==3.0.5
+    deactivate
+
+The Ollama program is downloaded again rather than copied from /home, so no
+half-read file from the bad spell comes along. Then copy the code to `$B/code`
+(step 3). Leave the old `~/lunaris_llm` where it is for now; removing it is an
+optional clean-up at the very end of this file.
+
 ## 3. Copy the code and the test input (Mac)
 
-    ssh songyanf@fir.alliancecan.ca 'mkdir -p ~/lunaris_llm ~/scratch/lunaris_llm/runs'
-    scp -r pipeline/lunaris/llm songyanf@fir.alliancecan.ca:lunaris_llm/code
-    scp -r data/lunaris_llm_runs/test900 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
-    scp -r data/lunaris_llm_runs/test900_x4 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
+    ssh songyanf@fir.alliancecan.ca 'mkdir -p /scratch/songyanf/lunaris_llm/runs'
+    scp -r pipeline/lunaris/llm songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/code
+    scp -r data/lunaris_llm_runs/test900 songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
+    scp -r data/lunaris_llm_runs/test900_x4 songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
 
 To send a newer copy of the code later, copy the folder's contents instead:
-`scp -r pipeline/lunaris/llm/* songyanf@fir.alliancecan.ca:lunaris_llm/code/`.
+`scp -r pipeline/lunaris/llm/* songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/code/`.
 
 On Fir, once after each code copy:
 
-    chmod +x ~/lunaris_llm/code/fir/*.sh
+    chmod +x $B/code/fir/*.sh
 
 ## 4. Test runs: the 900 records, twice
 
@@ -183,35 +218,46 @@ each on its own 1g.10gb slice, and `submit.sh` refuses WORKERS above 1.
 
 Both can be submitted at once:
 
-    cd ~/scratch/lunaris_llm/runs/test900
-    ~/lunaris_llm/code/fir/submit.sh 0
+    cd $B/runs/test900
+    $B/code/fir/submit.sh 0
 
-    cd ~/scratch/lunaris_llm/runs/test900_x4
-    ~/lunaris_llm/code/fir/submit.sh 0-3
+    cd $B/runs/test900_x4
+    $B/code/fir/submit.sh 0-3
 
 Watch them:
 
     squeue --me
-    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900
-    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_x4
-    tail -5 ~/scratch/lunaris_llm/runs/test900_x4/logs/lunaris-llm_*_*.out
+    $B/code/fir/status.sh $B/runs/test900
+    $B/code/fir/status.sh $B/runs/test900_x4
+    tail -5 $B/runs/test900_x4/logs/lunaris-llm_*_*.out
 
 The job log shows the GPU slice, the Ollama version, the model digest, whether
 the model is on the GPU (`model on the GPU: 100%`), progress every 25 records,
 and a summary at the end. The Ollama server's own log is in `logs/ollama_*.log`.
 
-**If the model is not on the GPU.** On a busy node Ollama's GPU search can
-time out ("GPU discovery watchdog timed out"), and then Ollama runs on the
-CPU without stopping. Two things guard against that:
+**If the model does not get going.** Ollama's GPU search can time out
+("GPU discovery watchdog timed out"), and then Ollama carries on with the CPU
+only and the model never loads in time. On 2026-10-19 this hit every job
+started while /home was unreachable, because Ollama and Python were on
+/home. Each job now guards against it:
 
-- The job script tells Ollama to try only its CUDA 13 libraries
-  (`OLLAMA_LLM_LIBRARY=cuda_v13`), so there is one try, not two.
-- After the first answer, `run_batch.py` checks that the whole model is on
-  the GPU. If not, it writes nothing, stops with exit code 5, and records the
-  node.
+- It copies the code, the Ollama program and the model to the node's own
+  disk and builds Python there (`fir/job_setup.sh`). The job log shows each
+  step with its size and time. If a step fails or takes over 10 minutes, the
+  job stops with exit code 6 (`SETUP FAILED ...`).
+- Ollama tries only its CUDA 13 libraries (`OLLAMA_LLM_LIBRARY=cuda_v13`).
+- Before asking about any record, `run_batch.py` makes three checks. First,
+  Ollama's log must report a GPU: if it fell back to the CPU, the job stops
+  at once with exit code 5. Second, the model must load within 6 minutes
+  (`LOAD_TIMEOUT`), or the job stops with exit code 6. Third, all of the
+  model must be on the GPU (exit code 5 if not).
+- If 5 requests in a row then fail with a timeout or a server error, the job
+  stops with exit code 2 rather than failing record after record.
 
-`status.sh` then lists the node and prints the resubmit line with
-`EXCLUDE=<node>`, which keeps that batch away from the node.
+`status.sh` lists jobs that stopped before their first record, with node and
+reason. One node failing again and again: leave it out with `EXCLUDE=<node>`.
+Many nodes failing at the same moment: suspect the shared filesystem, and
+wait before resubmitting.
 
 **Where the time goes.** Each answer now records Ollama's own split: seconds
 reading the prompt and seconds writing the answer. `status.sh` shows the
@@ -219,8 +265,8 @@ medians, and the merged `.about.json` keeps them. For run 1, which started
 before this was added, look in the server log for llama.cpp's own timing
 lines, and for whether it can reuse the shared instructions between records:
 
-    grep -h -m 6 "prompt eval time\|eval time" ~/scratch/lunaris_llm/runs/test900/logs/ollama_*.log
-    grep -h -c "full prompt re-processing" ~/scratch/lunaris_llm/runs/test900/logs/ollama_*.log
+    grep -h -m 6 "prompt eval time\|eval time" $B/runs/test900/logs/ollama_*.log
+    grep -h -c "full prompt re-processing" $B/runs/test900/logs/ollama_*.log
 
 The second command counts how often the whole prompt was read again from the
 start, because this model type cannot keep the instructions from the record
@@ -230,13 +276,13 @@ If status shows records still failing, resubmit the line it prints. Only the
 missing records are asked again. Records too long for the default context
 (`context_full`) need a bigger one, which `submit.sh` puts on a 2g.20gb slice:
 
-    NUM_CTX=65536 ~/lunaris_llm/code/fir/submit.sh 0
+    NUM_CTX=65536 $B/code/fir/submit.sh 0
 
 When status says all done, merge each run into its CSV:
 
-    module load python/3.12 && source ~/lunaris_llm/venv/bin/activate
-    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900
-    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_x4
+    module load python/3.12 && source $B/venv/bin/activate
+    python $B/code/merge_results.py $B/runs/test900
+    python $B/code/merge_results.py $B/runs/test900_x4
 
 This writes `trial_qwen3.5-4b-fir_v6_test900.csv` (and `..._test900_x4.csv`)
 in each run folder, with a `.about.json` beside it: digest, Ollama version,
@@ -269,10 +315,10 @@ count, also without the presence penalty, and also without the JSON schema.
 One job has 2 CPUs and one has 8. Each takes 10 to 25 minutes on a 1g.10gb
 slice; together about 0.1 H100-hours.
 
-    mkdir -p ~/scratch/lunaris_llm/bench/logs && cd ~/scratch/lunaris_llm/bench
-    sbatch --cpus-per-task=2 ~/lunaris_llm/code/fir/bench_decode.sbatch ~/scratch/lunaris_llm/runs/test900
-    sbatch --cpus-per-task=8 --mem=16G ~/lunaris_llm/code/fir/bench_decode.sbatch ~/scratch/lunaris_llm/runs/test900
-    tail -12 ~/scratch/lunaris_llm/bench/logs/lunaris-bench_*.out
+    mkdir -p $B/bench/logs && cd $B/bench
+    sbatch --cpus-per-task=2 $B/code/fir/bench_decode.sbatch $B/runs/test900
+    sbatch --cpus-per-task=8 --mem=16G $B/code/fir/bench_decode.sbatch $B/runs/test900
+    tail -12 $B/bench/logs/lunaris-bench_*.out
 
 Each log ends with a table: answer tokens a second, prompt seconds, total
 seconds, how busy the CPUs were, and whether `threads` gives the same answers
@@ -300,8 +346,8 @@ How to read it:
 
 Copy both runs back:
 
-    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900 data/lunaris_llm_runs/fir_test900
-    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900_x4 data/lunaris_llm_runs/fir_test900_x4
+    scp -r songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/test900 data/lunaris_llm_runs/fir_test900
+    scp -r songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/test900_x4 data/lunaris_llm_runs/fir_test900_x4
 
 Score the Fir run on its own:
 
@@ -365,14 +411,14 @@ If the vLLM test (step 7) is chosen instead, this step changes.
     python pipeline/lunaris/llm/make_batches.py \
         --harvest exploration/lunaris/harvest_2026_10/lunaris_full_harvest.parquet \
         --run-dir data/lunaris_llm_runs/harvest_2026_10 --batch-size 600
-    scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
+    scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
 
 **(Fir)** Submit with the settings step 4b settled on (for example
 `NUM_THREAD=2`), then watch:
 
-    cd ~/scratch/lunaris_llm/runs/harvest_2026_10
-    ~/lunaris_llm/code/fir/submit.sh 0-268%16
-    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/harvest_2026_10
+    cd $B/runs/harvest_2026_10
+    $B/code/fir/submit.sh 0-268%16
+    $B/code/fir/status.sh $B/runs/harvest_2026_10
 
 `status.sh` prints the exact `submit.sh` line that resubmits only unfinished
 batches, with `EXCLUDE=` for any node where the model was off the GPU. Then
@@ -391,14 +437,14 @@ pass the same gates against the Mac on its own (step 5).
 
     module load python/3.12
     avail_wheels vllm torch transformers xgrammar huggingface_hub
-    virtualenv --no-download ~/lunaris_llm/venv_vllm
-    source ~/lunaris_llm/venv_vllm/bin/activate
+    virtualenv --no-download $B/venv_vllm
+    source $B/venv_vllm/bin/activate
     pip install --no-index --upgrade pip
     pip install --no-index vllm==0.25.0 huggingface_hub
     python -c "import vllm; print(vllm.__version__)"
-    mkdir -p ~/scratch/lunaris_llm/hf
-    hf download Qwen/Qwen3.5-4B --local-dir ~/scratch/lunaris_llm/hf/Qwen3.5-4B
-    du -sh ~/scratch/lunaris_llm/hf/Qwen3.5-4B
+    mkdir -p $B/hf
+    hf download Qwen/Qwen3.5-4B --local-dir $B/hf/Qwen3.5-4B
+    du -sh $B/hf/Qwen3.5-4B
     deactivate
 
 If `import vllm` fails over a missing library, check the Alliance vLLM page for
@@ -408,28 +454,28 @@ the modules it needs. Name them in `VLLM_MODULES` when submitting, for example
 
 **Copy the test folder (Mac):**
 
-    scp -r data/lunaris_llm_runs/test900_vllm songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/
+    scp -r data/lunaris_llm_runs/test900_vllm songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
 
 It holds the same 900 records as one batch. Its model is `Qwen/Qwen3.5-4B` and
 its label `qwen3.5-4b-vllm-bf16`.
 
 **Run it (Fir):** one job on a 3g.40gb slice, 32 records in flight.
 
-    cd ~/scratch/lunaris_llm/runs/test900_vllm
-    BACKEND=vllm ~/lunaris_llm/code/fir/submit.sh 0
-    ~/lunaris_llm/code/fir/status.sh ~/scratch/lunaris_llm/runs/test900_vllm
-    tail -20 ~/scratch/lunaris_llm/runs/test900_vllm/logs/vllm_*_0.log
+    cd $B/runs/test900_vllm
+    BACKEND=vllm $B/code/fir/submit.sh 0
+    $B/code/fir/status.sh $B/runs/test900_vllm
+    tail -20 $B/runs/test900_vllm/logs/vllm_*_0.log
 
 vLLM takes several minutes to start. If its log says one of the extra flags
 is not accepted, resubmit with your own list, for example
 `VLLM_FLAGS='--enable-prefix-caching'`. The default list is in
 `llm_array.sbatch`. Then merge and compare as in steps 4 and 5:
 
-    module load python/3.12 && source ~/lunaris_llm/venv/bin/activate
-    python ~/lunaris_llm/code/merge_results.py ~/scratch/lunaris_llm/runs/test900_vllm
+    module load python/3.12 && source $B/venv/bin/activate
+    python $B/code/merge_results.py $B/runs/test900_vllm
 
     # Mac, from backend/
-    scp -r songyanf@fir.alliancecan.ca:scratch/lunaris_llm/runs/test900_vllm data/lunaris_llm_runs/fir_test900_vllm
+    scp -r songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/test900_vllm data/lunaris_llm_runs/fir_test900_vllm
     python exploration/llm/compare_runs.py \
         --a exploration/llm/trial_qwen3.5-4b_v6_harvest_2026_10.csv \
         --b data/lunaris_llm_runs/fir_test900_vllm/trial_qwen3.5-4b-vllm-bf16_v6_test900_vllm.csv \
@@ -451,10 +497,34 @@ times, so records a second can be worked out from them.
 - **"a prompt differs from the one made on the Mac".** The code on Fir is
   older or newer than the code that made the batches. Copy the code again
   (step 3).
-- **Exit code 5, "the model is not entirely on the GPU".** Ollama's GPU
-  search timed out on that node. Resubmit with the line `status.sh` prints;
-  it includes `EXCLUDE=<node>`.
+- **Exit code 5, "fell back to the CPU" or "not entirely on the GPU".**
+  Ollama's GPU search timed out on that node. Resubmit with the line
+  `status.sh` prints (with `EXCLUDE=` for a node that fails repeatedly).
+- **Exit code 6, "SETUP FAILED".** Copying to the node's disk, or building
+  Python there, failed or hung; the line says which step. Usually the shared
+  filesystem; resubmit later. "not found" means a folder is missing from `$B`
+  (step 2b).
+- **Exit code 6, "the model did not load".** Ollama started but could not
+  load the model in time; see `logs/ollama_*.log`.
 - **The server does not start.** Read `logs/ollama_*.log`. If the program will
   not run on Fir at all, the fallback is the Apptainer image
   `docker://ollama/ollama:0.40.0` (ask Claude to adapt the job script), and
   plan B is vLLM.
+
+## Optional clean-up: the old copy on /home
+
+Nothing needs this, and no script deletes anything. Up to 2026-10-19 the
+Ollama program and the Python environment were in `~/lunaris_llm` on /home.
+Once at least one job has run successfully from `/scratch/$USER/lunaris_llm`
+(its log shows `staged ...` lines and `model loaded ..., 100% on the GPU`),
+that old copy is no longer used, and it can be removed to free space on /home.
+
+`rm` on Fir is permanent: there is no bin to restore from. Look at what is
+there first, and make sure no run or result lives inside it:
+
+    ls -la ~/lunaris_llm
+    du -sh ~/lunaris_llm
+
+Then, only if you want the space back:
+
+    rm -r ~/lunaris_llm

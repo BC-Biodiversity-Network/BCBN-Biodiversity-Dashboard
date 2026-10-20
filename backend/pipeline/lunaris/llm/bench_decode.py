@@ -28,6 +28,13 @@ facts are the fairer test. The first
 two requests of each setting are a warm-up and are not counted, because
 changing num_thread makes Ollama reload the model.
 
+Before timing anything it checks, like run_batch.py, that Ollama found the
+GPU (from its log, --server-log), that the model loads within --load-timeout
+seconds, and that all of it is on the GPU; and again after each settings
+change that reloads the model. A failure stops it at once with exit code 5
+(not on the GPU) or 6 (did not load). Three failed requests in a row stop it
+with exit code 2. Whatever was measured so far is still written to the CSV.
+
 It writes nothing into the run folder; only the --out CSV.
 
 Usage (inside a job, see fir/bench_decode.sbatch):
@@ -47,7 +54,14 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ollama_client import OLLAMA_NUM_CTX, chat_request_body, wait_for_server  # noqa: E402
+from ollama_client import (  # noqa: E402
+    OLLAMA_NUM_CTX,
+    chat_request_body,
+    gpu_share,
+    load_model,
+    prepare_ollama,
+    wait_for_server,
+)
 from prompt_v6 import build_prompt  # noqa: E402
 from run_files import load_run, read_inputs  # noqa: E402
 
@@ -60,6 +74,12 @@ VARIANTS = [
 ]
 
 WARM_UP = 2
+
+# Failed requests in a row after which the server is taken to be broken.
+FAILURES_IN_A_ROW = 3
+
+CSV_COLUMNS = ["setting", "record_id", "prompt_tokens", "prompt_s", "answer_tokens", "answer_s",
+               "tokens_per_s", "total_s", "content", "error"]
 
 
 def cpu_seconds_of_user_processes():
@@ -125,6 +145,15 @@ def facts_of(content):
     return {key: value for key, value in answer.items() if key != "reason"} if isinstance(answer, dict) else None
 
 
+def write_rows(path, rows):
+    """Write the measured requests to the CSV, one row per request."""
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"wrote {path}")
+
+
 def post_chat(url, body, timeout):
     """Send one /api/chat request and return Ollama's reply as a dict."""
     request = urllib.request.Request(url.rstrip("/") + "/api/chat",
@@ -143,7 +172,11 @@ def main():
     parser.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", "2")),
                         help="num_thread for the threads settings (default: the job's CPU count)")
     parser.add_argument("--only", default="", help="comma-separated setting names to run (default: all)")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--timeout", type=int, default=600, help="seconds to wait for one answer")
+    parser.add_argument("--server-log", default=None,
+                        help="Ollama's log file, read to check it found the GPU (the job script passes it)")
+    parser.add_argument("--load-timeout", type=int, default=360,
+                        help="seconds the model may take to load (default 360)")
     parser.add_argument("--out", required=True, help="CSV with one row per request")
     args = parser.parse_args()
 
@@ -158,23 +191,52 @@ def main():
           f"num_thread for the threads settings: {args.threads}")
     print(f"{len(records) - WARM_UP} records per setting, after {WARM_UP} warm-up requests\n")
 
+    # Stop before timing anything if the model will not run on the GPU.
+    code, message = prepare_ollama(url, run["model"], OLLAMA_NUM_CTX, None, args.server_log,
+                                   load_timeout=args.load_timeout)
+    if code:
+        print(f"STOPPED: {message}")
+        return code
+    print(message)
+
     rows = []
     answers = {}
     summary = []
+    failures_in_a_row = 0
     for name, set_threads, schema, penalty in variants:
+        # A different num_thread makes Ollama reload the model, so load it
+        # here, within the time limit, and check it is still on the GPU.
+        threads = args.threads if set_threads else None
+        seconds, problem = load_model(url, run["model"], OLLAMA_NUM_CTX, threads, args.load_timeout)
+        share = gpu_share(url, run["model"]) if not problem else None
+        if problem or share is None or share < 0.999:
+            print(f"STOPPED at {name}: {problem or f'only {share or 0:.0%} of the model is on the GPU'}")
+            write_rows(args.out, rows)
+            return 6 if problem else 5
+        print(f"{name}: model ready in {seconds:.1f} s, 100% on the GPU", flush=True)
         cpu_before = None
         started = None
         for position, record in enumerate(records):
             if position == WARM_UP:
                 cpu_before = cpu_seconds_of_user_processes()
                 started = time.monotonic()
-            body = chat_request_body(run["model"], build_prompt(record), OLLAMA_NUM_CTX,
-                                     args.threads if set_threads else None)
+            body = chat_request_body(run["model"], build_prompt(record), OLLAMA_NUM_CTX, threads)
             if not schema:
                 body.pop("format")
             if penalty is not None:
                 body["options"]["presence_penalty"] = penalty
-            reply = post_chat(url, body, args.timeout)
+            try:
+                reply = post_chat(url, body, args.timeout)
+                failures_in_a_row = 0
+            except (OSError, ValueError) as error:
+                failures_in_a_row += 1
+                print(f"    {name} {record['record_id']}: request failed ({error})")
+                rows.append({"setting": name, "record_id": record["record_id"], "error": str(error)})
+                if failures_in_a_row >= FAILURES_IN_A_ROW:
+                    print(f"STOPPED: {failures_in_a_row} requests in a row failed, the server looks broken")
+                    write_rows(args.out, rows)
+                    return 2
+                continue
             if position < WARM_UP:
                 continue
             content = reply.get("message", {}).get("content", "")
@@ -191,7 +253,10 @@ def main():
             answers[(name, record["record_id"])] = content
         wall = time.monotonic() - started
         cpu_after = cpu_seconds_of_user_processes()
-        mine = [row for row in rows if row["setting"] == name]
+        mine = [row for row in rows if row["setting"] == name and not row.get("error")]
+        if not mine:
+            print(f"done: {name}, but no request succeeded")
+            continue
         busy = ((cpu_after - cpu_before) / (wall * cpus)
                 if cpu_before is not None and cpu_after is not None and wall else None)
         same = None
@@ -214,11 +279,7 @@ def main():
     print("CPU busy near 100% means the CPUs were the limit. If 'threads' is much faster than")
     print("'as_run' with the same answers, setting num_thread is a free fix.")
 
-    with open(args.out, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"wrote {args.out}")
+    write_rows(args.out, rows)
     return 0
 
 

@@ -420,43 +420,78 @@ own, which tells weight differences from run-to-run noise.
 
 The full run starts only after Lucia approves this result.
 
-## 6. The full October harvest (only after approval)
+## 6. The full run, on the 20 October harvest (only after approval)
 
-The plan: Ollama on 1g.10gb slices with 2 CPUs, `num_thread` 2 (the default
-now), one request at a time per slice.
+The full run uses a fresh harvest from 2026-10-20, not the October 9 one. The
+October 9 harvest had only 67 Dryad records (5,851 in September), because of
+a Lunaris feed problem that Tristan has since fixed. On 2026-10-20 the feed
+reported 168,278 records, 5,958 of them in the Dryad set. The harvest uses
+the same script and format as before (`lunaris_harvest_only.py`, Sickle,
+oai_datacite), so the title, subjects and abstract text match what the test
+set and prompt v6 were validated on.
+
+**(Mac) 1. Harvest.** From `backend/`, in its own folder so the October one
+stays as it is. It takes about 2 h 10 min to 2 h 20 min; `caffeinate` keeps
+the Mac awake.
+
+    mkdir -p exploration/lunaris/harvest_2026_10_20
+    caffeinate -i ../.venv/bin/python pipeline/lunaris/lunaris_harvest_only.py \
+        --outdir exploration/lunaris/harvest_2026_10_20 2>&1 | tee exploration/lunaris/harvest_2026_10_20/harvest.log
+
+If it is interrupted, run the same command again soon, the same day. It
+carries on from the saved batches by fetching and skipping what it already
+has. That only lines up if the feed has not changed in between; after a long
+gap, start again in a new folder.
+
+**(Mac) 2. Check it** before building anything from it:
+
+    python pipeline/lunaris/check_harvest.py exploration/lunaris/harvest_2026_10_20 \
+        --compare exploration/lunaris/harvest_2026_10 --live
+
+Look for:
+- about 168,278 records fetched and 0 unreadable;
+- about 5,958 Dryad records, against 67 on October 9;
+- no warnings other than ones you can explain.
+
+The by-source table lists every source that changed by at least 50 records
+and 10% since October 9.
+
+**(Mac) 3. Make the batches and copy them.**
+
+    python pipeline/lunaris/llm/make_batches.py \
+        --harvest exploration/lunaris/harvest_2026_10_20/lunaris_full_harvest.parquet \
+        --run-dir data/lunaris_llm_runs/harvest_2026_10_20 --batch-size 3000
+    scp -r data/lunaris_llm_runs/harvest_2026_10_20 songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
+
+Expect about 168,050 unique records in about 57 batches (0 to 56), about
+60 MB. The make step prints the exact count and how many prompts may be too
+long for the default context. Use its last batch number in the submit line
+below if it differs from 56.
+
+**The plan and its size.** Ollama on 1g.10gb slices with 2 CPUs,
+`num_thread` 2 (the default), one request at a time per slice.
 
 - **Speed.** About 2.4 s per record: 2.37 s in the benchmark with
   `num_thread` set, plus a little overhead per request. Sizing allows up to
   2.6 s.
-- **Total.** 161,278 records x 2.4 to 2.6 s is about 108 to 117
-  slice-hours. A 1g slice is about 1/7 of an H100, so about 15 to 17
+- **Total.** About 168,050 records x 2.4 to 2.6 s is about 112 to 121
+  slice-hours. A 1g slice is about 1/7 of an H100, so about 16 to 17
   H100-hours.
 - **Batch size 3,000.** 2.0 to 2.2 hours of work per batch, plus about 2
   minutes to copy to the node and load the model. That stays inside the
-  3-hour limit, so batches land in the quickest partition. 54 batches
-  (0 to 53).
-- **18 at once.** 54 batches in 3 waves of 18, so about 6.5 hours of wall
-  time. 16 at once would need 4 waves (about 9 hours). 27 at once would need
-  2 (about 4.5 hours), if that many slices start quickly.
-- **Afterwards.** The 4 prompts over 55,000 characters will come back as
-  `context_full`. One `NUM_CTX=65536` pass on just their batches, on a
-  2g.20gb slice, takes minutes.
+  3-hour limit, so batches land in the quickest partition.
+- **19 at once.** About 57 batches in 3 waves of 19, so about 6.5 hours of
+  wall time. 16 at once would need 4 waves (about 9 hours).
+- **Afterwards.** Prompts too long for 16,384 tokens (4 in the October 9
+  harvest) come back as `context_full`. One `NUM_CTX=65536` pass on just
+  their batches, on a 2g.20gb slice, takes minutes.
 
-**(Mac)** Make the batches and copy them:
+**(Fir) 4. Submit, then watch.** Copy the code first as in step 3, so the
+`num_thread` default is in place.
 
-    python pipeline/lunaris/llm/make_batches.py \
-        --harvest exploration/lunaris/harvest_2026_10/lunaris_full_harvest.parquet \
-        --run-dir data/lunaris_llm_runs/harvest_2026_10 --batch-size 3000
-    scp -r data/lunaris_llm_runs/harvest_2026_10 songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/
-
-The make step should report 161,278 records from 161,488 rows (210
-duplicate rows dropped) in 54 batches, about 57 MB.
-
-**(Fir)** Submit, then watch:
-
-    cd $B/runs/harvest_2026_10
-    $B/code/fir/submit.sh 0-53%18
-    $B/code/fir/status.sh $B/runs/harvest_2026_10
+    cd $B/runs/harvest_2026_10_20
+    $B/code/fir/submit.sh 0-56%19
+    $B/code/fir/status.sh $B/runs/harvest_2026_10_20
 
 `submit.sh` should print `NUM_THREAD=2` on its "submitting" line.
 `status.sh` prints the exact `submit.sh` line that resubmits only unfinished
@@ -465,6 +500,14 @@ batches, with `EXCLUDE=` for a node that keeps failing. When only the
 `NUM_CTX=65536` in front, for example
 `NUM_CTX=65536 $B/code/fir/submit.sh 12,40`. Then merge and copy back as in
 steps 4 and 5.
+
+**What can wait.** The keyword filter (`build_lunaris_candidates.py`) still
+reads the September harvest by default. It is not part of this run. The
+test set was validated on the October 9 text and does not need refreshing
+for this run. If it is ever refreshed from the new harvest, give it a new
+file and a new Mac cache folder: the cache key is the record id, model and
+prompt version, not the text, so an old cache would return answers about the
+old text.
 
 ## 7. Plan B test: vLLM on the same 900 records
 

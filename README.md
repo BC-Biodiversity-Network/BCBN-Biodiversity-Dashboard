@@ -8,6 +8,112 @@ The source is the GBIF cloud snapshot on AWS S3 (`gbif-open-data-us-east-1`),
 which GBIF republishes monthly. Everything is queried with DuckDB reading
 parquet directly - no database server, no full-archive download.
 
+## Running the website locally
+
+These steps start the website on your own computer from a fresh clone: the
+species API in one terminal and the map in another.
+
+### Requirements
+
+- Python 3.10 or newer. macOS's built-in `/usr/bin/python3` is 3.9 and fails
+  when the API starts; install a newer one (for example
+  `brew install python@3.12`).
+- Node 20.19+ or 22.12+ (needed by Vite 8), with npm.
+- Internet access while using the site: the basemap (OpenFreeMap) and the
+  species photos load from the web.
+
+### 1. Clone the repo
+
+```
+git clone git@github.com:BC-Biodiversity-Network/BCBN-Biodiversity-Dashboard.git BCBN-Dashboard
+cd BCBN-Dashboard
+```
+
+### 2. Add the data files
+
+The API reads four data files that are not in git (`data/` and `*.parquet`
+are ignored). Ask Lucia for a zip of them (about 40 MB). The folder they go
+in does not exist in a fresh clone, so create it first:
+
+```
+mkdir -p backend/data/api
+```
+
+Then put the four files in `backend/data/api/`:
+
+| File | Size | Where it comes from |
+| --- | --- | --- |
+| `species_hex.parquet` | 37 MB | `build_species_tables.py`, on the server in `~/bcbn/data/gbif_tables/species_merged/` |
+| `species_card_gbif.parquet` | 3.6 MB | `build_species_tables.py`, same folder |
+| `bcsee_status_by_gbif_species.parquet` | 1.2 MB | `build_bcsee_status_display.py --key-merge` (see "BCSEE statuses on the species cards") |
+| `download_info.json` | 12 KB | `build_dwca_tables.py`, on the server in `~/bcbn/data/gbif_tables/`; the GBIF download DOI to cite |
+
+The map's hexagon files (`frontend/public/data/bc_hex_r4.csv.gz` to
+`bc_hex_r7.csv.gz`) are in git, so there is nothing to copy for them.
+
+### 3. Start the API (terminal 1)
+
+From the top of the repo:
+
+```
+python3.12 -m venv .venv
+.venv/bin/pip install -r backend/requirements-api.txt
+cd backend
+../.venv/bin/python -m uvicorn api.main:app --reload --port 8000
+```
+
+Any Python 3.10 or newer works in place of `python3.12`. The first two lines
+are only needed once. The API must be started from `backend/`. `--reload`
+restarts it when a file changes, so it can be left out if you are not editing
+the code.
+
+To check it, open `http://127.0.0.1:8000/api/meta`. It should return JSON
+with the species and record totals (38,991 species with the October 2026
+data). If a data file is missing or has the wrong columns, the API does not
+start and lists every problem.
+
+### 4. Start the front end (terminal 2)
+
+```
+cd BCBN-Dashboard/frontend
+npm ci
+npm run dev
+```
+
+Then open `http://localhost:5173`. `npm ci` installs exactly the versions in
+`package-lock.json`; it is only needed the first time and after the lock file
+changes. The overview map works without the API, but species search, the
+species cards and the year filter need it, and say so if they cannot reach it.
+
+### Settings
+
+All are optional environment variables:
+
+- `BCBN_API_DEV_URL`: where `npm run dev` sends every request for `/api`
+  (`frontend/vite.config.js`). The default is `http://127.0.0.1:8000`. If the
+  API runs on another port, start the front end with, for example,
+  `BCBN_API_DEV_URL=http://127.0.0.1:8001 npm run dev`.
+- `BCBN_API_DATA_DIR`: the folder with the four data files, if not
+  `backend/data/api/`. Set it when starting the API, for example
+  `BCBN_API_DATA_DIR=~/bcbn-data ../.venv/bin/python -m uvicorn api.main:app --port 8000`.
+- `BCBN_SENSITIVE_MAX_RES`: leave it unset. It is reserved for coarsening
+  sensitive species' locations, which is not implemented: which species, how
+  coarse, and what happens to the card's extent box and photo link are not
+  decided yet. Any value stops the API at start-up with a message saying so,
+  so nobody thinks species are protected when they are not. `/api/meta`
+  reports it (always null for now).
+
+### Common problems
+
+- The API stops with `TypeError: unsupported operand type(s) for |`: the
+  venv was made with Python 3.9. Delete `.venv` and make it again with Python
+  3.10 or newer.
+- `npm ci` warns about install scripts for `fsevents`. This is harmless.
+- On Windows the venv paths are `.venv\Scripts\python` and
+  `.venv\Scripts\pip` instead of `.venv/bin/...`, so from `backend\` the API
+  starts with `..\.venv\Scripts\python -m uvicorn api.main:app --reload --port 8000`.
+  (These steps have not been tested on Windows.)
+
 ## The three-layer pipeline
 
 The pipeline is split by layer so the expensive step (downloading), the step
@@ -717,33 +823,10 @@ Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `op
 ## Running the species API
 
 Species search and the species cards come from a small API in `backend/api/`
-(FastAPI and DuckDB). It reads four files, copied by hand from the server
-and the BCSEE build into `backend/data/api/` (git-ignored like the rest of
-`backend/data/`):
-
-| File | Comes from |
-| --- | --- |
-| `species_card_gbif.parquet`, `species_hex.parquet` | `~/bcbn/data/gbif_tables/species_merged/` on the server (`build_species_tables.py`) |
-| `bcsee_status_by_gbif_species.parquet` | `build_bcsee_status_display.py --key-merge` |
-| `download_info.json` | `~/bcbn/data/gbif_tables/` on the server (`build_dwca_tables.py`); the GBIF download DOI to cite |
-
-```
-pip install -r backend/requirements-api.txt
-cd backend
-uvicorn api.main:app --reload --port 8000
-python -m pytest
-```
-
-Two environment variables change its behaviour:
-
-- `BCBN_API_DATA_DIR`: the folder with the four files, if not
-  `backend/data/api/`.
-- `BCBN_SENSITIVE_MAX_RES`: reserved for coarsening sensitive species'
-  locations, which is not implemented: which species, how coarse, and what
-  happens to the card's extent box and photo link are not decided yet. It
-  must be left empty. Any value stops the API at start-up with a message
-  saying so, so nobody thinks species are protected when they are not.
-  `/api/meta` reports it (always null for now).
+(FastAPI and DuckDB). How to install and start it, the four data files it
+reads and where they come from, and its settings are in "Running the website
+locally" near the top. Its tests run from `backend/` with
+`../.venv/bin/python -m pytest`.
 
 At start-up the API checks that every file is there with the columns it
 reads, that the cards have one Catalogue of Life release and the statuses
@@ -786,7 +869,7 @@ and is left out, so it is empty for every same-name merge.
   creator, licence and a link to the original. ND images are flagged with
   `no_derivatives` and are never cropped.
 - The extent box is the card's own; no species' locations are coarsened
-  (see `BCBN_SENSITIVE_MAX_RES` above).
+  (see `BCBN_SENSITIVE_MAX_RES` in "Running the website locally").
 
 `GET /api/search?q=&limit=` finds species cards (`backend/api/search.py`),
 best first, up to `limit` (default 20, at most 50). It searches the card's
@@ -861,28 +944,13 @@ endpoint only when a year range is set (see "Running the front end").
 
 The map lives in `frontend/`. It is a Vite + React app that draws the hexagon
 aggregates over an OpenFreeMap basemap with deck.gl, with a species search box
-that calls the species API.
+that calls the species API. How to start it, with the API, is in "Running the
+website locally" near the top.
 
-Two terminals, the API first:
-
-```
-# terminal 1: the species API (see "Running the species API")
-cd backend
-../.venv/bin/python -m uvicorn api.main:app --reload --port 8000
-
-# terminal 2: the front end
-cd frontend
-npm install        # only the first time, or after package.json changes
-npm run dev
-```
-
-Then open `http://localhost:5173`. The dev server passes every request for
-`/api` on to the API at `http://127.0.0.1:8000` (`frontend/vite.config.js`; set
-`BCBN_API_DEV_URL` for another address). `npm run build` writes a production
-bundle to `frontend/dist/`, and `npm run preview` serves that build. The built
-site calls the API at `/api` on its own address; where the API will run in
-production is not decided yet, so that one setting is in `frontend/src/api.js`
-(`VITE_API_BASE` when building).
+`npm run build` writes a production bundle to `frontend/dist/`, and
+`npm run preview` serves that build. The built site calls the API at `/api` on
+its own address; where the API will run in production is not decided yet, so
+that one setting is in `frontend/src/api.js` (`VITE_API_BASE` when building).
 
 The overview map reads `frontend/public/data/bc_hex_r4.csv.gz` to
 `bc_hex_r7.csv.gz`, one per zoom tier, which are produced on the server by

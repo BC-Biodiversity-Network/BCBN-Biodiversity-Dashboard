@@ -31,6 +31,8 @@ backend/exploration/lunaris/harvest/
 backend/exploration/lunaris/harvest_test/
 backend/exploration/lunaris/harvest_2026_10/
 backend/exploration/lunaris/harvest_2026_10_20/
+backend/exploration/lunaris/bc_filter_2026_10/
+backend/exploration/lunaris/fullrun_2026_10_20/
 
 # API answers saved by fetch_key_evidence.py
 backend/exploration/species_keys/cache/

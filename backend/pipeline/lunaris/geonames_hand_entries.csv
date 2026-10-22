@@ -1,0 +1,26 @@
+name,geonames_id,kind,note
+Okanagan,,region,well-known BC region
+Okanagan Valley,,region,well-known BC region
+Cariboo,,region,well-known BC region
+Chilcotin,,region,well-known BC region
+Kootenay,,region,well-known BC region
+Kootenays,,region,well-known BC region (plural form)
+Lower Mainland,,region,well-known BC region
+Fraser Valley,,region,well-known BC region
+Fraser Canyon,,region,well-known BC region
+Similkameen,,region,well-known BC region
+Shuswap,,region,well-known BC region
+Cowichan Valley,,region,well-known BC region
+Comox Valley,,region,well-known BC region
+Columbia Valley,,region,well-known BC region
+Bulkley Valley,,region,well-known BC region
+Central Coast,,region,well-known BC region (also a common phrase elsewhere)
+North Coast,,region,well-known BC region (also a common phrase elsewhere)
+Sunshine Coast,,region,"well-known BC region; also the Sunshine Coast in Queensland, Australia"
+Peace Region,,region,well-known BC region (the BC part of the Peace River country)
+Muskwa-Kechika,,region,the Muskwa-Kechika Management Area in BC
+Queen Charlotte Islands,,region,former name of Haida Gwaii (renamed 2010)
+Glacier National Park,5961613,alias,"Glacier National Park in BC; GeoNames lists it only as Glacier National Park of Canada, so this name points there. There is also a Glacier National Park in Montana"
+Columbia River,5720196,spans_bc_border,"one river that flows through BC and the US; GeoNames gives it only the US, with no second country"
+Rocky Mountains,5836950,spans_bc_border,"the Rocky Mountains of North America run through BC; GeoNames codes them US with Canada as a second country, but their GeoNames point is in Wyoming, too far from BC for the second-country rule"
+Cascade Range,5789316,spans_bc_border,"the Cascade Range runs from northern California through Washington into southern BC; GeoNames gives the Washington entry only the US, with no second country"

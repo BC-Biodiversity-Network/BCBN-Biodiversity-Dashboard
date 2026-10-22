@@ -33,6 +33,7 @@ SOURCE_OLLAMA="${LUNARIS_OLLAMA_DIR:-$LUNARIS_BASE/ollama}"
 SOURCE_MODELS="${LUNARIS_MODELS_DIR:-$LUNARIS_BASE/models}"
 STAGE_TIMEOUT="${STAGE_TIMEOUT:-600}"
 PANDAS_VERSION="${PANDAS_VERSION:-3.0.5}"
+DUCKDB_VERSION="${DUCKDB_VERSION:-1.5.3}"   # the GeoNames lookup; 1.5.3 is the Fir wheel for Python 3.12
 STAGE="${SLURM_TMPDIR:-$(mktemp -d)}/lunaris"
 
 # Stop the job with exit code 6 and a line saying what failed.
@@ -69,8 +70,8 @@ stage_code_and_python() {
     local started=$SECONDS
     timeout "$STAGE_TIMEOUT" virtualenv --no-download -q "$STAGE/venv" \
         || fail_setup "could not create a Python environment on the node"
-    timeout "$STAGE_TIMEOUT" "$STAGE/venv/bin/pip" install --no-index -q "pandas==$PANDAS_VERSION" \
-        || fail_setup "could not install pandas $PANDAS_VERSION from the Alliance wheels"
+    timeout "$STAGE_TIMEOUT" "$STAGE/venv/bin/pip" install --no-index -q "pandas==$PANDAS_VERSION" "duckdb==$DUCKDB_VERSION" \
+        || fail_setup "could not install pandas $PANDAS_VERSION and duckdb $DUCKDB_VERSION from the Alliance wheels"
     source "$STAGE/venv/bin/activate"
     echo "python   $(python -c 'import sys, pandas; print(sys.version.split()[0], "with pandas", pandas.__version__)') on the node, in $((SECONDS - started)) s"
 }

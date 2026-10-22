@@ -68,21 +68,23 @@ def plain_json_schema(schema):
     return schema
 
 
-def chat_request_body(model, prompt, num_ctx=OLLAMA_NUM_CTX, num_thread=None):
+def chat_request_body(model, prompt, num_ctx=OLLAMA_NUM_CTX, num_thread=None, schema=None):
     """
     Return the body of one /api/chat request, as ask_ollama sends it.
 
     Kept apart so bench_decode.py can send exactly the same request, then
     change one setting at a time. num_thread is how many CPU threads Ollama's
     runner may use. When it is not given, Ollama picks a number itself and the
-    request is exactly the one the Mac run sends.
+    request is exactly the one the Mac run sends. schema is the answer format
+    to force; by default the prompt v6 one, so the biodiversity filter's
+    requests are unchanged. The geography prompt passes its own.
     """
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "think": False,
-        "format": plain_json_schema(RESPONSE_SCHEMA),
+        "format": plain_json_schema(schema if schema is not None else RESPONSE_SCHEMA),
         "options": {"temperature": 0, "num_ctx": num_ctx},
     }
     if num_thread:
@@ -90,7 +92,8 @@ def chat_request_body(model, prompt, num_ctx=OLLAMA_NUM_CTX, num_thread=None):
     return body
 
 
-def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT, num_thread=None):
+def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOUT, num_thread=None,
+               schema=None):
     """
     Send one prompt to an Ollama server and return the answer and token counts.
 
@@ -107,13 +110,14 @@ def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOU
       temperature 0, the same as for Gemini
       num_ctx: room for the whole prompt, see OLLAMA_NUM_CTX
       num_thread: only if given, see chat_request_body
+      schema: the answer format; prompt v6's unless another is given
 
     A call that times out or fails is tried once more. If the server cannot be
     reached at all, OllamaUnreachable is raised to stop the run. If the prompt
     filled the whole context, Ollama may have cut it, so the answer is
     returned as an error rather than trusted.
     """
-    body = chat_request_body(model, prompt, num_ctx, num_thread)
+    body = chat_request_body(model, prompt, num_ctx, num_thread, schema)
     request = urllib.request.Request(
         url.rstrip("/") + "/api/chat",
         data=json.dumps(body).encode("utf-8"),

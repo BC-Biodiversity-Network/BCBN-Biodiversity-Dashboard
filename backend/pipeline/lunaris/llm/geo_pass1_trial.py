@@ -1,36 +1,38 @@
 """
 geo_pass1_trial.py
 
-Try pass 1 of the geography step (geo_prompt_v1.py, v2 or v3) on a small
-sample of the records the BC filter's rules left undecided
-(needs_llm), on the local Ollama, and write what came back. Optionally,
-compare the answers with earlier runs on the same sample.
+Try pass 1 of the geography step (geo_prompt_v3.py) on a small sample of
+the records the BC filter's rules left undecided (needs_llm), on the local
+Ollama, and write what came back. Optionally, compare the answers with
+earlier runs on the same sample, including the trials of the earlier prompt
+versions 1 and 2 (their answers are read from their output folders; the old
+prompts themselves are no longer needed).
 
 The sample is drawn with a fixed random seed and spread across the reasons
 the rules could not decide (STRATA below): no evidence at all, a huge box, a
 partly-BC box, a mostly-BC box, plus the rare sign-typo and disagreement
 cases. Within each reason, half the records have BC mentioned in the text
 (by the rules' cross-check columns) and half do not, where there are enough.
-The same seed and rules file give the same sample, so versions can be
-compared record by record.
+The same seed and rules file give the same sample, so runs can be compared
+record by record.
 
 Settings are those of the Mac runs of prompt v6: the shared ask_ollama,
 temperature 0, thinking off, a 16,384-token context, Ollama choosing its own
 threads.
 
-After each answer, checks run in code (geo_answer_checks.py): duplicates are
-counted (one place listed twice for the same role) and, from version 2,
-removed; every as_written is looked for in the record's own text (the leak
-check), and from version 3 a place that fails it is dropped; and every name
-that is neither in the record's text nor an expansion of its as_written is
-listed for a person to look at.
+After each answer, checks run in code (geo_prompt_v3.clean_places and
+geo_answer_checks.py): a place whose as_written is not in the record's own
+text is dropped (the leak check), duplicates (one place listed twice for the
+same role) are counted and removed, and every name that is neither in the
+record's text nor an expansion of its as_written is listed for a person to
+look at. For an earlier run given to --compare-with, the same checks are
+counted on its answers as they were saved.
 
 Output (--out), all ignored by git:
   sample.csv        the records drawn, with their reason and text flag
   prompts/NN.txt    the exact text sent for each record
   answers.jsonl     one line per record: the answer or the error, tokens,
-                    seconds, and (from version 2) the places our code kept
-                    and (from version 3) the ones it dropped
+                    seconds, and the places our code kept and dropped
   report.txt        the extracted places per record, every distinct name with
                     counts, the leak check, names to look at, duplicates,
                     failures, speed and prompt length
@@ -38,14 +40,13 @@ Output (--out), all ignored by git:
                     changed from that run, and the two runs' figures side by side
 
 Run, from backend/:
-    python pipeline/lunaris/llm/geo_pass1_trial.py --version 3 \
+    python pipeline/lunaris/llm/geo_pass1_trial.py \
         --bc-boundary /Users/lucia/Desktop/BCBN/Results/bc_boundary_gbif.wkt \
         --compare-with data/lunaris_bc_filter/pass1_trial \
         --compare-with data/lunaris_bc_filter/pass1_trial_v2
 """
 
 import argparse
-import importlib
 import json
 import os
 import statistics
@@ -59,12 +60,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 from bc_filter_rules import load_bc_shape  # noqa: E402
+import geo_prompt_v3 as prompt  # noqa: E402
 from geo_answer_checks import name_needs_a_look, squash, written_in_record  # noqa: E402
 from ollama_client import ask_ollama, wait_for_server  # noqa: E402
 
-# Where each version's trial is written unless --out says otherwise.
-DEFAULT_OUT = {1: "data/lunaris_bc_filter/pass1_trial", 2: "data/lunaris_bc_filter/pass1_trial_v2",
-               3: "data/lunaris_bc_filter/pass1_trial_v3"}
+# Where the trial is written unless --out says otherwise.
+DEFAULT_OUT = "data/lunaris_bc_filter/pass1_trial_v3"
 
 # Why the rules could not decide (from their evidence column), and how many
 # records to draw for each.
@@ -288,26 +289,17 @@ def write_comparison(path, sample, before, before_prompts, after, after_prompts)
 def main():
     """Draw the sample, run pass 1 on it, write the outputs, and compare with an earlier run if asked."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
-    # Versions 1 and 2 (geo_prompt_v1.py, geo_prompt_v2.py) are kept only
-    # locally, for comparing with the trials already run; version 3 is the one in use.
-    parser.add_argument("--version", type=int, choices=sorted(DEFAULT_OUT), default=3,
-                        help="which geography prompt to use (geo_prompt_vN.py)")
     parser.add_argument("--rules", default="data/lunaris_bc_filter/rules_2026_10.csv")
     parser.add_argument("--harvest", default="exploration/lunaris/harvest_2026_10_20/lunaris_full_harvest.parquet")
     parser.add_argument("--bc-boundary", required=True, help="bc_boundary_gbif.wkt")
-    parser.add_argument("--out", help="output folder (default: one per version, see DEFAULT_OUT)")
+    parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--compare-with", action="append", default=[],
                         help="an earlier run's output folder, to compare with; may be given more than once")
     parser.add_argument("--model", default="qwen3.5:4b")
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--seed", type=int, default=20261022)
     args = parser.parse_args()
-    out = args.out or DEFAULT_OUT[args.version]
-    prompt = importlib.import_module(f"geo_prompt_v{args.version}")
-    # What our code does to an answer: nothing in version 1, remove duplicates
-    # in version 2, drop places not in the record and remove duplicates from 3.
-    clean = getattr(prompt, "clean_places", None)
-    dedupe = getattr(prompt, "dedupe_places", None)
+    out = args.out
 
     os.makedirs(os.path.join(out, "prompts"), exist_ok=True)
     rules = pd.read_csv(args.rules, keep_default_na=False)
@@ -335,12 +327,11 @@ def main():
                 if problem:
                     result = {"error": f"answer does not fit the schema: {problem}",
                               "seconds": result["seconds"], "input_tokens": result.get("input_tokens")}
-                elif clean:
-                    result["places"], result["dropped"] = clean(result["answer"]["places"], prompts[number])
+                else:
+                    result["places"], result["dropped"] = prompt.clean_places(result["answer"]["places"],
+                                                                              prompts[number])
                     for place in result["dropped"]:
                         print(f"  [{number:02d}] dropped, not in the record's text: {place_text(place)}", flush=True)
-                elif dedupe:
-                    result["places"] = dedupe(result["answer"]["places"])
             result["record_id"] = row["record_id"]
             results[row["record_id"]] = result
             answers.write(json.dumps(result, ensure_ascii=False) + "\n")

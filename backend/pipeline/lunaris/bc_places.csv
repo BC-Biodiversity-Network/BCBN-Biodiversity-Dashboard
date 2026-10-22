@@ -1,0 +1,63 @@
+name,kind,use,note
+Vancouver Island,island,yes,
+Haida Gwaii,island,yes,
+Queen Charlotte Islands,island,yes,former name of Haida Gwaii
+Quadra Island,island,yes,
+Gulf Islands,island,yes,
+Fraser River,river,yes,
+Fraser Valley,region,yes,
+Fraser Canyon,region,yes,
+Lower Mainland,region,yes,
+Okanagan,region,yes,
+Kootenay,region,yes,
+Kootenays,region,yes,
+Cariboo,region,yes,
+Chilcotin,region,yes,
+Skeena,river,yes,
+Stikine,river,yes,
+Nass River,river,yes,
+Thompson River,river,yes,
+Similkameen,region,yes,
+Bella Coola,place,yes,
+Great Bear Rainforest,region,yes,
+Muskwa-Kechika,region,yes,
+Tatshenshini,river,yes,
+Strathcona,park,yes,
+Garibaldi,park,yes,
+Clayoquot,water,yes,
+Barkley Sound,water,yes,
+Howe Sound,water,yes,
+Burrard Inlet,water,yes,
+Strait of Georgia,water,yes,
+Georgia Strait,water,yes,
+Hecate Strait,water,yes,
+Queen Charlotte Sound,water,yes,
+Kamloops,town,yes,
+Kelowna,town,yes,
+Nanaimo,town,yes,
+Prince George,town,yes,
+Prince Rupert,town,yes,
+Tofino,town,yes,
+Whistler,town,yes,
+Squamish,town,yes,
+Penticton,town,yes,
+Smithers,town,yes,
+Williams Lake,town,yes,
+Fort St. John,town,yes,
+Dawson Creek,town,yes,
+Revelstoke,town,yes,
+Bamfield,town,yes,
+Saanich,town,yes,
+Cowichan,region,yes,
+Comox,town,yes,
+Port Hardy,town,yes,
+Campbell River,town,yes,
+Vancouver,town,special,matched unless followed by Island (listed above) or by Washington or WA (Vancouver in Washington State)
+Victoria,town,no,shared: Victoria in Australia; Lake Victoria; Queen Victoria
+Peace River,river,no,shared with Alberta
+Columbia River,river,no,shared with the United States
+Salish Sea,water,no,shared with Washington State
+Strait of Juan de Fuca,water,no,shared with Washington State
+Sunshine Coast,region,no,shared: Sunshine Coast in Australia
+Golden,town,no,ordinary English word
+Vernon,town,no,also a first name and places elsewhere

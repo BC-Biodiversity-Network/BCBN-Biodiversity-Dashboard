@@ -17,8 +17,10 @@ Each record gets one of three classes here:
 What decides (and nothing else does):
 
   box      inside BC: 90% or more of the box is in BC             -> bc
-           covers BC: the box covers 80% or more of BC, and is
-                      less than 5 times BC's size                  -> bc
+           covers BC: the box covers 80% or more of BC, is less
+                      than 5 times BC's size, and is BC's own
+                      bounding rectangle (each edge within 1 degree
+                      of the rectangle around the BC outline)       -> bc
            outside BC: no overlap, or only touching the edge
                       (under 2% of the box in BC and under 2% of
                       BC covered)                                  -> not_bc
@@ -40,6 +42,10 @@ What no longer decides, and why:
   - boxes partly in BC (50% to 90% "mostly", or under 50% "partly"): a
     share like 45% can be real BC data or an Alberta study whose box
     crosses the Rockies; the text has to be read
+  - boxes that cover most of BC but are not BC's own bounding rectangle
+    (such as the Pacific salmon conservation units, which reach into Yukon
+    and Alaska): they may cover more than BC, so they count as mostly or
+    partly in BC, by their share
   - huge boxes (5 times BC or more) and "Canada" as the only place: whether
     a national dataset counts is the geography prompt's answer to give
   - the place-name field: some repositories fill it with the institution's
@@ -101,6 +107,15 @@ TOUCH = 0.02
 INSIDE_SHARE = 0.90   # 90% or more of the box is in BC
 MOSTLY_SHARE = 0.50   # half or more of the box is in BC
 BC_WIDE_COVER = 0.80  # the box covers 80% or more of BC without being huge
+
+# A box covering BC only decides "bc" when it is BC's own bounding rectangle:
+# each of its edges within this many degrees of the matching edge of the
+# rectangle around the BC outline (BcShape.rectangle, worked out from the
+# boundary file). Most such boxes are that rectangle rounded outwards to whole
+# or half degrees (w -139.5, e -113.5, s 48, n 60). Other boxes that cover
+# most of BC may also cover a lot outside it, so they are left to the
+# geography prompt.
+BC_RECTANGLE_MARGIN = 1.0
 
 # The box classes, most BC first. For the cross-check columns a record with
 # several boxes reports its most BC one.
@@ -168,13 +183,15 @@ class BcShape:
     outline: object                      # the outline in longitude and latitude
     outline_equal_area: object = None    # the same outline in the equal-area projection
     area: float = 0.0                    # BC's area in square metres
+    rectangle: tuple = None              # the outline's bounding rectangle: (west, south, east, north)
     to_equal_area: object = field(default=None, repr=False)
 
     def __post_init__(self):
-        """Work out the equal-area version of the outline and its area once."""
+        """Work out the equal-area version of the outline, its area and its bounding rectangle once."""
         self.to_equal_area = Transformer.from_crs("EPSG:4326", EQUAL_AREA, always_xy=True).transform
         self.outline_equal_area = transform(self.to_equal_area, self.outline)
         self.area = self.outline_equal_area.area
+        self.rectangle = self.outline.bounds
 
 
 def load_bc_shape(path):
@@ -242,6 +259,25 @@ def measure_box(lunaris_box, shape):
     return in_bc / box_area, in_bc / shape.area, box_area / shape.area
 
 
+def is_bc_rectangle(lunaris_box, shape):
+    """
+    Return True if a box is BC's own bounding rectangle: each of its edges
+    within BC_RECTANGLE_MARGIN degrees of the matching edge of the
+    rectangle around the BC outline (shape.rectangle). Swapped edges are put
+    back first, as in repair_box; a box that crosses the 180 degree line is
+    never BC's rectangle.
+    """
+    west, east = lunaris_box["w"], lunaris_box["e"]
+    south, north = sorted((lunaris_box["s"], lunaris_box["n"]))
+    if west > east:
+        if west > 0 > east:
+            return False
+        west, east = east, west
+    bc_west, bc_south, bc_east, bc_north = shape.rectangle
+    return all(abs(edge - bc_edge) <= BC_RECTANGLE_MARGIN
+               for edge, bc_edge in ((west, bc_west), (south, bc_south), (east, bc_east), (north, bc_north)))
+
+
 def classify_box(lunaris_box, shape):
     """
     Put one box in a class against BC, and return (class, size as a multiple of BC).
@@ -255,10 +291,12 @@ def classify_box(lunaris_box, shape):
                  overlaps it by a thin strip)
       huge       the box is 5 times BC's area or more (and is not outside)
       inside     share 90% or more
-      bc_wide    share under 90% and cover 80% or more (such as BC's own
-                 bounding box, which is about half BC and covers all of it)
-      mostly_bc  share from 50% up to 90%, cover under 80%
-      partly_bc  share under 50%, but share or cover at least 2%
+      bc_wide    share under 90%, cover 80% or more, and the box is BC's
+                 own bounding rectangle (is_bc_rectangle), which is about
+                 half BC and covers all of it
+      mostly_bc  share from 50% up to 90%, and not bc_wide
+      partly_bc  share under 50%, but share or cover at least 2%, and not
+                 bc_wide
 
     Returns (None, None) for a box with no area.
     """
@@ -272,7 +310,7 @@ def classify_box(lunaris_box, shape):
         return "huge", size
     if share >= INSIDE_SHARE:
         return "inside", size
-    if cover >= BC_WIDE_COVER:
+    if cover >= BC_WIDE_COVER and is_bc_rectangle(lunaris_box, shape):
         return "bc_wide", size
     if share >= MOSTLY_SHARE:
         return "mostly_bc", size

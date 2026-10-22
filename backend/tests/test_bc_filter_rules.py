@@ -114,6 +114,40 @@ def test_box_classes():
     assert classify_box(box(-141.003, 41.6755, -52.6174, 83.1139), TOY_BC)[0] == "huge"
 
 
+def test_bc_rectangle_comes_from_the_outline():
+    """BC's bounding rectangle is worked out from the outline: (west, south, east, north)."""
+    assert TOY_BC.rectangle == (-139.0, 48.0, -114.0, 60.0)
+
+
+@pytest.mark.parametrize("w, s, e, n, is_rectangle", [
+    (-139, 48, -114, 60, True),                  # exactly the rectangle
+    (-140, 47, -113, 61, True),                  # every edge exactly 1 degree out
+    (-139.5, 48.0, -113.5, 60.0, True),          # the rectangle rounded out to half degrees
+    (-140.01, 48, -114, 60, False),              # the west edge just over 1 degree out
+    (-139, 48, -112, 60, False),                 # 2 degrees too far east
+    (-139, 48, -114, 65, False),                 # reaching 5 degrees north, into Yukon
+    (-114, 48, -139, 60, True),                  # west and east swapped
+    (-139, 60, -114, 48, True),                  # south and north swapped
+    (170, 48, -114, 60, False),                  # across the 180 degree line
+])
+def test_is_bc_rectangle(w, s, e, n, is_rectangle):
+    """A box is BC's rectangle when each edge is within BC_RECTANGLE_MARGIN (1 degree) of the outline's."""
+    assert rules_module.BC_RECTANGLE_MARGIN == 1.0
+    assert rules_module.is_bc_rectangle(box(w, s, e, n), TOY_BC) == is_rectangle
+
+
+def test_a_box_covering_bc_that_is_not_its_rectangle_does_not_decide():
+    """A box that covers all of BC but reaches well beyond its rectangle is only partly in BC now."""
+    wide = box(-139, 48, -112, 60)          # covers all of BC, but 2 degrees too far east
+    measured = rules_module.measure_box(wide, TOY_BC)
+    assert measured[1] >= rules_module.BC_WIDE_COVER       # covers BC, as before
+    assert classify_box(wide, TOY_BC)[0] in ("mostly_bc", "partly_bc")
+    result = classify_record(record(boxes=[wide]), TOY_RULES)
+    assert result["bc_class"] == "needs_llm"
+    # Every edge 1 degree out still decides.
+    assert classify_record(record(boxes=[box(-140, 47, -113, 61)]), TOY_RULES)["bc_class"] == "bc"
+
+
 def test_a_box_that_only_touches_bc_is_outside():
     """A neighbour's box sharing a thin strip with BC's (slightly wider) outline is not BC."""
     assert classify_box(box(-114.2, 59.0, -100, 70), TOY_BC)[0] == "outside"
@@ -349,6 +383,9 @@ def test_with_the_real_bc_outline():
     """The commonest boxes in the harvest land where the investigation put them."""
     real = rules_module.load_bc_shape(REAL_BOUNDARY)
     assert classify_box(box(-139.5, 48.0, -113.5, 60.0), real)[0] == "bc_wide"        # BC's bounding box
+    assert classify_box(box(-139.061618, 48.3089, -114.054462, 60.000141), real)[0] == "bc_wide"
+    # Pacific salmon conservation units: covers 88% of BC, but reaches 65 degrees north.
+    assert classify_box(box(-140.79, 47.62, -119.91, 65.0), real)[0] == "partly_bc"
     assert classify_box(box(-141.003, 41.6755, -52.6174, 83.1139), real)[0] == "huge"  # Canada
     assert classify_box(box(-141.0, 60.0, -123.8, 69.7), real)[0] == "outside"        # Yukon, touching BC
     assert classify_box(box(-95.15, 41.67, -74.3, 56.85), real)[0] == "outside"       # Ontario

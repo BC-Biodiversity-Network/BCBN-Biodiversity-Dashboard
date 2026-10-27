@@ -1,15 +1,16 @@
 """
-The part of the pass 2 prompt that follows the record (pass 2 version C,
-geo_pass2_prompt_c.py), and two checks on the model's answer.
+The part of the pass 2 prompt that follows the record (pass 2 version C4,
+geo_pass2_prompt_c4.py), and two checks on the model's answer.
 
 After the record text (geo_record_text.record_text), the model sees the
-places pass 1 kept, each with its GeoNames candidates from the lookup
-(../geonames_lookup.py). The rule throughout is the one pass 1 follows:
-everything as it is, and anything we add on a line of its own marked as a
-note from us.
+Place list: the places pass 1 kept, each with its GeoNames candidates from
+the lookup (../geonames_lookup.py). The rule throughout is the one pass 1
+follows: everything as it is, and anything we add on a line of its own
+marked as a note from us.
 
-  - The places pass 1 kept (as_written, name, role), with a note that a
-    model found them and may have made mistakes.
+  - The places pass 1 kept (as_written, name, role), under the header
+    "Place list (made by another language model):", with a note that
+    another language model made the list and may have made mistakes.
   - For each place, at most MAX_CANDIDATES GeoNames candidates, listed as
     GeoNames has them, each code with its name in brackets from GeoNames'
     own code files, and how many places there were in all. Places added by
@@ -20,24 +21,23 @@ note from us.
   - Affiliations are listed without candidates, with a note saying why.
   - None of our own reading of the candidates (in BC only, both and so on).
 
-This text was first written for the earlier trial versions A and A2 (moved
-to backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/); it is
-kept here unchanged, so version C's prompts are byte for byte the same.
-
-The checks: evidence_not_in_places (evidence the model cites that pass 1
-did not find) and consistency_flags (a location that looks inconsistent
+The checks: evidence_in_text (evidence that is not in the prompt after the
+instructions) and consistency_flags (a location that looks inconsistent
 with the model's own reason; it only flags, never changes an answer).
+
+Earlier versions of this module, with version C's wording of the list and
+the evidence check against pass 1's list that versions C and C3 used, are
+in backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/.
 """
 
 import re
 
-PLACES_HEADER = "Place names found in the record in an earlier step:"
+PLACES_HEADER = "Place list (made by another language model):"
 
-PLACES_NOTE = ("Note from us: a language model found these place names and their roles in an earlier step, "
-               "so the list may contain mistakes (a missed place, a misread name, or a name that is not a "
-               "place).")
+PLACES_NOTE = ("Note from us: another language model made this list, so it may contain mistakes (a missed "
+               "place, a misread name, or a name that is not a place).")
 
-NO_PLACES = "Note from us: the earlier step found no place names in this record."
+NO_PLACES = "Note from us: the other language model found no place names in this record."
 
 ROLE_TEXT = {"study_location": "study location", "affiliation": "affiliation",
              "indigenous_nation_or_territory": "Indigenous nation or territory", "other": "other mention"}
@@ -155,9 +155,9 @@ def place_lines(number, place, lookup, shown):
 
 def places_text(places, lookups):
     """
-    Return the part of the prompt after the record: the places pass 1 kept,
-    each with its GeoNames candidates (none for affiliations). lookups holds
-    one lookup result per place, in the same order.
+    Return the part of the prompt after the record: the Place list, each
+    place with its GeoNames candidates (none for affiliations). lookups
+    holds one lookup result per place, in the same order.
     """
     if not places:
         return PLACES_HEADER + "\n" + NO_PLACES
@@ -169,19 +169,30 @@ def places_text(places, lookups):
 
 
 
-def evidence_not_in_places(answer, places):
+def evidence_in_text(answer, text):
     """
-    Return the evidence names that are neither a name nor an as_written of
-    any place pass 1 kept (ignoring case and spacing): names the model took
-    from somewhere else.
+    Check each evidence item of an answer against text: the part of the
+    prompt after the instructions (the record, our notes, the Place list and
+    its candidates). Return a dict with:
+
+      items      how many evidence items there are
+      exact      how many appear in text exactly as written
+      loose      how many appear once case and runs of spaces are ignored
+                 (this includes the exact ones)
+      unmatched  the items that do not appear even so
+
+    It only checks; the answer is never changed.
     """
-    def squash(text):
-        """Lower-case a text and collapse its spacing, for matching."""
-        return " ".join(text.lower().split())
+    def squash(value):
+        """Lower-case a text and collapse its spacing, for the loose match."""
+        return " ".join(value.lower().split())
 
-    known = {squash(p["name"]) for p in places} | {squash(p["as_written"]) for p in places}
-    return [e for e in answer["evidence"] if squash(e) not in known]
-
+    squashed = squash(text)
+    items = answer["evidence"]
+    exact = [item for item in items if item in text]
+    loose = [item for item in items if squash(item) in squashed]
+    return {"items": len(items), "exact": len(exact), "loose": len(loose),
+            "unmatched": [item for item in items if squash(item) not in squashed]}
 
 
 # Phrases in a reason that say the location cannot be told.

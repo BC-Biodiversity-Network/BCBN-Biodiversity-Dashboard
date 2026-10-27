@@ -1,12 +1,11 @@
-"""Tests for pass 2 version C: the class code works out from the model's
-facts (pipeline/lunaris/llm/geo_pass2_classes.py), every row of its table,
-the box rule that may read an "unclear" in_bc as "yes", and the prompt
-(geo_pass2_prompt_c.py): its instructions unchanged, the record and the
-places after them, the rules kept from earlier versions, the new fields and
-box rules, the answer check, and the consistency flags.
+"""Tests for the classes the BC filter works out by code from pass 2's facts
+(pipeline/lunaris/llm/geo_pass2_classes.py): every row of its table, and the
+box rule that may read an "unclear" in_bc as "yes". They do not depend on any
+prompt version.
 
-They reuse the made-up BC, record and lookup results of
-test_geo_pass2_places.py."""
+These tests were first written with version C's prompt tests (moved to
+backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/tests/
+test_geo_pass2_c.py) and are kept here unchanged."""
 
 import itertools
 import sys
@@ -19,15 +18,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 # way the scripts themselves do.
 sys.path.insert(0, str(BACKEND / "pipeline" / "lunaris"))
 sys.path.insert(0, str(BACKEND / "pipeline" / "lunaris" / "llm"))
-import geo_pass2_places as places_part  # noqa: E402
-import geo_pass2_prompt_c as c  # noqa: E402
 from geo_pass2_classes import BOX_SHARE_FOR_BC, CLASSES, FACTS, class_of, decide, fill_in_bc  # noqa: E402
-from geo_record_text import record_text  # noqa: E402
-from test_geo_pass2_places import RECORD, TOY_BC, candidate, lookup, place  # noqa: E402
-
-# The SHA-256 of C's instructions as used in the trials. The C prompt text
-# must not change; if it has to, this changes with it, on purpose.
-C_INSTRUCTIONS_SHA256 = "ba7ea1832fe4f28be90a59f7bc6d30883981d0fce833b1b3976c28f29e348def"
 
 ANY = None   # in a table row: every value this fact may take
 
@@ -101,79 +92,12 @@ def test_examples(facts, expected):
     assert class_of(facts) == expected
 
 
-# --- The prompt ----------------------------------------------------------
-
-def test_instructions_are_unchanged():
-    import hashlib
-
-    assert hashlib.sha256(c.INSTRUCTIONS.encode("utf-8")).hexdigest() == C_INSTRUCTIONS_SHA256
-
-
-def test_prompt_is_instructions_then_record_then_places():
-    places = [place("Fakeville"), place("University of Fakeville", "Fakeville", "affiliation")]
-    lookups = [lookup([candidate()]), lookup([candidate()])]
-    assert c.build_prompt(RECORD, TOY_BC, places, lookups) == (
-        c.INSTRUCTIONS + "\n\n" + record_text(RECORD, TOY_BC) + "\n\n" + places_part.places_text(places, lookups))
-
-
-def test_rules_kept_from_earlier_versions():
-    # The rules on affiliations, GeoNames matches, shared names, facts and general knowledge.
-    for sentence in ("An affiliation (the address of an author, university, agency, museum or repository) is not "
-                     "where the data was collected.",
-                     '"No GeoNames match" does not mean a place is outside BC',
-                     "Different places can share a name.",
-                     'starting that part with "general knowledge:"',
-                     "Do not make up facts about the record."):
-        assert sentence in c.INSTRUCTIONS
-    assert c.INSTRUCTIONS.index("Keep in mind:") < c.INSTRUCTIONS.index("Boxes and points:") \
-        < c.INSTRUCTIONS.index("Facts:") < c.INSTRUCTIONS.index("Examples, with made-up places:")
-
-
-def test_each_field_is_explained_once():
-    for fact in FACTS:
-        assert c.INSTRUCTIONS.count(f"  {fact}: ") == 1
-    assert 'Only "yes" if the record names them or clearly says so' in c.INSTRUCTIONS
-    assert "Unclear is a good answer for in_bc" in c.INSTRUCTIONS
-
-
-def test_box_rules_say_what_they_mean_for_in_bc():
-    boxes = c.INSTRUCTIONS[c.INSTRUCTIONS.index("Boxes and points:"):c.INSTRUCTIONS.index("Facts:")]
-    assert "If at least half of a box lies in BC and the record names no place outside BC" in boxes
-    assert "A box that only partly touches BC is not by itself evidence for in_bc" in boxes
-    assert "answer in_bc" not in boxes and "canada_including_bc" not in boxes
-
-
-def test_no_class_names_from_earlier_versions():
-    for old in ("canada_including_bc", "elsewhere:", "unknown:"):
-        assert old not in c.INSTRUCTIONS
-
-
-def test_examples_are_made_up():
-    for real in ("Victoria", "Vancouver", "Okanagan", "Rocky", "Alberta", "Washington", "Winnipeg", "Arctic"):
-        assert real not in c.INSTRUCTIONS
-
-
-def test_answer_schema_puts_the_reason_first():
-    assert list(c.RESPONSE_SCHEMA["properties"]) == ["reason", "evidence", *FACTS]
-    assert c.RESPONSE_SCHEMA["properties"]["in_bc"]["enum"] == ["yes", "no", "unclear"]
-    assert c.RESPONSE_SCHEMA["properties"]["global"]["enum"] == ["yes", "no"]
-
-
 def good_answer(**facts):
-    """A version C answer, all facts "no" unless given."""
+    """An answer, all facts "no" unless given."""
     answer = {"reason": "r", "evidence": [], "in_bc": "no", "other_canada": "no", "outside_canada": "no",
               "canada_wide": "no", "global": "no"}
     answer.update(facts)
     return answer
-
-
-def test_check_answer():
-    assert c.check_answer(good_answer()) is None
-    assert c.check_answer(good_answer(in_bc="maybe")) is not None
-    unclear_global = good_answer()
-    unclear_global["global"] = "unclear"          # only in_bc may be unclear
-    assert c.check_answer(unclear_global) is not None
-    assert c.check_answer({k: v for k, v in good_answer().items() if k != "global"}) is not None
 
 
 def test_class_from_code():
@@ -228,11 +152,3 @@ def test_box_rule_keeps_the_models_answer():
 def test_box_rule_does_not_override_canada_wide():
     # A Canada-wide answer stays all_canada whether or not the box rule fills in in_bc.
     assert decide(good_answer(in_bc="unclear", canada_wide="yes"), [0.9])["class"] == "all_canada"
-
-
-def test_consistency_flags_read_in_bc():
-    assert c.consistency_flags(good_answer(in_bc="yes", reason="It is unclear where the data come from.")) == \
-        ["reason_says_unsure"]
-    assert c.consistency_flags(good_answer(in_bc="no", reason="Samples were collected near Fakeville in BC.")) == \
-        ["reason_says_in_bc"]
-    assert c.consistency_flags(good_answer(in_bc="unclear", reason="It is unclear.")) == []

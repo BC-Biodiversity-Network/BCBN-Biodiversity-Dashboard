@@ -1,18 +1,20 @@
 """Tests for the part of the pass 2 prompt after the record
-(pipeline/lunaris/llm/geo_pass2_places.py), used by version C: the places
-from pass 1 with the note that a model found them, the GeoNames candidates
+(pipeline/lunaris/llm/geo_pass2_places.py), used by version C4: the Place
+list from pass 1 with the note that another language model made it, the
+GeoNames candidates
 with each code's name in brackets, at most 5 per name with the count of all,
 affiliations listed without candidates, hand-added entries marked as ours,
 places with no match or too generic to look up, notes on how a name was
 searched, a name listed twice referring back, that none of our own reading
-of the candidates is given, and the evidence and consistency checks.
+of the candidates is given, and the consistency check.
 
-These tests were first written for the earlier trial versions A and A2
-(moved to backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/
-tests/), whose text this module keeps unchanged.
+These tests were first written for the earlier trial versions A and A2; the
+version of this file for version C's wording of the list is in
+backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/tests/
+(test_geo_pass2_places_with_c_wording.py).
 
 They use made-up lookup results, so the GeoNames table is not needed. The
-made-up BC, record and helpers here are also used by test_geo_pass2_c.py."""
+made-up BC, record and helpers here are also used by test_geo_pass2_c4.py."""
 
 import copy
 import sys
@@ -72,6 +74,10 @@ def many(count):
 def test_places_come_with_the_note_that_a_model_found_them():
     text = pp.places_text([place("Lake Fakeville", "Lake Fakeville")], [lookup([candidate()])])
     assert pp.PLACES_NOTE in text and pp.CANDIDATES_NOTE in text
+    lines = text.splitlines()
+    assert lines[0] == "Place list (made by another language model):"
+    assert lines[1] == ("Note from us: another language model made this list, so it may contain mistakes (a missed "
+                        "place, a misread name, or a name that is not a place).")
     assert 'Place 1: as written "Lake Fakeville"; name "Lake Fakeville"; role study location' in text
 
 
@@ -171,7 +177,8 @@ def test_same_name_for_two_roles_refers_back():
 
 
 def test_no_places():
-    assert pp.places_text([], []) == pp.PLACES_HEADER + "\n" + pp.NO_PLACES
+    assert pp.places_text([], []) == ("Place list (made by another language model):\n"
+                                      "Note from us: the other language model found no place names in this record.")
 
 
 def test_none_of_our_own_reading_is_given():
@@ -192,12 +199,6 @@ def test_every_added_line_is_marked():
 
 
 # --- The checks on an answer ---------------------------------------------
-
-def test_evidence_not_in_places():
-    places = [place("L. Fakeville", "Lake Fakeville")]
-    answer = {"evidence": ["lake  fakeville", "L. Fakeville", "British Columbia"], "reason": ""}
-    assert pp.evidence_not_in_places(answer, places) == ["British Columbia"]
-
 
 def answer(location, reason):
     """An answer with a location, for the consistency check."""

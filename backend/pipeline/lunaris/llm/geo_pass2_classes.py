@@ -1,6 +1,6 @@
 """
 The final classes of the Lunaris BC filter, worked out by code from the
-facts pass 2 asks the model for (version C, geo_pass2_prompt_c.py). The
+facts pass 2 asks the model for (version C4, geo_pass2_prompt_c4.py). The
 model never picks a class itself.
 
 The classes:
@@ -26,8 +26,8 @@ of "unclear" is read as "yes" when all of these hold:
     shows, before it is rounded to a whole percent;
   - the model answered other_canada "no" and outside_canada "no".
 The model's own answer is kept; decide returns both, and whether the rule
-changed it. (The prompt asks the model to do this itself; in the trials it
-did not, so code does it.)
+changed it. (Version C's prompt asked the model to do this itself; in the
+trials it did not, so code does it. C4's prompt does not ask.)
 
 Step 2, the class (class_of). The rules, checked in this order; the first
 that applies decides:

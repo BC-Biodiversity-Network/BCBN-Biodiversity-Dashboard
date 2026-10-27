@@ -14,7 +14,9 @@ partly-BC box, a mostly-BC box, plus the rare sign-typo and disagreement
 cases. Within each reason, half the records have BC mentioned in the text
 (by the rules' cross-check columns) and half do not, where there are enough.
 The same seed and rules file give the same sample, so runs can be compared
-record by record.
+record by record. With --sample, the records listed in that CSV (record_id
+column) are run instead, in its order, such as the labelled records of
+data/lunaris_bc_filter/label_set_2026_10.
 
 Settings are those of the Mac runs of prompt v6: the shared ask_ollama,
 temperature 0, thinking off, a 16,384-token context, Ollama choosing its own
@@ -99,6 +101,24 @@ def draw_sample(rules, seed):
         part["reason"] = name
         picked.append(part)
     return pd.concat(picked).reset_index(drop=True)
+
+
+def sample_from_file(rules, path):
+    """
+    Return the records listed in a CSV with a record_id column, in the file's
+    order, as rows of the rules file (instead of draw_sample). Stop if a
+    record id is not in the rules file.
+    """
+    wanted = pd.read_csv(path, keep_default_na=False)["record_id"]
+    rows = rules.set_index("record_id")
+    missing = [record_id for record_id in wanted if record_id not in rows.index]
+    if missing:
+        sys.exit(f"{len(missing)} record ids from {path} are not in the rules file, such as {missing[0]}")
+    sample = rows.loc[list(wanted)].reset_index()
+    text_cols = ["text_title", "text_keywords", "text_abstract"]
+    sample["text_mentions_bc"] = (sample[text_cols].fillna("") != "").any(axis=1)
+    sample["reason"] = "listed in " + os.path.basename(path)
+    return sample
 
 
 def read_harvest(path, ids):
@@ -298,12 +318,14 @@ def main():
     parser.add_argument("--model", default="qwen3.5:4b")
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--seed", type=int, default=20261022)
+    parser.add_argument("--sample", help="a CSV with a record_id column: run these records, in this order, "
+                                         "instead of drawing the trial sample")
     args = parser.parse_args()
     out = args.out
 
     os.makedirs(os.path.join(out, "prompts"), exist_ok=True)
     rules = pd.read_csv(args.rules, keep_default_na=False)
-    sample = draw_sample(rules, args.seed)
+    sample = sample_from_file(rules, args.sample) if args.sample else draw_sample(rules, args.seed)
     sample[["record_id", "source", "title", "reason", "text_mentions_bc", "evidence"]].to_csv(
         os.path.join(out, "sample.csv"), index_label="number")
     print(sample.groupby(["reason", "text_mentions_bc"]).size().to_string())

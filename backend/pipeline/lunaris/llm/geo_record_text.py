@@ -51,11 +51,49 @@ def percent(share):
     return f"{share:.0%}"
 
 
-def box_lines(number, box, shape):
+# How close to 1 a box's share in BC must be to count as the whole box: far
+# below any real difference, only enough to absorb rounding in the area sums.
+WHOLE_BOX = 1e-9
+
+
+def inside_and_outside(share):
+    """
+    Return how a box's share in BC and the rest of it are written, as two
+    texts whose numbers add up to 100%:
+
+      share exactly 0        "0%"            and "100%"
+      share 1 (within        "100%"          and "0%"
+        WHOLE_BOX of it)
+      share under 1%         "less than 1%"  and "more than 99%"
+      share over 99% that    "more than 99%" and "less than 1%"
+        would round to 100%
+      otherwise              "N%"            and "(100 - N)%", N being the
+                             share rounded as percent() rounds it
+
+    The inside text is the same as percent(share) except at the top end, where
+    a box not wholly in BC is never shown as 100% in BC. A box wholly in BC
+    can measure a hair under 1 (0.9999999999999999, from rounding in the
+    area sums), so a share within WHOLE_BOX of 1 counts as the whole box.
+    """
+    if share == 0:
+        return "0%", "100%"
+    if share >= 1 - WHOLE_BOX:
+        return "100%", "0%"
+    if share < 0.01:
+        return "less than 1%", "more than 99%"
+    inside = int(f"{share:.0%}"[:-1])
+    if inside == 100:
+        return "more than 99%", "less than 1%"
+    return f"{inside}%", f"{100 - inside}%"
+
+
+def box_lines(number, box, shape, outside=False):
     """
     Return the lines for one bounding box: its four raw numbers, then our
     notes. The numbers are never corrected; a box whose numbers look swapped
-    gets a note saying so.
+    gets a note saying so. With outside True (pass 2, version C4), the note
+    also says how much of the box lies outside BC (inside_and_outside);
+    by default it says only how much lies in BC, as pass 1 shows it.
     """
     w, e, s, n = box["w"], box["e"], box["s"], box["n"]
     lines = [f"Bounding box {number}: westBoundLongitude {raw_number(w)}, eastBoundLongitude "
@@ -78,9 +116,15 @@ def box_lines(number, box, shape):
     else:
         share, cover, size = measured
         size_text = f"; the box is about {size:.1f} times the size of British Columbia" if size >= 1 else ""
-        lines.append(f"Note from us (our own calculation, not part of the record): "
-                     f"{percent(share)} of this box lies in British Columbia, and it covers "
-                     f"{percent(cover)} of British Columbia{size_text}.")
+        if outside:
+            inside_text, outside_text = inside_and_outside(share)
+            lines.append(f"Note from us (our own calculation, not part of the record): "
+                         f"{inside_text} of this box lies in British Columbia and {outside_text} lies outside "
+                         f"it, and it covers {percent(cover)} of British Columbia{size_text}.")
+        else:
+            lines.append(f"Note from us (our own calculation, not part of the record): "
+                         f"{percent(share)} of this box lies in British Columbia, and it covers "
+                         f"{percent(cover)} of British Columbia{size_text}.")
     return lines
 
 
@@ -106,7 +150,7 @@ def point_lines(number, lon, lat, shape):
     return lines
 
 
-def record_text(record, shape):
+def record_text(record, shape, box_outside=False):
     """
     Return the record part of a geography prompt: "Record to read:" and then
     the record field by field, each with our notes where it needs one.
@@ -114,7 +158,9 @@ def record_text(record, shape):
     record is a dict with id, title, subjects, abstract, places, publisher,
     points and boxes as the harvest stores them. shape is BC's outline
     (bc_filter_rules.BcShape), used only for our notes on boxes and points.
-    Fields that are empty are left out.
+    Fields that are empty are left out. box_outside True makes each box note
+    also say how much of the box lies outside BC (pass 2, version C4); the
+    default keeps the note as pass 1 shows it.
     """
     lines = ["Record to read:", ""]
     if present(record.get("title")):
@@ -144,7 +190,7 @@ def record_text(record, shape):
                      "(negative means south of the equator). A point is one longitude and one "
                      "latitude.")
     for number, box in enumerate(boxes, start=1):
-        lines += box_lines(number, box, shape)
+        lines += box_lines(number, box, shape, outside=box_outside)
     for number, point in enumerate(points, start=1):
         lines += point_lines(number, point["lon"], point["lat"], shape)
     return "\n".join(lines)

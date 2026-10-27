@@ -1,8 +1,11 @@
 """
 geo_pass2_trial.py
 
-Try pass 2 of the geography step (version C, geo_pass2_prompt_c.py) on the
-records of a pass 1 trial, on the local Ollama, and write what came back.
+Try pass 2 of the geography step on the records of a pass 1 trial, on the
+local Ollama, and write what came back. The prompt is version C4
+(geo_pass2_prompt_c4.py; the earlier versions and this script's version
+that could run them are in
+backend/exploration/lunaris/bc_filter_2026_10/old_pass2_prompts/).
 The model answers facts; code works out the class (geo_pass2_classes.decide,
 which first applies the box rule that may read an "unclear" in_bc as "yes").
 
@@ -26,8 +29,8 @@ Output (--out), all ignored by git:
   answers.jsonl               one line per record: the answer or the error,
                               tokens, seconds, the boxes' shares in BC, the
                               decision (model_in_bc, in_bc_used,
-                              in_bc_filled_by_box_rule, class), any evidence
-                              names not in pass 1's list, and the
+                              in_bc_filled_by_box_rule, class), the
+                              evidence check against the prompt, and the
                               consistency flags
   report.txt                  per record: title, facts, class, evidence,
                               reason, flags; then the counts per class,
@@ -53,7 +56,7 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
-import geo_pass2_prompt_c as prompt  # noqa: E402
+import geo_pass2_prompt_c4  # noqa: E402
 from bc_filter_rules import load_bc_shape, measure_box  # noqa: E402
 from geo_pass1_trial import read_harvest  # noqa: E402
 from geo_pass2_classes import CLASSES, decide  # noqa: E402
@@ -63,7 +66,7 @@ from ollama_client import OLLAMA_NUM_CTX, ask_ollama, wait_for_server  # noqa: E
 NEAR_LIMIT = 0.8
 
 # Where the trial is written unless --out says otherwise.
-DEFAULT_OUT = "data/lunaris_bc_filter/pass2_trial_c"
+DEFAULT_OUT = "data/lunaris_bc_filter/pass2_trial_c4"
 
 
 def read_pass1(folder):
@@ -113,7 +116,7 @@ def add_decision(result, shares):
     result["decision"] = decide(result["answer"], shares)
 
 
-def write_report(path, sample, results):
+def write_report(path, sample, results, prompt):
     """Write the per-record answers and classes, then the counts per class and the run figures."""
     lines = []
     for _, row in sample.iterrows():
@@ -131,8 +134,8 @@ def write_report(path, sample, results):
         lines.append(f"     class:    {decision['class']} (worked out by code)")
         lines.append(f"     evidence: {'; '.join(answer['evidence']) or '(none)'}")
         lines.append(f"     reason:   {answer['reason']}")
-        if result.get("evidence_not_in_places"):
-            lines.append(f"     evidence not in pass 1's list: {result['evidence_not_in_places']}")
+        if result.get("evidence_check", {}).get("unmatched"):
+            lines.append(f"     evidence not found in the prompt: {result['evidence_check']['unmatched']}")
         if result.get("consistency_flags"):
             lines.append(f"     consistency flags: {', '.join(result['consistency_flags'])}")
     answered = [r for r in results.values() if "answer" in r]
@@ -140,6 +143,11 @@ def write_report(path, sample, results):
     lines += ["", "CLASSES: " + ", ".join(f"{name} {counts.get(name, 0)}" for name in CLASSES)]
     filled = sorted(r["number"] for r in answered if r["decision"]["in_bc_filled_by_box_rule"])
     lines.append(f"in_bc filled in by the box rule: {len(filled)}" + (f" (records {filled})" if filled else ""))
+    checks = [r["evidence_check"] for r in answered if "evidence_check" in r]
+    if checks:
+        items = sum(c["items"] for c in checks)
+        lines.append(f"evidence items found in the prompt: exactly {sum(c['exact'] for c in checks)} of {items}; "
+                     f"ignoring case and extra spaces {sum(c['loose'] for c in checks)} of {items}")
     failed = [n for n, r in results.items() if "error" in r]
     lines.append(f"failures: {len(failed)} of {len(results)}" + (f" (records {failed})" if failed else ""))
     flagged = sorted(n for n, r in results.items() if r.get("consistency_flags"))
@@ -161,7 +169,7 @@ def write_report(path, sample, results):
         handle.write("\n".join(lines) + "\n")
 
 
-def reclassify(out, sample, harvest, shape):
+def reclassify(out, sample, harvest, shape, prompt):
     """
     Work out the classes afresh from the answers saved in out, without
     asking the model, and write answers_reclassified.jsonl and
@@ -179,7 +187,7 @@ def reclassify(out, sample, harvest, shape):
             if "answer" in result:
                 add_decision(result, box_shares(harvest[record_ids[number]], shape))
             handle.write(json.dumps(result, ensure_ascii=False) + "\n")
-    write_report(os.path.join(out, "report_reclassified.txt"), sample, results)
+    write_report(os.path.join(out, "report_reclassified.txt"), sample, results, prompt)
     print(f"reclassified {len(results)} saved answers in {out}")
 
 
@@ -198,12 +206,13 @@ def main():
     parser.add_argument("--reclassify", action="store_true",
                         help="only work out the classes afresh from the answers saved in --out")
     args = parser.parse_args()
+    prompt = geo_pass2_prompt_c4
 
     sample, places, lookups = read_pass1(args.pass1)
     shape = load_bc_shape(args.bc_boundary)
     harvest = read_harvest(args.harvest, sample["record_id"])
     if args.reclassify:
-        reclassify(args.out, sample, harvest, shape)
+        reclassify(args.out, sample, harvest, shape, prompt)
         return 0
 
     os.makedirs(os.path.join(args.out, "prompts"), exist_ok=True)
@@ -235,8 +244,8 @@ def main():
                               "seconds": result["seconds"], "input_tokens": result.get("input_tokens")}
                 else:
                     add_decision(result, box_shares(harvest[row["record_id"]], shape))
-                    result["evidence_not_in_places"] = prompt.evidence_not_in_places(result["answer"],
-                                                                                    places[number])
+                    # Check the evidence against the prompt; the answer is never changed by it.
+                    result["evidence_check"] = prompt.evidence_check(result["answer"], prompts[number])
                     # Flags only; the answer and the class are never changed by them.
                     result["consistency_flags"] = prompt.consistency_flags(result["answer"])
             result["record_id"], result["number"] = row["record_id"], number
@@ -247,7 +256,7 @@ def main():
             print(f"  [{number:02d}] {result['seconds']:5.1f} s  {result.get('input_tokens') or 0:6,} tokens  "
                   f"{said:22s} {row['title'][:60]}", flush=True)
 
-    write_report(os.path.join(args.out, "report.txt"), sample, results)
+    write_report(os.path.join(args.out, "report.txt"), sample, results, prompt)
     print(f"wrote {args.out}")
     return 0
 

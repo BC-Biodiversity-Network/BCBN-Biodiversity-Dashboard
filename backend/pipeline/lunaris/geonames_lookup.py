@@ -793,16 +793,30 @@ def run_pass1(lookup, folder):
     reading) and lookup.jsonl (one line per place: record, query, candidates
     and summary as separate fields) there, and return the results and lines.
     """
-    results, lines = [], []
+    results = []
     with open(os.path.join(folder, "lookup.jsonl"), "w", encoding="utf-8") as out:
         for number, place in read_pass1(folder):
             result = lookup.lookup(place["name"], place["as_written"])
             result["record"] = number
             results.append(result)
             out.write(json.dumps(result, ensure_ascii=False) + "\n")
-            body = result_lines(result)
-            lines.append(f"[{number:02d}] {body[0]}")
-            lines += body[1:]
+    lines = report_lines(results)
+    with open(os.path.join(folder, "lookup.txt"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return results, lines
+
+
+def report_lines(results):
+    """
+    Return the lines of lookup.txt for lookup results that carry their
+    record number ("record"): each place's result, then the counts. Shared
+    with geo_filter_run.py, which writes lookup.txt from saved results.
+    """
+    lines = []
+    for result in results:
+        body = result_lines(result)
+        lines.append(f"[{result['record']:02d}] {body[0]}")
+        lines += body[1:]
     tally = {}
     for result in results:
         tally[result["summary"]["category"]] = tally.get(result["summary"]["category"], 0) + 1
@@ -815,9 +829,7 @@ def run_pass1(lookup, folder):
                  f"direction word removed: {sum(bool(s['direction_word_removed']) for s in summaries)}; "
                  f"historic name: {sum(s['historic'] for s in summaries)}; "
                  f"found only through a hand-added entry: {sum(s['only_hand'] for s in summaries)}")
-    with open(os.path.join(folder, "lookup.txt"), "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    return results, lines
+    return lines
 
 
 def bench_names(lookup, count, seed):

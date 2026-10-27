@@ -116,6 +116,29 @@ def add_decision(result, shares):
     result["decision"] = decide(result["answer"], shares)
 
 
+def finish_answer(result, record, shape, prompt_text):
+    """
+    Check one pass 2 result the way every pass 2 run does, and return it: an
+    answer that does not fit the schema becomes an error (keeping seconds
+    and input_tokens); an answer that fits gets the boxes' shares and the
+    decision (add_decision), the evidence check against the prompt and the
+    consistency flags. The checks and flags never change the answer or the
+    class. A result that is already an error is returned as it is. Shared
+    with geo_filter_run.py.
+    """
+    if "answer" not in result:
+        return result
+    prompt = geo_pass2_prompt_c4
+    problem = prompt.check_answer(result["answer"])
+    if problem:
+        return {"error": f"answer does not fit the schema: {problem}",
+                "seconds": result.get("seconds"), "input_tokens": result.get("input_tokens")}
+    add_decision(result, box_shares(record, shape))
+    result["evidence_check"] = prompt.evidence_check(result["answer"], prompt_text)
+    result["consistency_flags"] = prompt.consistency_flags(result["answer"])
+    return result
+
+
 def write_report(path, sample, results, prompt):
     """Write the per-record answers and classes, then the counts per class and the run figures."""
     lines = []
@@ -237,17 +260,7 @@ def main():
             started = time.monotonic()
             result = ask_ollama(args.ollama_url, args.model, prompts[number], schema=prompt.RESPONSE_SCHEMA)
             result["seconds"] = round(time.monotonic() - started, 2)
-            if "answer" in result:
-                problem = prompt.check_answer(result["answer"])
-                if problem:
-                    result = {"error": f"answer does not fit the schema: {problem}",
-                              "seconds": result["seconds"], "input_tokens": result.get("input_tokens")}
-                else:
-                    add_decision(result, box_shares(harvest[row["record_id"]], shape))
-                    # Check the evidence against the prompt; the answer is never changed by it.
-                    result["evidence_check"] = prompt.evidence_check(result["answer"], prompts[number])
-                    # Flags only; the answer and the class are never changed by them.
-                    result["consistency_flags"] = prompt.consistency_flags(result["answer"])
+            result = finish_answer(result, harvest[row["record_id"]], shape, prompts[number])
             result["record_id"], result["number"] = row["record_id"], number
             results[number] = result
             answers.write(json.dumps(result, ensure_ascii=False) + "\n")

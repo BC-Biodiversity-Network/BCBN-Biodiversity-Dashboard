@@ -568,6 +568,170 @@ is not accepted, resubmit with your own list, for example
 The `.about.json` beside the merged CSV holds the run's start and end
 times, so records a second can be worked out from them.
 
+## 8. BC filter: comparing models on the 150 labelled records
+
+The BC filter's two LLM passes (pass 1 v3, the GeoNames lookup, pass 2 C4)
+run on Fir with `llm/geo_filter_run.py`, started by `fir/geo_filter.sbatch`
+through `fir/geo_filter_submit.sh`. It reuses this folder's setup:
+`job_setup.sh` (copy to the node's disk, Python from the Alliance wheels,
+with shapely and pyproj added through `EXTRA_WHEELS`), the same Ollama
+0.40.0 program in `$B/ollama`, the same GPU checks and lock files as
+`run_batch.py`, and `qwen3.5:4b` from the v6 store `$B/models`. Each other
+model gets its own store, `$B/bcf/models/<model>`, so a job copies only its
+own model to the node. Nothing is downloaded by any job.
+
+The job needs no harvest, rules file or pyarrow: `geo_filter_prepare.py`
+(Mac) puts exactly the records it needs in a small input folder, with the
+fingerprint of every pass 1 prompt, and the job checks each prompt against
+it before asking anything. Results are saved record by record, so a job can
+be resubmitted at any time and only the missing records are asked; a failed
+answer is asked once more at once and logged in `logs/failures_part0.txt`.
+
+On Fir everything lives under `$B/bcf`:
+
+| On Fir | What |
+|---|---|
+| `$B/bcf/code/` | `pipeline/lunaris` (the BC filter code, with `llm/` and `llm/fir/`) |
+| `$B/bcf/geonames/` | `geonames_lookup.parquet`, `geonames_codes.json` |
+| `$B/bcf/bc_boundary_gbif.wkt` | BC's outline |
+| `$B/bcf/inputs/label150/` | the 150 records (`geo_filter_prepare.py`) |
+| `$B/bcf/reference/` | the Mac's `pass1_label150` and `pass2_label150_c4`, for the dry run's byte check |
+| `$B/bcf/models/<model>/` | one Ollama store per model (not for `qwen3.5:4b`, which is in `$B/models`) |
+| `$B/bcf/runs/label150_<model>/` | one run folder per model: `pass1/`, `pass2/`, `timing.csv`, `logs/` |
+
+### A. Checks (Fir; no downloads)
+
+    export B=/scratch/$USER/lunaris_llm
+    $B/ollama/bin/ollama --version
+    find $B/models/manifests -type f | sed "s|.*/library/||"
+    du -sh $B/models
+    ls $B/bcf 2>/dev/null || echo "no bcf folder yet"
+    find $B -maxdepth 4 -name "*.parquet" 2>/dev/null
+    module load python/3.12
+    avail_wheels shapely pyproj duckdb pandas
+    diskusage_report
+
+Then, to see the models Ollama itself lists (a server on the login node,
+no GPU, only to list; nothing is pulled):
+
+    export OLLAMA_MODELS=$B/models OLLAMA_HOST=127.0.0.1:11555
+    $B/ollama/bin/ollama serve > $B/list_server.log 2>&1 &
+    sleep 5
+    $B/ollama/bin/ollama list
+    $B/ollama/bin/ollama show qwen3.5:4b | head -12
+    kill %1
+    unset OLLAMA_MODELS OLLAMA_HOST
+
+### B. Model downloads (only after Lucia approves)
+
+One store per model. Run the block once per model, with `M` and `D` set as
+below; about 6.6 GB, 6.6 GB and 24 GB. If a pull stops part way, the same
+`pull` line carries on.
+
+    M=qwen3.5:9b;      D=$B/bcf/models/qwen3.5-9b
+    M=gemma4:e4b;      D=$B/bcf/models/gemma4-e4b
+    M=qwen3.6:35b-a3b; D=$B/bcf/models/qwen3.6-35b-a3b
+
+    mkdir -p $D
+    export OLLAMA_MODELS=$D OLLAMA_HOST=127.0.0.1:11555
+    $B/ollama/bin/ollama serve > $B/bcf/pull_server.log 2>&1 &
+    sleep 5
+    $B/ollama/bin/ollama pull $M
+    $B/ollama/bin/ollama list
+    $B/ollama/bin/ollama show $M | head -15
+    kill %1
+    unset OLLAMA_MODELS OLLAMA_HOST
+
+Write down each ID and quantization. If a pull says the model needs a newer
+Ollama, stop and tell Claude.
+
+### C. Copy data and code (Mac, from `backend/`)
+
+    python pipeline/lunaris/llm/geo_filter_prepare.py \
+        --records data/lunaris_bc_filter/label_set_2026_10/needs_llm_150.csv \
+        --bc-boundary /Users/lucia/Desktop/BCBN/Results/bc_boundary_gbif.wkt \
+        --out data/lunaris_bc_filter/fir_inputs/label150
+    ssh songyanf@fir.alliancecan.ca 'mkdir -p /scratch/songyanf/lunaris_llm/bcf/inputs /scratch/songyanf/lunaris_llm/bcf/geonames /scratch/songyanf/lunaris_llm/bcf/reference /scratch/songyanf/lunaris_llm/bcf/runs'
+    scp -r pipeline/lunaris 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/code'
+    scp data/geonames/geonames_lookup.parquet data/geonames/geonames_codes.json 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/geonames/'
+    scp /Users/lucia/Desktop/BCBN/Results/bc_boundary_gbif.wkt 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/'
+    scp -r data/lunaris_bc_filter/fir_inputs/label150 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/inputs/'
+    scp -r data/lunaris_bc_filter/pass1_label150 data/lunaris_bc_filter/pass2_label150_c4 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/reference/'
+
+To send newer code later, copy the folder's contents instead:
+`scp -r pipeline/lunaris/* 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/code/'`.
+Then, on Fir, once after each code copy:
+
+    chmod +x $B/bcf/code/llm/fir/*.sh
+
+### D. Submit (Fir)
+
+First a dry run: no GPU and no model. It builds Python with shapely and
+pyproj on a node, opens the lookup, and checks that all 150 pass 1 prompts,
+and the pass 2 prompts built from the Mac's pass 1 answers, are byte for
+byte the Mac's. It should end with `150 identical` twice and `exit 0`.
+
+    DRY_RUN=1 REFERENCE_PASS1=$B/bcf/reference/pass1_label150 \
+        REFERENCE_PASS2=$B/bcf/reference/pass2_label150_c4 \
+        $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.5:4b label150
+    squeue --me
+    cat $B/bcf/runs/label150_qwen3.5-4b/logs/bc-filter_*_0.out
+
+Then 2 records with the baseline, to see the timing and the GPU check:
+
+    LIMIT=2 $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.5:4b label150
+
+Then the four runs (the first carries on from the 2 records):
+
+    $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.5:4b label150
+    $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.5:9b label150
+    $B/bcf/code/llm/fir/geo_filter_submit.sh gemma4:e4b label150
+    $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b label150
+
+Watch them:
+
+    squeue --me
+    tail -5 $B/bcf/runs/label150_*/logs/bc-filter_*.out
+    cat $B/bcf/runs/label150_*/logs/failures_part0.txt 2>/dev/null
+
+A job that ends with exit 2, 4, 5 or 6 is resubmitted with the same line
+(add `EXCLUDE=<node>` for exit 5 or 6); only the missing records are asked.
+
+### E. Copy back and score (Mac, from `backend/`)
+
+    mkdir -p data/lunaris_bc_filter/fir_runs
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/label150_qwen3.5-4b' data/lunaris_bc_filter/fir_runs/
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/label150_qwen3.5-9b' data/lunaris_bc_filter/fir_runs/
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/label150_gemma4-e4b' data/lunaris_bc_filter/fir_runs/
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/label150_qwen3.6-35b-a3b' data/lunaris_bc_filter/fir_runs/
+    diff -r data/lunaris_bc_filter/fir_runs/label150_qwen3.5-4b/pass1/prompts data/lunaris_bc_filter/pass1_label150/prompts && echo "pass 1 prompts identical to the Mac"
+    python pipeline/lunaris/llm/geo_pass2_score.py \
+        --labels data/lunaris_bc_filter/label_set_2026_10/labels_final.csv \
+        --pass1 data/lunaris_bc_filter/pass1_label150 --run mac-qwen3.5:4b=data/lunaris_bc_filter/pass2_label150_c4 \
+        --model-run qwen3.5:4b=data/lunaris_bc_filter/fir_runs/label150_qwen3.5-4b \
+        --model-run qwen3.5:9b=data/lunaris_bc_filter/fir_runs/label150_qwen3.5-9b \
+        --model-run gemma4:e4b=data/lunaris_bc_filter/fir_runs/label150_gemma4-e4b \
+        --model-run qwen3.6:35b-a3b=data/lunaris_bc_filter/fir_runs/label150_qwen3.6-35b-a3b \
+        --out data/lunaris_bc_filter/score_label150_models.txt
+
+The report ends with one table of all runs: 7-class accuracy, shown / not
+shown accuracy, shown but should not be, not shown but should be, failures
+and retries per pass, and seconds per record.
+
+### Later: the full 12,431 needs_llm records
+
+The same scripts, with an input made from the rules file and the run split
+into parts that each fit in 3 hours (use the chosen model's seconds per
+record from `timing.csv` to pick PARTS):
+
+    # Mac
+    python pipeline/lunaris/llm/geo_filter_prepare.py --rules-class needs_llm \
+        --bc-boundary /Users/lucia/Desktop/BCBN/Results/bc_boundary_gbif.wkt \
+        --out data/lunaris_bc_filter/fir_inputs/needs_llm
+    scp -r data/lunaris_bc_filter/fir_inputs/needs_llm 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/inputs/'
+    # Fir
+    PARTS=16 $B/bcf/code/llm/fir/geo_filter_submit.sh <model> needs_llm
+
 ## When something goes wrong
 
 - **"is being worked on by job N".** Another job holds the batch. If that job

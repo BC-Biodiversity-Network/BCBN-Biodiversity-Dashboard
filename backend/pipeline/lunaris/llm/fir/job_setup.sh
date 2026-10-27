@@ -25,6 +25,8 @@
 #   LUNARIS_MODELS_DIR  Ollama model store to copy (default $LUNARIS_BASE/models)
 #   LUNARIS_LLM_VENV    use this existing Python environment instead of
 #                       building one on the node (for tests)
+#   EXTRA_WHEELS        more packages to install on the node, besides pandas
+#                       and duckdb (default none; the BC filter job sets it)
 #   STAGE_TIMEOUT       seconds allowed for each copy or install (default 600)
 
 LUNARIS_BASE="${LUNARIS_BASE:-${SCRATCH:-/scratch/$USER}/lunaris_llm}"
@@ -70,10 +72,17 @@ stage_code_and_python() {
     local started=$SECONDS
     timeout "$STAGE_TIMEOUT" virtualenv --no-download -q "$STAGE/venv" \
         || fail_setup "could not create a Python environment on the node"
-    timeout "$STAGE_TIMEOUT" "$STAGE/venv/bin/pip" install --no-index -q "pandas==$PANDAS_VERSION" "duckdb==$DUCKDB_VERSION" \
-        || fail_setup "could not install pandas $PANDAS_VERSION and duckdb $DUCKDB_VERSION from the Alliance wheels"
+    # EXTRA_WHEELS: more packages a job needs, as pip names them, separated
+    # by spaces (the BC filter job asks for shapely and pyproj). Empty by default.
+    local extra=()
+    read -r -a extra <<< "${EXTRA_WHEELS:-}"
+    timeout "$STAGE_TIMEOUT" "$STAGE/venv/bin/pip" install --no-index -q "pandas==$PANDAS_VERSION" "duckdb==$DUCKDB_VERSION" "${extra[@]}" \
+        || fail_setup "could not install pandas $PANDAS_VERSION, duckdb $DUCKDB_VERSION${EXTRA_WHEELS:+ and $EXTRA_WHEELS} from the Alliance wheels"
     source "$STAGE/venv/bin/activate"
     echo "python   $(python -c 'import sys, pandas; print(sys.version.split()[0], "with pandas", pandas.__version__)') on the node, in $((SECONDS - started)) s"
+    if [[ -n "${EXTRA_WHEELS:-}" ]]; then
+        echo "packages $("$STAGE/venv/bin/pip" freeze 2>/dev/null | grep -iE '^(duckdb|shapely|pyproj|numpy)==' | tr '\n' ' ')"
+    fi
 }
 
 # Copy the Ollama program and the model to the node's disk. Afterwards

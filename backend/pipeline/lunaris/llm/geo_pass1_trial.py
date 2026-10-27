@@ -121,6 +121,24 @@ def sample_from_file(rules, path):
     return sample
 
 
+def finish_answer(result, prompt_text):
+    """
+    Check one pass 1 result the way every pass 1 run does, and return it: an
+    answer that does not fit the schema becomes an error (keeping seconds
+    and input_tokens); an answer that fits gets the places our code keeps
+    and the ones it drops (geo_prompt_v3.clean_places). A result that is
+    already an error is returned as it is. Shared with geo_filter_run.py.
+    """
+    if "answer" not in result:
+        return result
+    problem = prompt.check_answer(result["answer"])
+    if problem:
+        return {"error": f"answer does not fit the schema: {problem}",
+                "seconds": result.get("seconds"), "input_tokens": result.get("input_tokens")}
+    result["places"], result["dropped"] = prompt.clean_places(result["answer"]["places"], prompt_text)
+    return result
+
+
 def read_harvest(path, ids):
     """Return the harvest rows for the given ids (latest datestamp per id), as dicts by id."""
     columns = ["id", "datestamp", "title", "subjects", "abstract", "publisher", "places", "points", "boxes"]
@@ -344,16 +362,9 @@ def main():
             started = time.monotonic()
             result = ask_ollama(args.ollama_url, args.model, prompts[number], schema=prompt.RESPONSE_SCHEMA)
             result["seconds"] = round(time.monotonic() - started, 2)
-            if "answer" in result:
-                problem = prompt.check_answer(result["answer"])
-                if problem:
-                    result = {"error": f"answer does not fit the schema: {problem}",
-                              "seconds": result["seconds"], "input_tokens": result.get("input_tokens")}
-                else:
-                    result["places"], result["dropped"] = prompt.clean_places(result["answer"]["places"],
-                                                                              prompts[number])
-                    for place in result["dropped"]:
-                        print(f"  [{number:02d}] dropped, not in the record's text: {place_text(place)}", flush=True)
+            result = finish_answer(result, prompts[number])
+            for place in result.get("dropped", []):
+                print(f"  [{number:02d}] dropped, not in the record's text: {place_text(place)}", flush=True)
             result["record_id"] = row["record_id"]
             results[row["record_id"]] = result
             answers.write(json.dumps(result, ensure_ascii=False) + "\n")

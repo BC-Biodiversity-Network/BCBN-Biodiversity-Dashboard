@@ -26,6 +26,11 @@
 #   DRY_RUN=1      check and rebuild the prompts only
 #   REFERENCE_PASS1, REFERENCE_PASS2   dry run: the Mac's run folders, to
 #                  check the prompts byte for byte
+#   OLLAMA_FLASH_ATTENTION   0 turns flash attention off (the default for
+#                  qwen3.6:* models, set by the submit script). The job records
+#                  the setting in the run folder, refuses one that differs from
+#                  the record, and the run script stops before any record if
+#                  the runner did not start with the setting asked for.
 #   GEO_MODULES    extra modules to load (not needed: PROJ_DATA is found by
 #                  llm/geo_env_check.py; a proj module given here wins)
 #   LIMIT=2        only the first records (a test)
@@ -109,6 +114,15 @@ else
     if command -v nvidia-smi >/dev/null; then
         echo "gpu      $(timeout 60 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
     fi
+    # Flash attention: the setting asked for, checked against (or recorded in)
+    # the run folder, so one run never mixes settings (fir/flash_attention.sh).
+    source "$CODE_DIR/llm/fir/flash_attention.sh"
+    FLASH_ATTENTION=$(flash_attention_setting) \
+        || fail_setup "OLLAMA_FLASH_ATTENTION ('$OLLAMA_FLASH_ATTENTION') must be 0, 1, true, false or unset"
+    if ! flash_attention_check_record "$RUN_DIR" "$FLASH_ATTENTION" write; then
+        echo "end      $(date -u +%Y-%m-%dT%H:%M:%SZ)  exit 1"
+        exit 1
+    fi
     # Copy the Ollama program and this model's store to the node's disk, and start Ollama.
     pick_port
     SERVER_LOG="$RUN_DIR/logs/ollama_${SLURM_JOB_ID:-local}_${PART}.log"
@@ -123,7 +137,8 @@ else
         fi
     }
     trap finish EXIT
-    ARGS+=(--ollama-url "http://$OLLAMA_HOST" --server-log "$SERVER_LOG" --load-timeout "${LOAD_TIMEOUT:-360}")
+    ARGS+=(--ollama-url "http://$OLLAMA_HOST" --server-log "$SERVER_LOG" --load-timeout "${LOAD_TIMEOUT:-360}"
+           --expect-flash-attn "$FLASH_ATTENTION")
     if [[ "$NUM_THREAD" != 0 ]]; then
         ARGS+=(--num-thread "$NUM_THREAD")
     fi

@@ -25,7 +25,8 @@
 # memory adds about 1 to 2 GB for a 16,384-token context and working buffers):
 #
 #   model             download   slice      CPUs  memory
-#   qwen3.5:4b        3.3 GB     1g.10gb    2     8G      (as in the v6 run)
+#   qwen3.5:4b        3.3 GB     1g.10gb    2     16G     (8G let Ollama's prompt cache, up
+#                                                         to 8 GiB, get the runner OOM-killed)
 #   qwen3.5:9b        6.6 GB     2g.20gb    4     16G     (too tight for 10 GB)
 #   gemma4:e4b        6.6 GB     2g.20gb    4     16G     (too tight for 10 GB)
 #   qwen3.6:35b-a3b   24 GB      3g.40gb    6     32G
@@ -35,6 +36,15 @@
 #
 # PARTS=N splits the records into N parts, one array task each, MAX_AT_ONCE
 # at a time (default all). Use the same PARTS when resubmitting a run.
+# ONLY=3,5 (with the same PARTS) resubmits only those parts, for example the
+# ones llm/geo_filter_status.py lists as not done.
+#
+# Flash attention (fir/flash_attention.sh). For qwen3.6:* models it is turned
+# off (OLLAMA_FLASH_ATTENTION=0) by default, because Ollama 0.40.0 crashes
+# them on prompts of 1,024 tokens or more with it on (ollama issue #17434).
+# Setting OLLAMA_FLASH_ATTENTION yourself overrides that, with a warning.
+# The first job of a run records the setting in the run folder; a later
+# submit with another setting into the same folder is refused.
 
 MODEL="${1:?give the model, for example qwen3.5:4b}"
 INPUT="${2:?give the input folder name under \$B/bcf/inputs, for example label150}"
@@ -66,7 +76,7 @@ if [[ -z "${GPU:-}" ]]; then
     esac
 fi
 case "$GPU" in
-    *1g.10gb) CPUS=2; MEM=8G ;;
+    *1g.10gb) CPUS=2; MEM=16G ;;
     *2g.20gb) CPUS=4; MEM=16G ;;
     *3g.40gb) CPUS=6; MEM=32G ;;
     h100)     CPUS=8; MEM=64G ;;
@@ -94,6 +104,25 @@ if [[ "$DRY_RUN" != 1 && ! -d "$MODELS_DIR/manifests" ]]; then
     exit 1
 fi
 
+# Flash attention: off by default for qwen3.6:* (see the top of the file).
+source "$(dirname "$0")/flash_attention.sh"
+if [[ "$MODEL" == qwen3.6:* ]]; then
+    if [[ -z "${OLLAMA_FLASH_ATTENTION+set}" ]]; then
+        export OLLAMA_FLASH_ATTENTION=0
+        echo "note     $MODEL: OLLAMA_FLASH_ATTENTION=0 set by default, so flash attention is off (ollama issue #17434)"
+    else
+        echo "WARNING  $MODEL: OLLAMA_FLASH_ATTENTION=$OLLAMA_FLASH_ATTENTION was set on purpose and is kept. With flash"
+        echo "         attention on, this model crashes on prompts of 1,024 tokens or more (ollama issue #17434)."
+    fi
+fi
+if ! FLASH_ATTENTION=$(flash_attention_setting); then
+    echo "ERROR: OLLAMA_FLASH_ATTENTION ('$OLLAMA_FLASH_ATTENTION') must be 0, 1, true, false or unset."
+    exit 1
+fi
+if [[ "$DRY_RUN" != 1 ]]; then
+    flash_attention_check_record "$RUN_DIR" "$FLASH_ATTENTION" check || exit 1
+fi
+
 EXTRA=()
 if [[ -n "${EXCLUDE:-}" ]]; then
     if ! [[ "$EXCLUDE" =~ ^[A-Za-z0-9,._-]+$ ]]; then
@@ -102,7 +131,19 @@ if [[ -n "${EXCLUDE:-}" ]]; then
     fi
     EXTRA+=(--exclude="$EXCLUDE")
 fi
-ARRAY="0-$((PARTS - 1))${MAX_AT_ONCE:+%$MAX_AT_ONCE}"
+if [[ -n "${ONLY:-}" ]]; then
+    if ! [[ "$ONLY" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+        echo "ERROR: ONLY ('$ONLY') should be part numbers, such as 3 or 3,5 or 0-2."
+        exit 1
+    fi
+    for part in $(echo "$ONLY" | tr ',-' '  '); do
+        if (( part >= PARTS )); then
+            echo "ERROR: part $part is not one of the $PARTS parts (0 to $((PARTS - 1)))."
+            exit 1
+        fi
+    done
+fi
+ARRAY="${ONLY:-0-$((PARTS - 1))}${MAX_AT_ONCE:+%$MAX_AT_ONCE}"
 if [[ "$DRY_RUN" == 1 ]]; then
     # No GPU, no Ollama: two CPUs are enough to rebuild the prompts and open the lookup.
     EXTRA+=(--cpus-per-task=2 --mem=8G --time=00:30:00)
@@ -133,7 +174,7 @@ echo "submitting $MODEL on $INPUT ($PARTS part(s), array $ARRAY) into $RUN_DIR"
 if [[ "$DRY_RUN" == 1 ]]; then
     echo "         DRY RUN: no GPU, no Ollama, nothing asked"
 else
-    echo "         $GPU ($CPUS CPUs, $MEM), NUM_THREAD=$NUM_THREAD, model store $MODELS_DIR${EXCLUDE:+, leaving out $EXCLUDE}"
+    echo "         $GPU ($CPUS CPUs, $MEM), NUM_THREAD=$NUM_THREAD, flash attention $FLASH_ATTENTION, model store $MODELS_DIR${EXCLUDE:+, leaving out $EXCLUDE}"
 fi
 exec sbatch --array="$ARRAY" --output="$RUN_DIR/logs/%x_%A_%a.out" "${EXTRA[@]}" \
     "$(dirname "$0")/geo_filter.sbatch"

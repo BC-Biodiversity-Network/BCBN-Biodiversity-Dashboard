@@ -277,3 +277,56 @@ def test_a_record_survives_the_json_copy():
     assert prep.same_value(prep.plain(row), copy)
     assert geo_prompt_v3.build_prompt(copy, TOY_BC) == geo_prompt_v3.build_prompt(row, TOY_BC)
     assert not prep.same_value(prep.plain(row), dict(copy, title="other"))
+
+
+# --- Flash attention -----------------------------------------------------
+
+RUNNER_LINE = ('time=2026-10-26T20:31:00.000-07:00 level=INFO source=llama_server.go:436 msg="starting llama-server" '
+               'cmd="/node/ollama/lib/ollama/llama-server --model /node/blob -c 16384 -np 1 --spec-type draft-mtp '
+               '--flash-attn {} -b 1024 -ub 1024 -t 6 --context-shift --keep 4"\n')
+
+
+def test_the_runner_flash_attention_is_read_from_the_log(tmp_path):
+    """The setting comes from the last runner command line; a line without one is "none"; no line is None."""
+    log = tmp_path / "ollama.log"
+    log.write_text("other line\n" + RUNNER_LINE.format("auto") + "more\n" + RUNNER_LINE.format("off"))
+    assert gfr.runner_flash_attn(str(log)) == "off"
+    log.write_text(RUNNER_LINE.replace("--flash-attn {} ", ""))
+    assert gfr.runner_flash_attn(str(log)) == "none"
+    log.write_text("no runner here\n")
+    assert gfr.runner_flash_attn(str(log)) is None
+    assert gfr.runner_flash_attn(str(tmp_path / "missing.log")) is None
+
+
+def test_the_run_stops_if_flash_attention_is_not_off(tmp_path):
+    """Asked for off, a runner with auto (or no runner line) stops the run; off passes; auto asked is only reported."""
+    log = tmp_path / "ollama.log"
+    log.write_text(RUNNER_LINE.format("auto"))
+    with pytest.raises(gfr.Stop) as stop:
+        gfr.check_runner_flash_attn(str(log), "off")
+    assert stop.value.code == 1 and "--flash-attn auto" in stop.value.reason
+    gfr.check_runner_flash_attn(str(log), "auto")
+    log.write_text(RUNNER_LINE.format("off"))
+    gfr.check_runner_flash_attn(str(log), "off")
+    log.write_text("no runner here\n")
+    with pytest.raises(gfr.Stop):
+        gfr.check_runner_flash_attn(str(log), "off")
+
+
+# --- Status --------------------------------------------------------------
+
+def test_status_shows_each_part_and_what_is_left(tmp_path):
+    """The status lists each part's answers and last job, and the parts to resubmit."""
+    import geo_filter_status
+
+    run0, prompts0 = make_run(tmp_path, count=3, part=0, parts=2)
+    run0.run(FakeModel(fail={("pass1", 2): None}), never_mind, prompts0, {})
+    append = gfr.append_line
+    append(str(tmp_path / "out" / "logs" / "jobs.jsonl"),
+           {"job_id": "11", "host": "fc1", "part": 0, "dry_run": False, "exit_code": 4})
+    lines, unfinished = geo_filter_status.status(str(tmp_path / "out"), 2)
+    text = "\n".join(lines)
+    assert unfinished == [0, 1]
+    assert "   0        2        1        1        1        1  job 11 on fc1, exit 4" in text
+    assert "   1        1        0        0        0        0  no job finished yet" in text
+    assert "ONLY=0,1" in text and "merged files: not yet" in text

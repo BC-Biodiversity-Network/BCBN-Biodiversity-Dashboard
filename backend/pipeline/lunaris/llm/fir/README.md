@@ -732,6 +732,108 @@ record from `timing.csv` to pick PARTS):
     # Fir
     PARTS=16 $B/bcf/code/llm/fir/geo_filter_submit.sh <model> needs_llm
 
+## 9. BC filter: the full run with qwen3.6:35b-a3b (flash attention off)
+
+The chosen model is `qwen3.6:35b-a3b` on a 3g.40gb slice, with flash
+attention off: Ollama 0.40.0 crashes this MoE model on every prompt of 1,024
+tokens or more with flash attention on (ollama issue #17434). The fallback is
+`qwen3.5:9b` on a 2g.20gb slice, which needs no workaround.
+
+`geo_filter_submit.sh` sets `OLLAMA_FLASH_ATTENTION=0` by itself for
+`qwen3.6:*` models and says so. The first job of a run records the setting in
+`flash_attention.txt` in the run folder; a later submit or job with another
+setting is refused, so one run never mixes settings. Each job checks the
+runner's command line in its Ollama log for `--flash-attn off` once the model
+has loaded, and stops before the first record (exit 1) if it is not there.
+`llm/geo_filter_status.py` shows a run's progress part by part.
+
+**Size.** 12,431 records at about 2.7 s each (the 150-record run; the full
+set's prompts are as long on average) is about 9.3 hours of 3g.40gb slice
+time, about 4.0 H100-hours. With `PARTS=8`, each part has about 1,550
+records, about 70 minutes plus 1 to 2 minutes to copy and load the model: about
+1.2 hours of wall time when all 8 run at once, longer if fewer 3g.40gb slices
+are free. No prompt reaches the 16,384-token context in pass 1 (the longest is
+8,413 tokens); a few pass 2 prompts might, and would end as `context_full`
+(see C below).
+
+### A. Copy the code and the two inputs (Mac, from `backend/`)
+
+    scp -r pipeline/lunaris/* 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/code/'
+    scp -r data/lunaris_bc_filter/fir_inputs/longest data/lunaris_bc_filter/fir_inputs/needs_llm 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/inputs/'
+
+### B. The longest-prompt test (Fir)
+
+    export B=/scratch/$USER/lunaris_llm
+    chmod +x $B/bcf/code/llm/fir/*.sh
+    $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b longest
+    squeue --me
+    R=$B/bcf/runs/longest_qwen3.6-35b-a3b
+    cat $R/logs/bc-filter_*_0.out
+    module load python/3.12
+    python $B/bcf/code/llm/geo_filter_status.py $R
+
+20 records: the 15 with the longest pass 1 prompts (3,719 to 8,413 tokens)
+and 5 likely to have a long Place list in pass 2. Check:
+
+- the submit line says `flash attention off`, and the job log has
+  `flash    attention off, recorded for this run` and
+  `runner   flash attention: off (asked for off)`;
+- `model loaded ..., 100% on the GPU`, then 20 records in each pass, and
+  `exit 0`; the status shows 20 and 20 with 0 failing;
+- GPU memory: llama-server sets aside all its GPU memory when it loads the
+  model (weights, the 16,384-token cache and its working buffers), so a
+  longer prompt does not take more. The figures are in the Ollama log:
+
+      grep -h "projected to use\|model buffer size\|KV buffer size\|compute buffer size" $R/logs/ollama_*.log
+      grep -hc "CUDA error\|out of memory" $R/logs/ollama_*.log
+      grep -h "task.n_tokens" $R/logs/ollama_*.log | grep -o "n_tokens = [0-9]*" | sort -t= -k2 -n | tail -3
+
+  The second line should print 0; the third shows the longest prompts asked.
+- if some pass 2 records failed with "the prompt filled the whole context",
+  rerun only them with a bigger context (same folder, same setting):
+  `NUM_CTX=65536 $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b longest`.
+  Tell Claude if that happens, so the full run can do the same.
+
+### C. The full run (Fir), only once B is clean
+
+    RUN_DIR=$B/bcf/runs/needs_llm_qwen3.6-35b-a3b_nofa PARTS=8 \
+        $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b needs_llm
+
+Watch it:
+
+    R=$B/bcf/runs/needs_llm_qwen3.6-35b-a3b_nofa
+    squeue --me
+    python $B/bcf/code/llm/geo_filter_status.py $R --parts 8
+    tail -2 $R/logs/bc-filter_*_*.out
+    cat $R/logs/failures_part*.txt 2>/dev/null | tail -20
+
+After each part's job ends, by its exit code (the status shows it):
+
+| exit | meaning | what to do |
+|---|---|---|
+| 0 | part done | nothing |
+| 1 | setup problem (wrong flash attention, missing model, prompt check) | read the job log; do not just resubmit |
+| 2 | the server stopped answering (5 failures in a row) | resubmit that part; if the same records fail again, tell Claude |
+| 3 | another job holds the part | check `squeue --me`; wait |
+| 4 | some records failed | resubmit that part; only they are asked again |
+| 5 | the model not on the GPU | resubmit that part with `EXCLUDE=<node>` |
+| 6 | setup failed or the model did not load | resubmit that part; add `EXCLUDE=<node>` if it repeats |
+
+Resubmit only the parts that need it, with the same PARTS and RUN_DIR (the
+status prints the ONLY list):
+
+    RUN_DIR=$R PARTS=8 ONLY=3,5 $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b needs_llm
+    RUN_DIR=$R PARTS=8 ONLY=3 EXCLUDE=fc11002 $B/bcf/code/llm/fir/geo_filter_submit.sh qwen3.6:35b-a3b needs_llm
+
+Records that fail with "the prompt filled the whole context" need
+`NUM_CTX=65536` in front of the same resubmit line. The merged files
+(`pass1/answers.jsonl`, `pass2/answers.jsonl`, `timing.csv`) are written by
+the last part to finish once every record has a result.
+
+### D. Copy the run back (Mac, from `backend/`)
+
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/needs_llm_qwen3.6-35b-a3b_nofa' data/lunaris_bc_filter/fir_runs/
+
 ## When something goes wrong
 
 - **"is being worked on by job N".** Another job holds the batch. If that job

@@ -56,6 +56,11 @@ files are written in the Mac trial layout, so geo_pass2_trial.py
   logs/failures_partK.txt      one line per failed attempt
   logs/jobs.jsonl              one line per job: where, when, how it ended
 
+--expect-flash-attn off (set by fir/geo_filter.sbatch when flash attention
+is turned off, as for qwen3.6 models) makes the run read the runner's command
+line in Ollama's log once the model has loaded, and stop before the first
+record if it did not start with "--flash-attn off" (check_runner_flash_attn).
+
 --dry-run asks no model and needs no server: it checks the input, rebuilds
 and writes the pass 1 prompts, opens the lookup, and says what a run would
 do. With --reference-pass1 and --reference-pass2 (a Mac run's folders), it
@@ -506,6 +511,44 @@ def compare_with_reference(run, prompts1, reference1, reference2):
     return differ + differ2
 
 
+# --- Flash attention -----------------------------------------------------
+
+def runner_flash_attn(server_log):
+    """
+    Return the flash attention setting of the last runner Ollama started, as
+    its command line in the server log gives it ("--flash-attn off" gives
+    "off"), "none" if that command line has no --flash-attn, or None if the
+    log shows no runner command line (Ollama's "starting llama-server" line)
+    or cannot be read.
+    """
+    try:
+        lines = [line for line in open(server_log, encoding="utf-8", errors="replace")
+                 if "starting llama-server" in line]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    words = lines[-1].replace('"', " ").split()
+    for word, value in zip(words, words[1:]):
+        if word == "--flash-attn":
+            return value
+    return "none"
+
+
+def check_runner_flash_attn(server_log, expected):
+    """
+    Print the flash attention setting the runner started with, and raise
+    Stop (exit 1) if flash attention should be off but the runner's command
+    line does not say "--flash-attn off". Other settings are only reported.
+    """
+    found = runner_flash_attn(server_log)
+    print(f"runner   flash attention: {found or 'no runner command line in the log'} (asked for {expected})")
+    if expected == "off" and found != "off":
+        raise Stop(1, f"flash attention should be off, but the runner started with "
+                      f"{'--flash-attn ' + found if found else 'no command line in ' + server_log}; nothing "
+                      f"was asked. Check OLLAMA_FLASH_ATTENTION=0 reached the job (fir/flash_attention.sh)")
+
+
 # --- Main ----------------------------------------------------------------
 
 def check_run_json(out, model, digest, version, args):
@@ -544,6 +587,8 @@ def main():
     parser.add_argument("--server-log", help="Ollama's log, to check it found the GPU (Fir)")
     parser.add_argument("--load-timeout", type=int, default=360, help="seconds the model may take to load")
     parser.add_argument("--allow-cpu", action="store_true", help="skip the GPU checks (the Mac)")
+    parser.add_argument("--expect-flash-attn", choices=["off", "on", "auto"],
+                        help="the flash attention setting asked for; with off, stop if the runner did not use it")
     parser.add_argument("--part", type=int, default=0)
     parser.add_argument("--parts", type=int, default=1)
     parser.add_argument("--limit", type=int, help="only the first this many records (a test)")
@@ -602,6 +647,8 @@ def main():
             if failed_code:
                 raise Stop(failed_code, f"stopped before the first record on {host}: {message}")
             print(message)
+        if args.server_log and args.expect_flash_attn:
+            check_runner_flash_attn(args.server_log, args.expect_flash_attn)
         lock = Path(args.out) / "locks" / f"part{args.part}.lock"
         try:
             take_lock(lock)

@@ -320,6 +320,18 @@ def merge(rules, pass1, pass2, harvest, catalogues):
     not exactly step 1's needs_llm records, or a needs_llm record has no
     class from the model.
     """
+    table = record_rows(rules, pass1, pass2, harvest, catalogues)
+    return whole_set_steps(table, harvest)
+
+
+def record_rows(rules, pass1, pass2, harvest, catalogues):
+    """
+    Return one row per step 1 record with what can be decided from the
+    record alone: the step 1 and LLM columns, and the final class by steps 1
+    to 3 at the top of the file (rule, model, BC-only catalogue). The steps
+    that look at other records (copy groups, hand checks, front end groups)
+    are in whole_set_steps. Stop as merge says.
+    """
     needs = set(rules.loc[rules["bc_class"] == "needs_llm", "record_id"])
     if set(pass2) != needs or set(pass1) != needs:
         raise SystemExit(f"ERROR: the run has {len(pass2)} pass 2 records and step 1 has {len(needs)} needs_llm "
@@ -347,7 +359,15 @@ def merge(rules, pass1, pass2, harvest, catalogues):
         final, decided_by, note = final_of(rule.bc_class, row.get("llm_class", ""), rule.source, catalogues)
         row.update(final_class=final, decided_by=decided_by, note=note)
         rows.append(row)
-    table = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
+
+
+def whole_set_steps(table, harvest):
+    """
+    Apply, in place and in this order, the steps that look across records:
+    copy groups, the hand checks (passed on to whole copy groups), and the
+    front end groups. Return the table.
+    """
     assign_copy_groups(table, harvest)
     apply_hand_checks(table)
     set_frontend_groups(table)

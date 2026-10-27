@@ -26,7 +26,8 @@
 #   DRY_RUN=1      check and rebuild the prompts only
 #   REFERENCE_PASS1, REFERENCE_PASS2   dry run: the Mac's run folders, to
 #                  check the prompts byte for byte
-#   GEO_MODULES    extra modules to load, if pyproj needs one on Fir
+#   GEO_MODULES    extra modules to load (not needed: PROJ_DATA is found by
+#                  llm/geo_env_check.py; a proj module given here wins)
 #   LIMIT=2        only the first records (a test)
 #   LUNARIS_LLM_CODE  the code folder (pipeline/lunaris), LUNARIS_MODELS_DIR
 #                  the model store, as in fir/job_setup.sh
@@ -71,6 +72,23 @@ echo "slice    ${GPU_GIVEN:-none}  cpus ${SLURM_CPUS_PER_TASK:-?}"
 stage_code_and_python
 stage_copy "GeoNames table" "$GEONAMES_DIR" "$STAGE/geonames"
 cp "$BC_BOUNDARY" "$STAGE/bc_boundary.wkt" || fail_setup "BC outline not found at $BC_BOUNDARY"
+
+# pyproj's data. The Alliance pyproj wheel finds its PROJ library on CVMFS but
+# not that library's data folder (proj.db). The data sits next to the library,
+# in ../share/proj, which is also where the matching proj module points, so
+# PROJ_DATA is set to it and always matches the library. A PROJ_DATA already
+# set (for example by a proj module in GEO_MODULES) is kept.
+if [[ -z "${PROJ_DATA:-}" ]]; then
+    PROJ_FOUND=$(timeout 120 python "$CODE_DIR/llm/geo_env_check.py" --proj-data 2>/dev/null || true)
+    if [[ -n "$PROJ_FOUND" ]]; then
+        export PROJ_DATA="$PROJ_FOUND"
+    fi
+fi
+# Check the packages before anything else: versions, pyproj's data, and that a
+# projected point and three box shares are the Mac's. A missing piece stops
+# the job here, in seconds, with exit code 6.
+timeout 300 python "$CODE_DIR/llm/geo_env_check.py" --bc-boundary "$STAGE/bc_boundary.wkt" \
+    || fail_setup "the Python packages are not ready for the BC filter (see the check lines above)"
 
 ARGS=(--input "$INPUT_DIR" --out "$RUN_DIR" --bc-boundary "$STAGE/bc_boundary.wkt"
       --table "$STAGE/geonames/geonames_lookup.parquet" --codes "$STAGE/geonames/geonames_codes.json"

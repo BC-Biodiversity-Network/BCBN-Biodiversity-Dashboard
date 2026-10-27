@@ -38,7 +38,6 @@ import sys
 import urllib.request
 
 import pandas as pd
-import pyarrow.parquet as pq
 
 LUNARIS_OAI = "https://www.lunaris.ca/oai/"
 DRYAD_PREFIX = "oai:datadryad.org"
@@ -105,6 +104,12 @@ def summarise(path):
 
     Only the columns needed are read, so this stays quick on a full harvest.
     """
+    # pyarrow is imported here, where it is used, rather than at the top:
+    # bc_filter_rules imports this file only for source_of, and the BC
+    # filter's job on Fir has no pyarrow (on Alliance clusters it comes from
+    # the arrow module, which that job does not load).
+    import pyarrow.parquet as pq
+
     main, raw = harvest_files(path)
     available = pq.read_schema(main).names
     columns = [c for c in ["id", "datestamp", "title", "abstract", "subjects"] if c in available]

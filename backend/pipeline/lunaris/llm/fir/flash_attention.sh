@@ -1,6 +1,7 @@
-# Flash attention for the BC filter's jobs: what OLLAMA_FLASH_ATTENTION asks
-# for, and a record of it in the run folder so one run never mixes settings.
-# Sourced by fir/geo_filter_submit.sh and fir/geo_filter.sbatch, not run on
+# Flash attention for the BC filter's and filter 2's jobs: what
+# OLLAMA_FLASH_ATTENTION asks for, and a record of it in the run folder so one
+# run never mixes settings. Sourced by fir/geo_filter_submit.sh,
+# fir/geo_filter.sbatch, fir/submit.sh and fir/llm_array.sbatch, not run on
 # its own.
 #
 # Why. Ollama 0.40.0 runs qwen3.6 (MoE) models with flash attention on by
@@ -50,11 +51,23 @@ flash_attention_check_record() {
     if [[ -n "$recorded" ]]; then
         echo "flash    attention $2, as recorded for this run"
     elif [[ "$3" == write ]]; then
+        # Jobs of one run start together, so each writes under its own temporary
+        # name (job, host and process; BASHPID is this process even in a
+        # subshell, where $$ is the parent's) and then moves it into place; the
+        # last one wins. The record is then read back, in case a job with
+        # another setting got there at the same moment.
+        local temporary="$1/flash_attention.txt.tmp.${SLURM_JOB_ID:-local}.$(hostname).${BASHPID:-$$}"
         mkdir -p "$1"
         printf '%s\nrecorded by job %s on %s: OLLAMA_FLASH_ATTENTION=%s, model %s\n' "$2" \
             "${SLURM_JOB_ID:-local}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${OLLAMA_FLASH_ATTENTION-<not set>}" \
-            "${MODEL:-?}" > "$1/flash_attention.txt.tmp"
-        mv "$1/flash_attention.txt.tmp" "$1/flash_attention.txt"
+            "${MODEL:-?}" > "$temporary"
+        mv -f "$temporary" "$1/flash_attention.txt"
+        recorded=$(flash_attention_recorded "$1")
+        if [[ "$recorded" != "$2" ]]; then
+            echo "ERROR: another job recorded flash attention $recorded for $1 at the same moment, but this job"
+            echo "       would use $2. One run must not mix settings: check what was submitted (squeue --me)."
+            return 1
+        fi
         echo "flash    attention $2, recorded for this run in $1/flash_attention.txt"
     else
         echo "flash    attention $2 (not recorded yet; the first job records it)"

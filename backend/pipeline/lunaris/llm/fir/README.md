@@ -745,7 +745,17 @@ tokens or more with flash attention on (ollama issue #17434). The fallback is
 setting is refused, so one run never mixes settings. Each job checks the
 runner's command line in its Ollama log for `--flash-attn off` once the model
 has loaded, and stops before the first record (exit 1) if it is not there.
-`llm/geo_filter_status.py` shows a run's progress part by part.
+`llm/geo_filter_status.py` shows a run's progress part by part. It reads
+how each part's last job ended from that job's own Slurm log
+(`logs/bc-filter_A_T.out`, array A, task T, shown as `A_T`), and never shows a
+part with records left as done.
+
+Parts start at the same moment and share the run folder, so every file a job
+writes whole goes through a temporary name of its own (machine, process and
+thread), and `pass1/sample.csv`, the same for every part, is written only if
+missing or different. (Before 2026-10-26 all parts used `sample.csv.tmp`, and
+four of the eight parts of the full run stopped at once with
+`FileNotFoundError ... sample.csv.tmp`.)
 
 **Size.** 12,431 records at about 2.7 s each (the 150-record run; the full
 set's prompts are as long on average) is about 9.3 hours of 3g.40gb slice
@@ -811,7 +821,7 @@ After each part's job ends, by its exit code (the status shows it):
 
 | exit | meaning | what to do |
 |---|---|---|
-| 0 | part done | nothing |
+| 0 | part done (shown as done only if every record of the part has a pass 2 answer) | nothing |
 | 1 | setup problem (wrong flash attention, missing model, prompt check) | read the job log; do not just resubmit |
 | 2 | the server stopped answering (5 failures in a row) | resubmit that part; if the same records fail again, tell Claude |
 | 3 | another job holds the part | check `squeue --me`; wait |
@@ -833,6 +843,114 @@ the last part to finish once every record has a result.
 ### D. Copy the run back (Mac, from `backend/`)
 
     scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/bcf/runs/needs_llm_qwen3.6-35b-a3b_nofa' data/lunaris_bc_filter/fir_runs/
+
+## 10. Filter 2 (prompt v6) with qwen3.6:35b-a3b
+
+The same prompt v6 and decide(), with `qwen3.6:35b-a3b` instead of
+`qwen3.5:4b`. The v6 scripts now handle it: `submit.sh` reads the model from
+the run folder's `run.json` and, for `qwen3.6:*`, picks the 3g.40gb slice
+(6 CPUs, 32G), the store `$B/bcf/models/qwen3.6-35b-a3b`, more time to copy
+and load it, and `OLLAMA_FLASH_ATTENTION=0` (ollama issue #17434; every v6
+prompt is longer than 1,024 tokens). Every job records its flash attention
+setting in the run folder (`fir/flash_attention.sh`, shared with the BC
+filter), a submit with another setting is refused, and `run_batch.py` stops
+before any record if the runner did not start with `--flash-attn off`.
+`qwen3.5:4b` runs as before, except that the 1g.10gb slice now gets 16G.
+
+The code for these runs lives in its own folder, `$B/f2code`, so nothing is
+copied into `$B/bcf/code` while BC filter jobs may still start from it. The
+new run folders are made on Fir by `new_model_run.py` from the earlier 4b
+runs: the input batches are copied byte for byte (checked by sha1), so the
+35b run asks exactly the same prompts; only the model and label in
+`run.json` change.
+
+### A. Copy the code (Mac, from `backend/`)
+
+    ssh songyanf@fir.alliancecan.ca 'mkdir -p /scratch/songyanf/lunaris_llm/f2code'
+    scp -r pipeline/lunaris/llm/* 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/f2code/'
+
+### B. The answer key test: the 900 test records (Fir)
+
+    export B=/scratch/$USER/lunaris_llm
+    chmod +x $B/f2code/fir/*.sh
+    ls $B/runs/test900/inputs $B/bcf/models/qwen3.6-35b-a3b/manifests
+    module load python/3.12
+    python $B/f2code/new_model_run.py $B/runs/test900 $B/runs/test900_qwen3.6-35b-a3b_nofa \
+        --model qwen3.6:35b-a3b --label qwen3.6:35b-a3b-fir-nofa
+    cd $B/runs/test900_qwen3.6-35b-a3b_nofa
+    $B/f2code/fir/submit.sh 0
+
+One job, one 3g.40gb slice, 900 records, probably 20 to 40 minutes. Watch it:
+
+    squeue --me
+    $B/f2code/fir/status.sh $B/runs/test900_qwen3.6-35b-a3b_nofa
+    grep -h "flash\|runner flash\|model loaded\|exit" $B/runs/test900_qwen3.6-35b-a3b_nofa/logs/lunaris-llm_*.out
+
+The log should show `flash    attention off, recorded for this run`,
+`runner flash attention: off (asked for off)` and `100% on the GPU`. When
+status says all done, merge:
+
+    module load python/3.12 && source $B/venv/bin/activate
+    python $B/f2code/merge_results.py $B/runs/test900_qwen3.6-35b-a3b_nofa
+
+If `$B/runs/test900/inputs` is not there any more, make the folder on the
+Mac instead, from the identical Mac copy, and send it up:
+
+    python pipeline/lunaris/llm/new_model_run.py data/lunaris_llm_runs/test900 \
+        data/lunaris_llm_runs/test900_qwen3.6-35b-a3b_nofa --model qwen3.6:35b-a3b --label qwen3.6:35b-a3b-fir-nofa
+    scp -r data/lunaris_llm_runs/test900_qwen3.6-35b-a3b_nofa 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/'
+
+Copy back and score (Mac, from `backend/`):
+
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/test900_qwen3.6-35b-a3b_nofa' data/lunaris_llm_runs/fir_test900_qwen3.6-35b-a3b_nofa
+    python exploration/llm/score_table.py --reviewed-only \
+        --trial "fir 4b run 1=data/lunaris_llm_runs/fir_test900/trial_qwen3.5-4b-fir_v6_test900.csv" \
+        --trial "fir 4b x4=data/lunaris_llm_runs/fir_test900_x4/trial_qwen3.5-4b-fir_v6_test900_x4.csv" \
+        --trial "fir 35b=data/lunaris_llm_runs/fir_test900_qwen3.6-35b-a3b_nofa/trial_qwen3.6-35b-a3b-fir-nofa_v6_test900_qwen3.6-35b-a3b_nofa.csv"
+    python exploration/llm/score_trial.py --reviewed-only \
+        --labels exploration/llm/test_set_reviewed_harvest_2026_10.csv \
+        --trial data/lunaris_llm_runs/fir_test900_qwen3.6-35b-a3b_nofa/trial_qwen3.6-35b-a3b-fir-nofa_v6_test900_qwen3.6-35b-a3b_nofa.csv \
+        --disagreements data/lunaris_llm_runs/fir_test900_qwen3.6-35b-a3b_nofa/disagreements.csv
+
+### C. The full run on the 2026-10-20 harvest (Fir), only after the BC filter's 8 parts are done
+
+First check the BC filter run has finished (every part exit 0, merged files
+written), so the two runs do not compete for 3g.40gb slices:
+
+    module load python/3.12
+    python $B/bcf/code/llm/geo_filter_status.py $B/bcf/runs/needs_llm_qwen3.6-35b-a3b_nofa --parts 8
+
+Then make the run folder from the v6 full run's own batches (57 batches of
+3,000; 168,067 records) and submit, 8 at a time:
+
+    ls $B/runs/harvest_2026_10_20/inputs | wc -l
+    python $B/f2code/new_model_run.py $B/runs/harvest_2026_10_20 $B/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa \
+        --model qwen3.6:35b-a3b --label qwen3.6:35b-a3b-fir-nofa
+    cd $B/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa
+    $B/f2code/fir/submit.sh 0-56%8
+
+If the answer key test took more than about 3.3 s per record, a batch of
+3,000 may not finish in 3 hours; add `TIME=06:00:00` in front (nothing is
+lost either way: a resubmitted batch only asks what is missing).
+
+Watch, resubmit and merge as in step 4:
+
+    squeue --me
+    $B/f2code/fir/status.sh $B/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa
+    tail -3 $B/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa/logs/lunaris-llm_*_*.out
+
+`status.sh` prints the line that resubmits only unfinished batches, with
+`EXCLUDE=` for a node that keeps failing. Records too long for 16,384 tokens
+(`context_full`, 4 prompts in the v6 run) need `NUM_CTX=65536` in front of
+that line; for this model it stays on the 3g.40gb slice. When status says
+all done:
+
+    module load python/3.12 && source $B/venv/bin/activate
+    python $B/f2code/merge_results.py $B/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa
+
+Copy back (Mac, from `backend/`):
+
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa' data/lunaris_llm_runs/fir_harvest_2026_10_20_qwen3.6-35b-a3b_nofa
 
 ## When something goes wrong
 

@@ -28,6 +28,12 @@
 #                  (default cuda_v13)
 #   BACKEND=vllm   plan B: serve the model with vLLM instead (fir/README.md)
 #   LOAD_TIMEOUT=360  seconds Ollama may take to load the model (default 360)
+#   OLLAMA_FLASH_ATTENTION=0  flash attention off; submit.sh sets it for
+#                  qwen3.6:* models (fir/flash_attention.sh). The job records
+#                  the setting in the run folder, refuses one that differs from
+#                  the record, and run_batch.py stops before any record if the
+#                  runner did not start with the setting asked for.
+#   LIMIT=2        only ask about this many records (a test)
 #   LUNARIS_BASE   master folder on /scratch (see fir/job_setup.sh)
 # With Ollama, WORKERS stays 1: it runs qwen3.5 one request at a time anyway.
 #
@@ -110,6 +116,16 @@ if [[ "$BACKEND" == vllm ]]; then
     SERVER_PID=$!
     echo "vllm     $("$VLLM_BIN" --version 2>/dev/null | tail -1) serving $VLLM_MODEL_DIR as $MODEL on $OLLAMA_HOST, log $SERVER_LOG"
 else
+    # Flash attention: the setting asked for, checked against (or recorded in)
+    # the run folder, so one run never mixes settings (fir/flash_attention.sh).
+    MODEL=$(python -c 'import json, sys; print(json.load(open(sys.argv[1]))["model"])' "$RUN_DIR/run.json")
+    source "$CODE_DIR/fir/flash_attention.sh"
+    FLASH_ATTENTION=$(flash_attention_setting) \
+        || fail_setup "OLLAMA_FLASH_ATTENTION ('$OLLAMA_FLASH_ATTENTION') must be 0, 1, true, false or unset"
+    if ! flash_attention_check_record "$RUN_DIR" "$FLASH_ATTENTION" write; then
+        echo "end      $(date -u +%Y-%m-%dT%H:%M:%SZ)  exit 1"
+        exit 1
+    fi
     # Copy the Ollama program and the model to the node's disk, and start it.
     stage_ollama
     export OLLAMA_NUM_PARALLEL="$WORKERS"
@@ -158,7 +174,10 @@ trap finish EXIT
 ARGS=(--batch "$BATCH" --backend "$BACKEND" --ollama-url "http://$OLLAMA_HOST"
       --workers "$WORKERS" --num-ctx "$NUM_CTX")
 if [[ "$BACKEND" == ollama ]]; then
-    ARGS+=(--server-log "$SERVER_LOG" --load-timeout "${LOAD_TIMEOUT:-360}")
+    ARGS+=(--server-log "$SERVER_LOG" --load-timeout "${LOAD_TIMEOUT:-360}" --expect-flash-attn "$FLASH_ATTENTION")
+fi
+if [[ -n "${LIMIT:-}" ]]; then
+    ARGS+=(--limit "$LIMIT")
 fi
 if [[ "$BACKEND" == ollama && "$NUM_THREAD" != 0 ]]; then
     ARGS+=(--num-thread "$NUM_THREAD")

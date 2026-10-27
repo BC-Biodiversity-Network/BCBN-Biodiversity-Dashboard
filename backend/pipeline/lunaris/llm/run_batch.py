@@ -18,6 +18,9 @@ What it does:
      found the GPU (from its log, --server-log), that the model loads within
      --load-timeout seconds, and that all of it is on the GPU; it checks the
      GPU once more after the first answer. Any failure stops the job at once.
+     With --expect-flash-attn off (qwen3.6 models, see fir/flash_attention.sh)
+     it also checks the runner's command line in Ollama's log says
+     "--flash-attn off", and stops (exit 1) before any record if not.
   4. Skips every record that already has a valid answer in
      results/batch_NNNN.jsonl, so rerunning a batch only does what is missing.
   5. For each remaining record, rebuilds the prompt, checks its fingerprint
@@ -76,6 +79,7 @@ from ollama_client import (  # noqa: E402
     gpu_share,
     prepare_ollama,
     model_digest,
+    runner_flash_attn,
     wait_for_server,
 )
 from prompt_v6 import PROMPT_VERSION, build_prompt, check_answer, prompt_sha1  # noqa: E402
@@ -167,6 +171,22 @@ def take_lock(path):
     raise LockHeld("could not create the lock file")
 
 
+def flash_attention_problem(server_log, expected):
+    """
+    Print the flash attention setting Ollama's runner started with, and
+    return a short description of the problem if flash attention should be
+    off but the runner's command line does not say "--flash-attn off", else
+    None. Other settings are only reported.
+    """
+    found = runner_flash_attn(server_log)
+    print(f"runner flash attention: {found or 'no runner command line in the log'} (asked for {expected})")
+    if expected == "off" and found != "off":
+        return (f"flash attention should be off, but the runner started with "
+                f"{'--flash-attn ' + found if found else 'no command line in ' + str(server_log)}. Check that "
+                f"OLLAMA_FLASH_ATTENTION=0 reached the job (fir/flash_attention.sh). Nothing was asked.")
+    return None
+
+
 def ask_one(record, ask):
     """
     Build one record's prompt, check it, and ask the model.
@@ -222,6 +242,9 @@ def main():
                         help="seconds the model may take to load before the job gives up (default 360)")
     parser.add_argument("--allow-cpu", action="store_true",
                         help="carry on even if part of the model runs on the CPU (for tests only)")
+    parser.add_argument("--expect-flash-attn", choices=["off", "on", "auto"], default=None,
+                        help="the flash attention setting asked for (the job script passes it); with off, "
+                             "stop if Ollama's runner did not start with --flash-attn off")
     parser.add_argument("--limit", type=int, default=0,
                         help="only ask about this many of the remaining records (smoke test)")
     args = parser.parse_args()
@@ -306,6 +329,11 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
             print(f"STOPPED BEFORE THE FIRST RECORD on {host}: {message}")
             return code
         print(message)
+        if args.server_log and args.expect_flash_attn:
+            problem = flash_attention_problem(args.server_log, args.expect_flash_attn)
+            if problem:
+                print(f"ERROR: {problem}")
+                return 1
 
     def ask(prompt):
         """Send one prompt to this run's server."""

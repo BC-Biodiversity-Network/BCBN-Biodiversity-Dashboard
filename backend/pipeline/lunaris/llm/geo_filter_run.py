@@ -56,6 +56,13 @@ files are written in the Mac trial layout, so geo_pass2_trial.py
   logs/failures_partK.txt      one line per failed attempt
   logs/jobs.jsonl              one line per job: where, when, how it ended
 
+Parts start at the same moment and share the run folder. Each part appends
+only to its own progress and failure files. Files written whole go through
+a temporary name unique to the machine, process and thread (write_with), so
+parts never move each other's half-written files; sample.csv, the same for
+every part, is written only if missing or different. jobs.jsonl gets one
+appended line per job, with exit 1 for any unexpected error.
+
 --expect-flash-attn off (set by fir/geo_filter.sbatch when flash attention
 is turned off, as for qwen3.6 models) makes the run read the runner's command
 line in Ollama's log once the model has loaded, and stop before the first
@@ -93,6 +100,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -115,6 +123,7 @@ from ollama_client import (  # noqa: E402
     gpu_share,
     model_digest,
     prepare_ollama,
+    runner_flash_attn,
     wait_for_server,
 )
 from prompt_v6 import prompt_sha1  # noqa: E402
@@ -171,12 +180,51 @@ def prompt_name(number):
     return f"{number:02d}.txt"
 
 
-def write_text(path, text):
-    """Write a file whole: to a temporary name first, then put it in place, so a reader never sees half of it."""
-    temporary = path + ".tmp"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(text)
+def temporary_name(path):
+    """
+    Return a temporary name for writing a file, unique to this machine,
+    process and thread. Parts of a run start at the same moment and some
+    write the same file, so a shared name like "sample.csv.tmp" let one part
+    move another's half-written file, or find it already gone.
+    """
+    return f"{path}.tmp.{socket.gethostname()}.{os.getpid()}.{threading.get_ident()}"
+
+
+def write_with(path, writer):
+    """
+    Write a file whole: writer(temporary path) writes it under this process's
+    own temporary name (temporary_name), which is then put in place in one
+    step, so a reader never sees half of it and parts never share a name.
+    """
+    temporary = temporary_name(path)
+    writer(temporary)
     os.replace(temporary, path)
+
+
+def write_text(path, text):
+    """Write a text file whole (see write_with)."""
+
+    def writer(temporary):
+        """Write the text to the temporary file."""
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    write_with(path, writer)
+
+
+def write_if_changed(path, text):
+    """
+    Write a text file whole (see write_with) only if it is missing or holds
+    something else, and return whether it was written. For files every part
+    writes the same, such as pass1/sample.csv: parts that start together then
+    leave the file alone instead of all replacing it.
+    """
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", newline="") as handle:
+            if handle.read() == text:
+                return False
+    write_text(path, text)
+    return True
 
 
 def write_jsonl(path, lines):
@@ -279,8 +327,9 @@ class Run:
         self.lookup_progress = os.path.join(self.pass1_dir, f"lookup_progress_part{part}.jsonl")
         self.pass2_progress = os.path.join(self.pass2_dir, f"progress_part{part}.jsonl")
         self.failures = os.path.join(out, "logs", f"failures_part{part}.txt")
-        # The run's records, numbered, as the Mac trials' sample.csv (every part writes the same file).
-        write_text(os.path.join(self.pass1_dir, "sample.csv"), sample.to_csv())
+        # The run's records, numbered, as the Mac trials' sample.csv. Every part has the same file,
+        # so it is written only if missing or different.
+        write_if_changed(os.path.join(self.pass1_dir, "sample.csv"), sample.to_csv())
         for path in (self.pass1_progress, self.lookup_progress, self.pass2_progress):
             cut = repair_jsonl_tail(path)
             if cut:
@@ -418,8 +467,9 @@ class Run:
         """
         If every record of the run has a result from both passes, write the
         merged files (see the top of the file) and return True; else say
-        which are missing and return False. Any part's job may do this; the
-        files are written whole, so two doing it at once write the same thing.
+        which are missing and return False. Any part's job may do this; each
+        file is written whole under the job's own temporary name, so two doing
+        it at once write the same thing without getting in each other's way.
         """
         pass1, lookups, pass2 = self.state()
         numbers = list(self.sample.index)
@@ -437,18 +487,21 @@ class Run:
         for n in numbers:
             with open(os.path.join(self.pass1_dir, "prompts", prompt_name(n)), encoding="utf-8") as handle:
                 prompts1[n] = handle.read()
-        geo_pass1_trial.write_report(os.path.join(self.pass1_dir, "report.txt"), self.sample,
-                                     {pass1[n]["record_id"]: pass1[n] for n in numbers}, prompts1)
+        write_with(os.path.join(self.pass1_dir, "report.txt"),
+                   lambda path: geo_pass1_trial.write_report(path, self.sample,
+                                                             {pass1[n]["record_id"]: pass1[n] for n in numbers},
+                                                             prompts1))
         write_jsonl(os.path.join(self.pass2_dir, "answers.jsonl"), [pass2[n] for n in numbers])
-        geo_pass2_trial.write_report(os.path.join(self.pass2_dir, "report.txt"), self.sample.reset_index(),
-                                     {n: pass2[n] for n in numbers}, pass2_prompt)
+        write_with(os.path.join(self.pass2_dir, "report.txt"),
+                   lambda path: geo_pass2_trial.write_report(path, self.sample.reset_index(),
+                                                             {n: pass2[n] for n in numbers}, pass2_prompt))
         rows = [{"number": n, "record_id": pass1[n]["record_id"], "pass1_s": pass1[n].get("seconds"),
                  "pass1_attempts": pass1[n].get("attempts"), "lookup_s": lookups.get(n, {}).get("seconds"),
                  "pass2_s": pass2[n].get("seconds"), "pass2_attempts": pass2[n].get("attempts")}
                 for n in numbers]
         timing = pd.DataFrame(rows)
         timing["total_s"] = timing[["pass1_s", "lookup_s", "pass2_s"]].sum(axis=1, min_count=1)
-        timing.to_csv(os.path.join(self.out, "timing.csv"), index=False)
+        write_text(os.path.join(self.out, "timing.csv"), timing.to_csv(index=False))
         answered = [pass2[n] for n in numbers if "answer" in pass2[n]]
         classes = pd.Series([r["decision"]["class"] for r in answered]).value_counts().to_dict()
         print(f"merged files written for {len(numbers)} records: pass 1 failed "
@@ -512,28 +565,6 @@ def compare_with_reference(run, prompts1, reference1, reference2):
 
 
 # --- Flash attention -----------------------------------------------------
-
-def runner_flash_attn(server_log):
-    """
-    Return the flash attention setting of the last runner Ollama started, as
-    its command line in the server log gives it ("--flash-attn off" gives
-    "off"), "none" if that command line has no --flash-attn, or None if the
-    log shows no runner command line (Ollama's "starting llama-server" line)
-    or cannot be read.
-    """
-    try:
-        lines = [line for line in open(server_log, encoding="utf-8", errors="replace")
-                 if "starting llama-server" in line]
-    except OSError:
-        return None
-    if not lines:
-        return None
-    words = lines[-1].replace('"', " ").split()
-    for word, value in zip(words, words[1:]):
-        if word == "--flash-attn":
-            return value
-    return "none"
-
 
 def check_runner_flash_attn(server_log, expected):
     """
@@ -603,7 +634,8 @@ def main():
         return 1
 
     started, host = now_utc(), socket.gethostname()
-    job = {"job_id": os.environ.get("SLURM_JOB_ID"), "array_task": os.environ.get("SLURM_ARRAY_TASK_ID"),
+    job = {"job_id": os.environ.get("SLURM_JOB_ID"), "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+           "array_task": os.environ.get("SLURM_ARRAY_TASK_ID"),
            "host": host, "part": args.part, "parts": args.parts, "model": args.model, "started": started,
            "dry_run": args.dry_run}
     os.makedirs(os.path.join(args.out, "logs"), exist_ok=True)
@@ -693,6 +725,12 @@ def main():
         code = 2
         job["reason"] = str(error)
         return code
+    except Exception as error:
+        # Anything unexpected: record exit 1 in logs/jobs.jsonl (not 0), then let
+        # Python print the traceback and end with exit 1 as before.
+        code = 1
+        job["reason"] = f"{type(error).__name__}: {error}"
+        raise
     finally:
         if run is not None and not args.dry_run and code in (0, 4):
             run.finish()

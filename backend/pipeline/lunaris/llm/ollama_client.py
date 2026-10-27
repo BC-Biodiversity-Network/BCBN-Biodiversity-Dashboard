@@ -285,6 +285,33 @@ def discovery_result(server_log, seconds):
     return "unknown", f"no '{DISCOVERY_LINE}' line in {server_log} after {seconds} s"
 
 
+def runner_flash_attn(server_log):
+    """
+    Return the flash attention setting of the last runner Ollama started, as
+    its command line in the server log gives it ("--flash-attn off" gives
+    "off"), "none" if that command line has no --flash-attn, or None if the
+    log shows no runner command line (Ollama's "starting llama-server" line)
+    or cannot be read.
+
+    Flash attention must be off for qwen3.6 models on Ollama 0.40.0 (they
+    crash on prompts of 1,024 tokens or more with it on, ollama issue
+    #17434), and OLLAMA_FLASH_ATTENTION=0 only shows on this command line.
+    Used by run_batch.py and geo_filter_run.py.
+    """
+    try:
+        lines = [line for line in open(server_log, encoding="utf-8", errors="replace")
+                 if "starting llama-server" in line]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    words = lines[-1].replace('"', " ").split()
+    for word, value in zip(words, words[1:]):
+        if word == "--flash-attn":
+            return value
+    return "none"
+
+
 def load_model(url, model, num_ctx=OLLAMA_NUM_CTX, num_thread=None, timeout=360):
     """
     Ask Ollama to load the model now, with the settings the answers will use.

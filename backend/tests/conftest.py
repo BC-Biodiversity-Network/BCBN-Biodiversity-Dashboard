@@ -1,7 +1,7 @@
 """
 conftest.py
 
-Shared test set-up: writes a tiny copy of the API's four data files into a
+Shared test set-up: writes a tiny copy of the API's five data files into a
 temporary folder, so the tests never need the real (large, uncommitted)
 data.
 
@@ -16,6 +16,23 @@ The test data:
                   than iNaturalist
     BCSEE row ZZZZ  a status for a species with no records in BC, so no
                     card (it must not be counted)
+    Lunaris datasets (DATASETS_SQL)
+        oai:catalogue.data.gov.bc.ca:eagle-nests
+                    bc_data, bc_only, "eagle" in the title, a box (BC's
+                    rectangle), issued 2020, a licence and an access right;
+                    another copy oai:open.canada.ca:eagle-copy
+        oai:catalogue.hakai.org:salmon
+                    bc_data, canada_incl_bc, "eagles" in the abstract, a
+                    point, issued 2022
+        oai:catalogue.data.gov.bc.ca:forest-plots
+                    bc_data, bc_and_outside_canada, "Eagle habitat" as a
+                    subject, no location, issued 2018
+        oai:canwin-datahub.ad.umanitoba.ca:beagle
+                    pending, all_canada, "Beagle" (not eagle) in the title,
+                    a looked-up place, issued 2019
+        oai:datadryad.org:doi:10.5061/dryad.golden
+                    pending, global, "eagle" in the title, an id with a
+                    slash, issued 2021
 
 BCSEE_WITH_NO_STATUS_SQL is the BCSEE file as it would be if it also
 listed species whose BCSEE entries have no shown status: it adds CCCC,
@@ -144,6 +161,80 @@ BCSEE_WITH_NO_STATUS_SQL = f"""
            '2026-05-05', '2026-09-26'
 """
 
+# The types of the Lunaris datasets' nested columns, as the export writes them.
+BOX_TYPE = "STRUCT(w DOUBLE, e DOUBLE, s DOUBLE, n DOUBLE)"
+POINT_TYPE = "STRUCT(lat DOUBLE, lon DOUBLE)"
+PLACE_TYPE = ("STRUCT(name VARCHAR, as_written VARCHAR, role VARCHAR, looked_up VARCHAR, "
+              "category VARCHAR, geonames_id BIGINT, geonames_name VARCHAR, feature_code VARCHAR, "
+              "country_code VARCHAR, admin1_name VARCHAR, latitude DOUBLE, longitude DOUBLE, "
+              "kind VARCHAR, any_candidate_in_bc BOOLEAN)")
+COPY_TYPE = "STRUCT(id VARCHAR, source VARCHAR, source_name VARCHAR, link VARCHAR)"
+LICENCE_TYPE = "STRUCT(name VARCHAR, uri VARCHAR)"
+
+# The Lunaris datasets (see the top of this file). Every column the API
+# reads is here, with the types the export writes.
+DATASETS_SQL = f"""
+    SELECT id, title, abstract, subjects, 'A publisher' AS publisher, []::VARCHAR[] AS places,
+           issued, source, source_name, link, link_type,
+           CASE WHEN id LIKE '%eagle-nests'
+                THEN [{{'name': 'Open Government Licence - British Columbia',
+                        'uri': 'https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc'}},
+                      {{'name': NULL, 'uri': 'info:eu-repo/semantics/openAccess'}}]::{LICENCE_TYPE}[]
+                ELSE []::{LICENCE_TYPE}[] END AS licences,
+           final_class, frontend_group, location_type, location_source,
+           CASE WHEN location_type = 'box'
+                THEN [{{'w': -139.5, 'e': -113.5, 's': 48.0, 'n': 60.0}}]::{BOX_TYPE}[]
+                ELSE []::{BOX_TYPE}[] END AS boxes,
+           CASE WHEN location_type = 'point'
+                THEN [{{'lat': 51.6, 'lon': -128.1}}]::{POINT_TYPE}[]
+                ELSE []::{POINT_TYPE}[] END AS points,
+           CASE WHEN location_type = 'looked_up_place'
+                THEN [{{'name': 'Winnipeg', 'as_written': 'Winnipeg', 'role': 'study_location',
+                        'looked_up': 'Winnipeg', 'category': 'outside_bc_only',
+                        'geonames_id': 6183235, 'geonames_name': 'Winnipeg', 'feature_code': 'PPLA',
+                        'country_code': 'CA', 'admin1_name': 'Manitoba', 'latitude': 49.88,
+                        'longitude': -97.15, 'kind': 'outside_bc',
+                        'any_candidate_in_bc': false}}]::{PLACE_TYPE}[]
+                ELSE []::{PLACE_TYPE}[] END AS looked_up_places,
+           false AS box_swapped, false AS box_zero_width, false AS box_most_of_world,
+           location_type = 'box' AS box_bc_rectangle, false AS box_canada_default,
+           organisms AS organisms_4b, organisms AS organisms_35b,
+           organism_level AS organism_level_4b, organism_level AS organism_level_35b,
+           organisms, organism_level,
+           CASE WHEN id LIKE '%eagle-nests' THEN 2 ELSE 1 END::BIGINT AS copy_count,
+           CASE WHEN id LIKE '%eagle-nests'
+                THEN [{{'id': 'oai:open.canada.ca:eagle-copy', 'source': 'open.canada.ca',
+                        'source_name': 'Open Government Portal (Government of Canada)',
+                        'link': 'https://open.canada.ca/data/en/dataset/eagle-copy'}}]::{COPY_TYPE}[]
+                ELSE []::{COPY_TYPE}[] END AS other_copies
+    FROM (VALUES
+        ('oai:catalogue.data.gov.bc.ca:eagle-nests', 'Bald Eagle nest survey',
+         'Nest locations of Haliaeetus leucocephalus on the coast.', ['Birds', 'Raptors'],
+         '2020-05-01', 'catalogue.data.gov.bc.ca', 'BC Data Catalogue',
+         'https://catalogue.data.gov.bc.ca/dataset/eagle-nests', 'url', 'bc_only', 'bc_data',
+         'box', 'harvested', ['bald eagle', 'Haliaeetus leucocephalus'], 'species'),
+        ('oai:catalogue.hakai.org:salmon', 'Salmon counts in Hakai Pass',
+         'Counts of salmon, and of the eagles feeding on them.', []::VARCHAR[],
+         '2022-07-15', 'catalogue.hakai.org', 'Hakai Institute', 'https://doi.org/10.1/salmon',
+         'doi', 'canada_incl_bc', 'bc_data', 'point', 'harvested', ['salmon'], 'group'),
+        ('oai:catalogue.data.gov.bc.ca:forest-plots', 'Forest plots',
+         'Tree measurements in permanent plots.', ['Eagle habitat', 'Forests'],
+         '2018-03-01', 'catalogue.data.gov.bc.ca', 'BC Data Catalogue',
+         'https://catalogue.data.gov.bc.ca/dataset/forest-plots', 'url', 'bc_and_outside_canada',
+         'bc_data', 'none', '', []::VARCHAR[], 'none'),
+        ('oai:canwin-datahub.ad.umanitoba.ca:beagle', 'Beagle Channel water chemistry',
+         'Water samples near Winnipeg.', []::VARCHAR[], '2019-01-01',
+         'canwin-datahub.ad.umanitoba.ca', 'Canadian Watershed Information Network (CanWIN)',
+         'https://canwin-datahub.ad.umanitoba.ca/data/dataset/beagle', 'url', 'all_canada',
+         'pending', 'looked_up_place', 'our_geonames_lookup', []::VARCHAR[], 'none'),
+        ('oai:datadryad.org:doi:10.5061/dryad.golden', 'Golden eagle tracking worldwide',
+         'GPS tracks of Aquila chrysaetos.', ['Movement'], '2021-11-30', 'datadryad.org', 'Dryad',
+         'https://doi.org/10.5061/dryad.golden', 'doi', 'global', 'pending', 'none', '',
+         ['golden eagle', 'Aquila chrysaetos'], 'species')
+    ) AS t(id, title, abstract, subjects, issued, source, source_name, link, link_type,
+           final_class, frontend_group, location_type, location_source, organisms, organism_level)
+"""
+
 DOWNLOAD_INFO = {
     "download_key": "0000000-000000000000000",
     "doi": "10.15468/dl.test",
@@ -161,10 +252,11 @@ def write_parquet(query, path):
 
 
 def write_test_data(folder, card_sql=CARD_SQL, hex_sql=HEX_SQL, bcsee_sql=BCSEE_SQL,
-                    download_info=DOWNLOAD_INFO):
-    """Write the four data files into folder and return folder. A test can
+                    download_info=DOWNLOAD_INFO, datasets_sql=DATASETS_SQL):
+    """Write the five data files into folder and return folder. A test can
     pass its own version of any one of them to try a broken file."""
     write_parquet(card_sql, folder / "species_card_gbif.parquet")
+    write_parquet(datasets_sql, folder / "lunaris_datasets.parquet")
     write_parquet(hex_sql, folder / "species_hex.parquet")
     write_parquet(bcsee_sql, folder / "bcsee_status_by_gbif_species.parquet")
     with open(folder / "download_info.json", "w", encoding="utf-8") as handle:

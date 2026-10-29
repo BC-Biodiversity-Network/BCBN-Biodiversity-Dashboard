@@ -1,13 +1,14 @@
 """
 db.py
 
-Opens the API's data: checks that the four files are there and have the
-columns the API reads and that every species key has one answer, opens one
-DuckDB connection over them, and works out the figures /api/meta returns
-and the lookup from merged (old) keys to kept keys.
+Opens the API's data: checks that the five files are there and have the
+columns the API reads, that every species key has one answer and that
+every Lunaris dataset id has one answer, opens one DuckDB connection over
+them, and works out the figures /api/meta returns and the lookup from
+merged (old) keys to kept keys.
 
-The two small files (the species cards and the BCSEE statuses) are copied
-into memory when the API starts. species_hex is read in place (a DuckDB
+The three small files (the species cards, the BCSEE statuses and the
+Lunaris datasets) are copied into memory when the API starts. species_hex is read in place (a DuckDB
 view over read_parquet): it is sorted by species key, so a request for one
 species only reads the few parquet row groups that hold it. Either way it
 stays fast without a database server.
@@ -44,6 +45,15 @@ REQUIRED_COLUMNS = {
         "gbif_species_key", "status_display", "statuses", "entries",
         "status_source", "status_source_date", "status_pulled_on",
     ],
+    # Every column: the dataset endpoint returns them all.
+    "lunaris_datasets.parquet": [
+        "id", "title", "abstract", "subjects", "publisher", "places", "issued",
+        "source", "source_name", "link", "link_type", "licences", "final_class", "frontend_group",
+        "location_type", "location_source", "boxes", "points", "looked_up_places",
+        "box_swapped", "box_zero_width", "box_most_of_world", "box_bc_rectangle", "box_canada_default",
+        "organisms_4b", "organisms_35b", "organism_level_4b", "organism_level_35b",
+        "organisms", "organism_level", "copy_count", "other_copies",
+    ],
 }
 
 # The fields of download_info.json the API passes on, for citing the GBIF
@@ -56,11 +66,18 @@ REQUIRED_DOWNLOAD_FIELDS = ["download_key", "doi", "doi_url", "date"]
 # Accidental, No Status, Extinct, Other) are not shown as a status.
 SHOWN_STATUSES = ["Red", "Blue", "Yellow", "Exotic"]
 
+# The front end groups and classes a Lunaris dataset can have. The export
+# only writes these (the "dropped" group and the elsewhere and unknown
+# classes are left out), and the dataset filters take only these.
+DATASET_FRONTEND_GROUPS = ["bc_data", "pending"]
+DATASET_FINAL_CLASSES = ["bc_only", "canada_incl_bc", "bc_and_outside_canada", "all_canada", "global"]
+
 # The name each parquet file is given inside DuckDB.
 VIEW_NAMES = {
     "species_card_gbif.parquet": "species_card",
     "species_hex.parquet": "species_hex",
     "bcsee_status_by_gbif_species.parquet": "bcsee_status",
+    "lunaris_datasets.parquet": "lunaris_datasets",
 }
 
 # The files copied into memory when the API starts, rather than read from
@@ -69,7 +86,10 @@ VIEW_NAMES = {
 # 30 ms); in memory it takes under 2 ms. Both files are small (about 4 MB
 # and 0.5 MB). species_hex stays on disk: it is ten times larger and sorted
 # by key, so DuckDB only reads the part that holds the species asked for.
-LOADED_INTO_MEMORY = {"species_card_gbif.parquet", "bcsee_status_by_gbif_species.parquet"}
+# The Lunaris datasets (about 3 MB) are searched as a whole on every
+# request, so they are kept in memory too.
+LOADED_INTO_MEMORY = {"species_card_gbif.parquet", "bcsee_status_by_gbif_species.parquet",
+                      "lunaris_datasets.parquet"}
 
 
 class DataFilesError(RuntimeError):
@@ -86,7 +106,7 @@ def sql_text(text):
 def check_parquet_files(con, data_dir):
     """Return a list of problems with the parquet files in data_dir: files
     that are missing, cannot be read, or lack a column the API reads. An
-    empty list means all three are fine."""
+    empty list means all of them are fine."""
     problems = []
 
     for file_name, columns in REQUIRED_COLUMNS.items():
@@ -192,6 +212,44 @@ def check_keys(con):
             "these merged keys still have a card of their own: "
             + ", ".join(row[0] for row in also_cards))
 
+    return problems
+
+
+def check_datasets(con):
+    """Return a list of problems with the Lunaris datasets: every id must
+    appear once, and the id of another copy must belong to one dataset and
+    must not be a shown id itself, or a request for it would have more than
+    one answer. Every dataset must also have a front end group and class
+    the dataset endpoints know (DATASET_FRONTEND_GROUPS and
+    DATASET_FINAL_CLASSES)."""
+    problems = []
+    rows, ids = con.execute(
+        "SELECT count(*), count(DISTINCT id) FROM lunaris_datasets").fetchone()
+    if rows != ids:
+        problems.append(f"lunaris_datasets.parquet has {rows - ids} repeated id(s)")
+
+    copies = """SELECT c.id AS copy_id FROM (
+                    SELECT unnest(other_copies) AS c FROM lunaris_datasets)"""
+    repeated = con.execute(
+        f"SELECT copy_id FROM ({copies}) GROUP BY copy_id HAVING count(*) > 1 ORDER BY 1").fetchall()
+    if repeated:
+        problems.append("these copy ids belong to more than one dataset: "
+                        + ", ".join(row[0] for row in repeated))
+    also_shown = con.execute(
+        f"""SELECT DISTINCT copy_id FROM ({copies}) AS c
+            JOIN lunaris_datasets AS d ON d.id = c.copy_id ORDER BY 1""").fetchall()
+    if also_shown:
+        problems.append("these copy ids are also shown as datasets: "
+                        + ", ".join(row[0] for row in also_shown))
+
+    for column, allowed in (("frontend_group", DATASET_FRONTEND_GROUPS),
+                            ("final_class", DATASET_FINAL_CLASSES)):
+        found = [row[0] for row in con.execute(
+            f"SELECT DISTINCT {column} FROM lunaris_datasets ORDER BY 1").fetchall()]
+        unknown = [value for value in found if value not in allowed]
+        if unknown:
+            problems.append(f"lunaris_datasets.parquet has {column} value(s) the API does not "
+                            f"know: {', '.join(str(v) for v in unknown)}")
     return problems
 
 
@@ -309,7 +367,13 @@ class ApiData:
                   whether a species with no BCSEE row is really not in
                   BCSEE (see bcsee_includes_species_without_status)
     search_keys   every card key and merged key in lower case, to the card
-                  key and merged_from; filled in by search.prepare_search()"""
+                  key and merged_from; filled in by search.prepare_search()
+    dataset_copies
+                  the id of every other copy of a Lunaris dataset, to the
+                  id shown; filled in by datasets.prepare_datasets()
+    dataset_catalogues
+                  each catalogue (source id) of the datasets, to its
+                  readable name; filled in by datasets.prepare_datasets()"""
 
     def __init__(self, connection, settings, meta, merged_keys,
                  bcsee_includes_without_status):
@@ -320,6 +384,8 @@ class ApiData:
         self.merged_keys = merged_keys
         self.bcsee_includes_without_status = bcsee_includes_without_status
         self.search_keys = {}
+        self.dataset_copies = {}
+        self.dataset_catalogues = {}
 
     def cursor(self):
         """Return a new cursor for one request. Each request gets its own,
@@ -358,6 +424,7 @@ def open_data(settings):
             create_views(con, data_dir)
             problems += check_single_values(con)
             problems += check_keys(con)
+            problems += check_datasets(con)
 
         if problems:
             raise DataFilesError(

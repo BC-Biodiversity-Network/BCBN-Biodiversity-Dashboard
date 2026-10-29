@@ -2,7 +2,7 @@
 main.py
 
 The species search API: a small FastAPI app that reads the precomputed
-species tables with DuckDB.
+species tables and the Lunaris datasets with DuckDB.
 
 Run it from backend/ (the Vite dev server forwards /api to port 8000):
 
@@ -33,6 +33,18 @@ Endpoints so far:
                     the overview map: records and distinct species per H3
                     hexagon at res (4 to 7), optionally for a year range
                     (see overview.py). A bad res or year range gives 400.
+    GET /api/datasets?q=&catalogue=&final_class=&frontend_group=&page=&page_size=
+                    Lunaris datasets matching the keyword q (title,
+                    abstract, subjects) and the filters, a page at a time,
+                    with the total and the counts for the filter options
+                    (see datasets.py). frontend_group defaults to bc_data.
+                    A query with fewer than 2 letters or digits, or an
+                    unknown filter value, gives 400.
+    GET /api/datasets/{id}
+                    one Lunaris dataset with every field, including its
+                    location (see datasets.py). The id of another copy
+                    gives the copy shown, with requested_copy set; an
+                    unknown id gives 404.
 
 Responses larger than 1 KB are gzipped for clients that accept it (the
 species map of the robin at res 7 is about 355 KB, about 60 KB gzipped).
@@ -43,6 +55,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 
+from api.datasets import (DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, DatasetsRequestError, get_dataset,
+                          list_datasets, prepare_datasets)
 from api.db import open_data
 from api.hexes import HexesRequestError, species_hexes
 from api.overview import overview_hexes
@@ -74,6 +88,7 @@ def create_app(settings=None):
         app.state.data = open_data(settings or load_settings())
         try:
             prepare_search(app.state.data)
+            prepare_datasets(app.state.data)
             yield
         finally:
             app.state.data.close()
@@ -137,6 +152,37 @@ def create_app(settings=None):
             return search(request.app.state.data, q, limit)
         except QueryTooShort as error:
             raise HTTPException(status_code=400, detail=str(error))
+
+    @app.get("/api/datasets")
+    def datasets(request: Request, q: str | None = Query(None, max_length=200),
+                 catalogue: list[str] | None = Query(None),
+                 final_class: list[str] | None = Query(None),
+                 frontend_group: list[str] | None = Query(None),
+                 page: int = Query(1, ge=1),
+                 page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)):
+        """Return one page of Lunaris datasets matching q and the filters,
+        datasets with every word in the title first, then the most recently
+        issued (see datasets.py). Each filter can be given more than once;
+        frontend_group defaults to bc_data."""
+        try:
+            return list_datasets(request.app.state.data, q, catalogue, final_class,
+                                 frontend_group, page, page_size)
+        except (QueryTooShort, DatasetsRequestError) as error:
+            raise HTTPException(status_code=400, detail=str(error))
+
+    # Dataset ids hold colons and slashes (oai:datadryad.org:doi:10.5061/...),
+    # so the id takes the rest of the path.
+    @app.get("/api/datasets/{dataset_id:path}")
+    def dataset(dataset_id: str, request: Request):
+        """Return one Lunaris dataset with every field. The id of another
+        copy of a dataset gives the copy shown, with requested_copy set."""
+        found = get_dataset(request.app.state.data, dataset_id)
+        if found is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No Lunaris dataset with id {dataset_id!r} on the site: it is not a "
+                       "dataset placed in BC or pending, nor another copy of one.")
+        return found
 
     return app
 

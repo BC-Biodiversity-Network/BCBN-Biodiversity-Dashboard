@@ -5,11 +5,12 @@ The API's two settings, read from environment variables when the API
 starts.
 
 BCBN_API_DATA_DIR
-    The folder holding the four files the API reads:
+    The folder holding the five files the API reads:
         species_card_gbif.parquet
         species_hex.parquet
         bcsee_status_by_gbif_species.parquet
         download_info.json
+        lunaris_datasets.parquet
     If it is not set, the API uses backend/data/api, found from where this
     file is, so it works on any machine without naming a home folder. That
     folder is covered by the data/ rule in .gitignore, so the files are
@@ -41,7 +42,7 @@ class SettingsError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
-    """The API's settings. data_dir is the folder with the four data
+    """The API's settings. data_dir is the folder with the five data
     files; sensitive_max_res must be None until sensitive-species handling
     exists (see refuse_sensitive_setting)."""
 

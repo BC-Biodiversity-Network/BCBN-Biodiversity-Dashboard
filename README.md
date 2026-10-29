@@ -31,15 +31,15 @@ cd BCBN-Dashboard
 
 ### 2. Add the data files
 
-The API reads four data files that are not in git (`data/` and `*.parquet`
-are ignored). Ask Lucia for a zip of them (about 40 MB). The folder they go
+The API reads five data files that are not in git (`data/` and `*.parquet`
+are ignored). Ask Lucia for a zip of them (about 43 MB). The folder they go
 in does not exist in a fresh clone, so create it first:
 
 ```
 mkdir -p backend/data/api
 ```
 
-Then put the four files in `backend/data/api/`:
+Then put the five files in `backend/data/api/`:
 
 | File | Size | Where it comes from |
 | --- | --- | --- |
@@ -47,6 +47,7 @@ Then put the four files in `backend/data/api/`:
 | `species_card_gbif.parquet` | 3.6 MB | `build_species_tables.py`, same folder |
 | `bcsee_status_by_gbif_species.parquet` | 1.2 MB | `build_bcsee_status_display.py --key-merge` (see "BCSEE statuses on the species cards") |
 | `download_info.json` | 12 KB | `build_dwca_tables.py`, on the server in `~/bcbn/data/gbif_tables/`; the GBIF download DOI to cite |
+| `lunaris_datasets.parquet` | 3.1 MB | `backend/pipeline/lunaris/export_lunaris_datasets.py`, run on the Mac from the filter 3 union table (see "The Lunaris datasets API") |
 
 The map's hexagon files (`frontend/public/data/bc_hex_r4.csv.gz` to
 `bc_hex_r7.csv.gz`) are in git, so there is nothing to copy for them.
@@ -93,7 +94,7 @@ All are optional environment variables:
   (`frontend/vite.config.js`). The default is `http://127.0.0.1:8000`. If the
   API runs on another port, start the front end with, for example,
   `BCBN_API_DEV_URL=http://127.0.0.1:8001 npm run dev`.
-- `BCBN_API_DATA_DIR`: the folder with the four data files, if not
+- `BCBN_API_DATA_DIR`: the folder with the five data files, if not
   `backend/data/api/`. Set it when starting the API, for example
   `BCBN_API_DATA_DIR=~/bcbn-data ../.venv/bin/python -m uvicorn api.main:app --port 8000`.
 - `BCBN_SENSITIVE_MAX_RES`: leave it unset. It is reserved for coarsening
@@ -823,14 +824,15 @@ Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `op
 ## Running the species API
 
 Species search and the species cards come from a small API in `backend/api/`
-(FastAPI and DuckDB). How to install and start it, the four data files it
+(FastAPI and DuckDB). How to install and start it, the five data files it
 reads and where they come from, and its settings are in "Running the website
 locally" near the top. Its tests run from `backend/` with
 `../.venv/bin/python -m pytest`.
 
 At start-up the API checks that every file is there with the columns it
 reads, that the cards have one Catalogue of Life release and the statuses
-one BCSEE source and date, and refuses to start if not, listing every
+one BCSEE source and date, that every Lunaris dataset id (and every other
+copy's id) has one answer, and refuses to start if not, listing every
 problem.
 
 `GET /api/meta` returns where the data comes from and what it holds: the
@@ -939,6 +941,83 @@ The same SQL on DuckDB 0.10.3 (the cluster's version) gives the same answers
 in 0.08 to 0.27 s once the file has been read once. So no precomputed table is
 needed. The page still uses the shipped files for all years and calls this
 endpoint only when a year range is set (see "Running the front end").
+
+### The Lunaris datasets API
+
+The Datasets tab (not built yet) lists Lunaris datasets: users find one and
+follow its link to download it from the original site. We do not host the
+data.
+
+**`backend/pipeline/lunaris/export_lunaris_datasets.py` ->
+`backend/data/api/lunaris_datasets.parquet`.** One row per copy group of
+the filter 3 union table (`backend/data/lunaris_bc_filter/filter3_final_union/filter3_merged.csv`)
+whose best front end group is `bc_data` or `pending` (3,610 rows: 2,337 and
+1,273). It also reads the 2026-10-20 harvest (parsed and raw XML), the pass 1
+place lookups of both Fir runs, both filter 2 runs and BC's outline
+(`bc_boundary_gbif.wkt`, the one step 1 used). Run from `backend/`:
+
+```
+python pipeline/lunaris/export_lunaris_datasets.py --bc-boundary <path to bc_boundary_gbif.wkt>
+```
+
+It stops if the file already exists (`--replace` writes over it).
+
+- **Which copy is shown:** the copies in the group's best front end group,
+  then the latest DataCite Issued date, then the latest OAI datestamp, then
+  the lowest id. The harvest has no version number or modified date. This
+  shows another copy than filter 3's `dup_show` in 99 groups, mostly the
+  open.canada.ca copy of a CanWIN dataset.
+- **Link:** `https://doi.org/<DOI>` when the record's identifier is a DOI
+  (`link_type` `doi`), else its URL identifier, the landing page on the
+  original site (`url`). Every record has one.
+- **Location:** `location_type` is `box`, `point`, `looked_up_place` or
+  `none`, the first that applies. Boxes and points are as harvested.
+  `looked_up_places` holds every place name pass 1 found, with our
+  GeoNames lookup's top candidate; `location_source` says
+  `our_geonames_lookup` when the map would draw those.
+  Each dataset uses only its own location, never another copy's.
+  `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
+  Two more flag the standard boxes some catalogues seem to give records by
+  default (mostly CanWIN and open.canada.ca): `box_bc_rectangle`, BC's
+  bounding rectangle within 1 degree as in step 1 (195 datasets), and
+  `box_canada_default`, the Canada-wide extent w -141, e -52.6, s 41.7,
+  n 83.1 within 0.5 degrees (236). The boxes themselves are kept as
+  harvested; 430 datasets have no location but such boxes.
+- **Licences:** `licences` holds every DataCite rightsList entry, its
+  `name` and `uri` exactly as harvested (`null` when missing). Most
+  datasets also have an entry with no name whose URI is an access right
+  (`info:eu-repo/semantics/openAccess` or `restrictedAccess`), not a
+  licence. Some names are long HTML (the whole Statistics Canada licence,
+  or a broken link from Open Data Prince George), so the front end must
+  show them as plain text, never as HTML.
+- **Also kept:** the organism names and levels of both filter 2 runs, and
+  the other copies' ids, catalogues and links. The readable catalogue names
+  are in `backend/pipeline/lunaris/lunaris_catalogue_names.csv`; the
+  export stops if a catalogue has none.
+
+`GET /api/datasets?q=&catalogue=&final_class=&frontend_group=&page=&page_size=`
+(`backend/api/datasets.py`) lists datasets a page at a time (`page_size`
+default 20, at most 100), with `total` and `pages`. Each result has the
+fields a list needs, its `licences` included, and the start of the
+abstract (`abstract_preview`).
+
+- `q` searches the title, abstract and subjects. Every word must start a
+  word in them ("eagle" finds "eagles" but not "beagle"). Letter case,
+  accents and punctuation are ignored, as in the species search.
+- **Order:** datasets with every word in the title first, then the most
+  recently issued.
+- **Filters:** `catalogue` (a source id), `final_class` and
+  `frontend_group` can each be given more than once. `frontend_group`
+  defaults to `bc_data`.
+- `options` gives the counts the filter options need: each catalogue
+  (with its readable name), class and front end group. Each filter's counts
+  use the query and the other filters but not its own.
+- **Errors:** a query with fewer than 2 letters or digits, or an unknown
+  filter value, gives 400.
+
+`GET /api/datasets/{id}` returns one dataset with every column, including
+its location. The id of another copy gives the copy shown, with
+`requested_copy` set. Any other id gives 404.
 
 ## Running the front end
 

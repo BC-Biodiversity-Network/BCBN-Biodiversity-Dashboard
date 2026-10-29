@@ -713,3 +713,411 @@ body {
 .species-card a {
   color: #184f95;
 }
+
+/* --- The top bar and the Datasets page ----------------------------------- */
+
+/* The site: the top bar, then the page, which takes all the height left.
+   The species map page (.app-layout) keeps its own layout inside that. */
+.site {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.site > .app-layout,
+.site > .datasets-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* The bar with the site name and the two pages. */
+.top-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 38px;
+  border-bottom: 1px solid #ddd;
+  background: #fff;
+  font-size: 14px;
+}
+
+.top-bar-name {
+  margin-right: 12px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.top-bar-link {
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: #184f95;
+  text-decoration: none;
+}
+
+.top-bar-link:hover {
+  background: #eef3fa;
+}
+
+.top-bar-link.current {
+  background: #184f95;
+  color: #fff;
+}
+
+/* Hidden on screen but read by screen readers. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* A button that looks like a link. */
+.text-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: #184f95;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The Datasets page: the panel on the left and the map on the right, above
+   the footer. */
+.datasets-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.datasets-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.datasets-panel {
+  box-sizing: border-box;
+  flex: 0 0 min(460px, 45%);
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+  border-right: 1px solid #ddd;
+  background: #fff;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #1a1a1a;
+}
+
+.datasets-panel a {
+  color: #184f95;
+}
+
+.dataset-map {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.datasets-heading {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.datasets-intro,
+.datasets-note,
+.dataset-muted {
+  margin: 0 0 10px;
+  color: #555;
+}
+
+.datasets-error {
+  margin: 8px 0;
+  color: #a12020;
+}
+
+/* The search box and its button, side by side. */
+.datasets-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.datasets-search .search-input {
+  flex: 1 1 200px;
+  width: auto;
+  border: 1px solid #bbb;
+  box-shadow: none;
+}
+
+.datasets-search-button {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: #184f95;
+  font: inherit;
+  color: #fff;
+  cursor: pointer;
+}
+
+.datasets-search .datasets-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The switch that adds the national and global datasets. */
+.datasets-wider {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 4px 0 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #f4f6f8;
+}
+
+/* The filters, each folded under its name. */
+.datasets-filter {
+  margin: 0 0 6px;
+}
+
+.datasets-filter summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.datasets-filter fieldset {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+/* The catalogue list scrolls inside its own box when it is long. */
+.datasets-filter-options {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 6px !important;
+  border-bottom: 1px solid #eee !important;
+}
+
+.datasets-filter-option {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 1px 0;
+}
+
+.datasets-count {
+  margin-left: auto;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+}
+
+.datasets-filters > .text-button {
+  margin-bottom: 6px;
+}
+
+.datasets-total {
+  margin: 10px 0 4px;
+  font-weight: 600;
+}
+
+/* The list of results. */
+.dataset-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dataset-item {
+  padding: 10px 0;
+  border-top: 1px solid #e6e6e6;
+}
+
+.dataset-item-title {
+  font-weight: 600;
+}
+
+.dataset-meta {
+  margin: 3px 0;
+  font-size: 12.5px;
+  color: #555;
+}
+
+/* The tag on a dataset that may include BC (national or global data). */
+.dataset-tag {
+  display: inline-block;
+  margin: 2px 0;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: #fdf0e1;
+  font-size: 12px;
+  color: #7a3e00;
+}
+
+.dataset-preview {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #333;
+}
+
+.datasets-paging {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+/* One dataset's details. */
+.dataset-detail h2 {
+  margin: 8px 0 4px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.dataset-link-button {
+  display: inline-block;
+  margin: 8px 0 4px;
+  padding: 8px 14px;
+  border-radius: 4px;
+  background: #184f95;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.datasets-panel .dataset-link-button {
+  color: #fff;
+}
+
+.dataset-abstract p {
+  margin: 10px 0 4px;
+  white-space: pre-line;
+}
+
+.dataset-section h3 {
+  margin: 14px 0 4px;
+  font-size: 14px;
+}
+
+.dataset-section p {
+  margin: 0 0 6px;
+}
+
+.dataset-subjects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dataset-subjects li {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #eef1f4;
+  font-size: 12.5px;
+}
+
+.dataset-licences,
+.dataset-copies {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.dataset-licence-text {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid #e0e0e0;
+  background: #fafafa;
+  font-size: 12px;
+}
+
+.dataset-attribution {
+  font-size: 12px;
+  color: #555;
+}
+
+/* The key in the map's corner, saying where each shape comes from. */
+.dataset-map-key {
+  position: absolute;
+  left: 12px;
+  bottom: 30px;
+  z-index: 1;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+.dataset-map-key-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dataset-map-key-swatch {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+}
+
+.dataset-map-key-swatch.box {
+  border: 2px solid #184f95;
+  background: rgba(24, 79, 149, 0.08);
+}
+
+.dataset-map-key-swatch.point {
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: #184f95;
+  box-shadow: 0 0 0 1px #184f95;
+}
+
+.dataset-map-key-swatch.place {
+  border: 3px solid #c2410c;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* On a phone the panel and the map are stacked: the list (or the
+   details) first, the map below it, and the page scrolls. */
+@media (max-width: 760px) {
+  .datasets-main {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .datasets-panel {
+    flex: none;
+    overflow-y: visible;
+    border-right: 0;
+    border-bottom: 1px solid #ddd;
+  }
+
+  .dataset-map {
+    flex: none;
+    height: 60vh;
+  }
+
+  /* The map's own credit line takes the bottom of a narrow map, so the key
+     goes to the top. */
+  .dataset-map-key {
+    top: 12px;
+    bottom: auto;
+    right: 12px;
+  }
+
+  .top-bar-name {
+    display: none;
+  }
+}

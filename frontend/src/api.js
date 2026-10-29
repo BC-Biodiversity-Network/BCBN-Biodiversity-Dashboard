@@ -123,6 +123,34 @@ export function fetchSpeciesHexes(key, resolution, { signal, years = null } = {}
   return fetchJson(`/species/${encodeURIComponent(key)}/hexes?${mapParams(resolution, years)}`, signal)
 }
 
+// Fetches one page of Lunaris datasets (/api/datasets). state is the
+// Datasets page's state (see route.js): q, catalogues as a list, wider
+// (also datasets that may include BC, the pending group) and page. The page
+// does not filter by the location classes, so final_class is never sent.
+// Returns the API's answer: { total, pages, results, options, ... }.
+export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
+  const params = new URLSearchParams({ page: String(state.page ?? 1), page_size: String(pageSize) })
+  if (state.q?.trim()) {
+    params.set('q', state.q.trim())
+  }
+  for (const catalogue of state.catalogues ?? []) {
+    params.append('catalogue', catalogue)
+  }
+  params.append('frontend_group', 'bc_data')
+  if (state.wider) {
+    params.append('frontend_group', 'pending')
+  }
+  return fetchJson(`/datasets?${params}`, signal)
+}
+
+// Fetches one Lunaris dataset with every field (/api/datasets/{id}). The id
+// of another copy gives the copy shown, with requested_copy set. Ids can hold
+// slashes (Dryad DOIs), which the API reads as part of the id, so each part
+// of the id is encoded on its own and the slashes are kept.
+export function fetchDataset(id, { signal } = {}) {
+  return fetchJson(`/datasets/${id.split('/').map(encodeURIComponent).join('/')}`, signal)
+}
+
 // Fetches the overview map (records and species per hexagon) at one
 // resolution for a range of years (/api/overview/hexes). With all years the
 // page uses the shipped overview files instead (see App.jsx).

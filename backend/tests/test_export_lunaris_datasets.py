@@ -109,18 +109,18 @@ def test_a_box_over_the_180_degree_line_is_never_a_standard_box():
 
 def test_the_location_type_is_the_first_that_applies():
     """A box, then a point, then a looked-up place with coordinates, then none."""
-    place = {"latitude": 49.0}
-    no_coordinates = {"latitude": None}
+    place = {"latitude": 49.0, "large_area": False, "role": "study_location"}
+    no_coordinates = {"latitude": None, "large_area": False, "role": "study_location"}
     assert ex.location_type([{"w": 1}], [{"lat": 1}], [place]) == ("box", "harvested")
     assert ex.location_type([], [{"lat": 1}], [place]) == ("point", "harvested")
     assert ex.location_type([], [], [no_coordinates, place]) == ("looked_up_place", "our_geonames_lookup")
     assert ex.location_type([], [], [no_coordinates]) == ("none", "")
 
 
-def candidate(name, lat, lon):
+def candidate(name, lat, lon, feature_class="H", feature_code="LK"):
     """Return a made-up GeoNames candidate."""
-    return {"geonameid": 1, "main_name": name, "feature_code": "LK", "country_code": "CA",
-            "admin1_name": "British Columbia", "latitude": lat, "longitude": lon}
+    return {"geonameid": 1, "main_name": name, "feature_class": feature_class, "feature_code": feature_code,
+            "country_code": "CA", "admin1_name": "British Columbia", "latitude": lat, "longitude": lon}
 
 
 def lookup(query, candidates, kinds):
@@ -129,16 +129,48 @@ def lookup(query, candidates, kinds):
             "summary": {"looked_up": query, "category": "both", "candidate_kinds": kinds}}
 
 
-def test_a_place_takes_the_top_candidate_with_coordinates():
-    """The lookup's own top candidate with coordinates, and whether any candidate is in BC."""
+def test_a_place_prefers_the_best_ranked_candidate_in_bc_and_keeps_the_top_one():
+    """A BC candidate lower down is used over a top candidate outside BC; the top one is kept for checking."""
     found = ex.place_from_lookup(
         {"name": "Tern Lake", "as_written": "Tern Lake", "role": "study_location"},
         lookup("Tern Lake", [candidate("No coordinates", None, None), candidate("Tern Lake", 50.0, -95.0),
-                             candidate("Tern Lake BC", 52.0, -125.0)], ["region", "outside_bc", "in_bc"]))
-    assert (found["geonames_name"], found["latitude"], found["kind"]) == ("Tern Lake", 50.0, "outside_bc")
-    assert found["any_candidate_in_bc"] is True and found["role"] == "study_location"
+                             candidate("Tern Lake BC", 52.0, -125.0), candidate("Tern Lake BC 2", 53.0, -126.0)],
+               ["region", "outside_bc", "in_bc", "in_bc"]))
+    assert (found["geonames_name"], found["latitude"], found["kind"], found["choice"]) == (
+        "Tern Lake BC", 52.0, "in_bc", "best_in_bc")
+    assert (found["top_candidate"]["geonames_name"], found["top_candidate"]["kind"]) == ("Tern Lake", "outside_bc")
+    assert found["any_candidate_in_bc"] is True and found["large_area"] is False
+
+
+def test_with_no_candidate_in_bc_the_top_candidate_is_used():
+    """No BC candidate: the lookup's top candidate with coordinates, choice "top"; no candidate at all: empty."""
+    found = ex.place_from_lookup({"name": "Goose Island"}, lookup(
+        "Goose Island", [candidate("Goose Island", 47.0, -53.0, "T", "ISL"), candidate("Goose Island", 60.0, -64.0)],
+        ["outside_bc", "outside_bc"]))
+    assert (found["latitude"], found["kind"], found["choice"], found["any_candidate_in_bc"]) == (
+        47.0, "outside_bc", "top", False)
     empty = ex.place_from_lookup({"name": "Arctic"}, lookup("Arctic", [], []))
-    assert empty["latitude"] is None and empty["any_candidate_in_bc"] is False
+    assert (empty["latitude"], empty["choice"], empty["large_area"]) == (None, "", False)
+    assert empty["top_candidate"]["geonames_id"] is None
+
+
+@pytest.mark.parametrize("feature_class, feature_code, large", [
+    ("A", "PCLI", True), ("A", "PCLD", True), ("A", "ADM1", True), ("L", "CONT", True), ("L", "RGN", True),
+    ("H", "OCN", True), ("H", "SEA", True), ("T", "MTS", True),
+    ("A", "ADM2", False), ("P", "PPL", False), ("T", "ISL", False), ("H", "LK", False), ("H", "BAY", False),
+    ("H", "PCLI", False), (None, None, False),
+])
+def test_large_areas(feature_class, feature_code, large):
+    """Countries, provinces and states, continents, regions, oceans, seas and ranges are large; the class must match too."""
+    assert ex.is_large_area(feature_class, feature_code) is large
+
+
+def test_only_places_that_can_be_drawn_make_a_looked_up_location():
+    """A large area, an author's institution or a place with no coordinates alone gives location none."""
+    small = {"latitude": 49.0, "large_area": False, "role": "study_location"}
+    assert ex.location_type([], [], [{**small, "large_area": True}, {**small, "role": "affiliation"},
+                                     {**small, "latitude": None}]) == ("none", "")
+    assert ex.location_type([], [], [{**small, "large_area": True}, small]) == ("looked_up_place", "our_geonames_lookup")
 
 
 def write_run(folder, places, lookups):
@@ -293,10 +325,17 @@ def test_a_catalogue_with_no_readable_name_stops():
 
 
 def test_the_rows_fit_the_parquet_schema():
-    """build_rows' rows can be written with SCHEMA, in its column order."""
+    """build_rows' rows can be written with SCHEMA, in its column order, looked-up places included."""
     members, facts, harvest, a4, a35 = made_up_export()
-    table = ex.pa.Table.from_pylist(ex.build_rows(members, facts, harvest, {}, a4, a35, NAMES, BC), schema=ex.SCHEMA)
+    place = ex.place_from_lookup({"name": "Canada", "as_written": "Canada", "role": "study_location"}, lookup(
+        "Canada", [candidate("Canada", 60.0, -96.0, "A", "PCLI")], ["contains_bc"]))
+    rows = ex.build_rows(members, facts, harvest, {"oai:datadryad.org:doi:10.1/d": [place]}, a4, a35, NAMES, BC)
+    table = ex.pa.Table.from_pylist(rows, schema=ex.SCHEMA)
     assert table.num_rows == 2
+    written = {r["id"]: r for r in table.to_pylist()}["oai:datadryad.org:doi:10.1/d"]["looked_up_places"][0]
+    assert (written["large_area"], written["top_candidate"]["feature_code"]) == (True, "PCLI")
+    # A dataset whose only looked-up place is a large area has nothing to draw.
+    assert {r["id"]: r["location_type"] for r in rows}["oai:datadryad.org:doi:10.1/d"] == "none"
 
 
 def test_the_names_file_has_every_name_once():

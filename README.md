@@ -972,9 +972,17 @@ It stops if the file already exists (`--replace` writes over it).
   original site (`url`). Every record has one.
 - **Location:** `location_type` is `box`, `point`, `looked_up_place` or
   `none`, the first that applies. Boxes and points are as harvested.
-  `looked_up_places` holds every place name pass 1 found, with our
-  GeoNames lookup's top candidate; `location_source` says
-  `our_geonames_lookup` when the map would draw those.
+  `looked_up_places` holds every place name pass 1 found, with the GeoNames
+  match we use: the best-ranked match in BC if there is one (`choice`
+  `best_in_bc`), else the lookup's top match (`top`). The lookup's own top
+  match is kept in `top_candidate` for checking. `large_area` marks
+  countries, provinces and states, continents, regions, oceans, seas,
+  gulfs and mountain ranges (GeoNames feature class and code, listed in
+  `LARGE_AREA_CODES`), which the page names but does not draw. A place
+  pass 1 marked as an author's institution (`role` `affiliation`) is
+  neither drawn nor named. `location_type` is `looked_up_place` only when
+  some place can be drawn; `location_source` then says
+  `our_geonames_lookup`.
   Each dataset uses only its own location, never another copy's.
   `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
   Two more flag the standard boxes some catalogues seem to give records by

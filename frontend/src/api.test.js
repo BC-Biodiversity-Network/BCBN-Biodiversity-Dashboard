@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, MIN_SEARCH_CHARACTERS, searchSpecies, searchableLength } from './api'
+import { ApiError, MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchSpecies, searchableLength } from './api'
 
 // Each case is a search and the number of letters and digits the API counts
 // in it. The numbers were taken from the API itself (the search_norm macro in
@@ -150,5 +150,32 @@ describe('searchSpecies', () => {
     const error = await searchError()
     expect(error).toBe(aborted)
     expect(error).not.toBeInstanceOf(ApiError)
+  })
+})
+
+describe('the dataset requests', () => {
+  // Records the address each request goes to, and answers with an empty object.
+  function recordUrls() {
+    const urls = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      urls.push(url)
+      return { ok: true, status: 200, json: async () => ({}) }
+    }))
+    return urls
+  }
+
+  it('asks for BC data only, unless the wider datasets are wanted, with every filter value', async () => {
+    const urls = recordUrls()
+    await fetchDatasets({ q: 'eagle', catalogues: ['a', 'b'], wider: false, page: 2 })
+    await fetchDatasets({ q: '', catalogues: [], wider: true, page: 1 })
+    expect(urls[0]).toBe('/api/datasets?page=2&page_size=20&q=eagle&catalogue=a&catalogue=b' +
+      '&frontend_group=bc_data')
+    expect(urls[1]).toBe('/api/datasets?page=1&page_size=20&frontend_group=bc_data&frontend_group=pending')
+  })
+
+  it('keeps the slashes of an id, which the API reads as part of it', async () => {
+    const urls = recordUrls()
+    await fetchDataset('oai:datadryad.org:doi:10.5061/dryad.x y')
+    expect(urls[0]).toBe('/api/datasets/oai%3Adatadryad.org%3Adoi%3A10.5061/dryad.x%20y')
   })
 })

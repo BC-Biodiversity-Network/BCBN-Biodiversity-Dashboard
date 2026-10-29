@@ -34,14 +34,18 @@ The columns:
   final_class, frontend_group
                        from filter 3, for the copy shown
   location_type        box, point, looked_up_place or none: the first that
-                       applies, in that order
+                       applies, in that order; looked_up_place needs a place
+                       that can be drawn (see drawable_place)
   location_source      "harvested" for box and point, "our_geonames_lookup"
                        for looked_up_place, empty for none
   boxes, points        as harvested
-  looked_up_places     every place name pass 1 found, with our GeoNames
-                       lookup's top candidate (its coordinates, name, kind)
-                       and whether any candidate for the name is in BC;
-                       empty for records decided by step 1 rules (no pass 1)
+  looked_up_places     every place name pass 1 found, with the GeoNames
+                       candidate we use for it (see pick_candidate): its
+                       coordinates, name, feature class and code, kind,
+                       whether it is a large area (see LARGE_AREA_CODES),
+                       and the lookup's own top candidate, kept for
+                       checking; empty for records decided by step 1 rules
+                       (no pass 1)
   box_swapped, box_zero_width, box_most_of_world, box_bc_rectangle,
   box_canada_default   odd or standard boxes (see box_flags); true when
                        any of the record's boxes has the flag. The boxes
@@ -100,18 +104,35 @@ MOST_OF_WORLD = 0.5
 # n 82, which are left unflagged.
 CANADA_DEFAULT_BOX = (-141.0, -52.6, 41.7, 83.1)
 CANADA_DEFAULT_MARGIN = 0.5
+# The GeoNames feature codes, by feature class, of places too large to
+# draw as a point: countries, provinces and states (A); continents and
+# regions, such as Pacific Northwest or Kootenay (L); oceans, seas and gulfs
+# (H); and mountain ranges (T). They are listed in the text, not drawn.
+LARGE_AREA_CODES = {
+    "A": {"TERR", "ADM1", "ADM1H"},
+    "L": {"CONT", "RGN", "RGNE", "AREA"},
+    "H": {"OCN", "SEA", "GULF"},
+    "T": {"MTS"},
+}
+# Every country code (PCL, PCLI, PCLD, PCLF, PCLIX, PCLS, PCLH) starts so.
+COUNTRY_CODE_PREFIX = "PCL"
 # DataCite rights URIs that give an access right (open, restricted and so
 # on), not a licence; used only for the printed licence counts.
 ACCESS_RIGHTS_PREFIX = "info:eu-repo/semantics/"
 
 BOX = pa.struct([("w", pa.float64()), ("e", pa.float64()), ("s", pa.float64()), ("n", pa.float64())])
 POINT = pa.struct([("lat", pa.float64()), ("lon", pa.float64())])
+CANDIDATE_FIELDS = [
+    ("geonames_id", pa.int64()), ("geonames_name", pa.string()), ("feature_class", pa.string()),
+    ("feature_code", pa.string()), ("country_code", pa.string()), ("admin1_name", pa.string()),
+    ("latitude", pa.float64()), ("longitude", pa.float64()), ("kind", pa.string()),
+]
 PLACE = pa.struct([
     ("name", pa.string()), ("as_written", pa.string()), ("role", pa.string()),
-    ("looked_up", pa.string()), ("category", pa.string()), ("geonames_id", pa.int64()),
-    ("geonames_name", pa.string()), ("feature_code", pa.string()), ("country_code", pa.string()),
-    ("admin1_name", pa.string()), ("latitude", pa.float64()), ("longitude", pa.float64()),
-    ("kind", pa.string()), ("any_candidate_in_bc", pa.bool_()),
+    ("looked_up", pa.string()), ("category", pa.string()),
+    *CANDIDATE_FIELDS,
+    ("any_candidate_in_bc", pa.bool_()), ("choice", pa.string()), ("large_area", pa.bool_()),
+    ("top_candidate", pa.struct(CANDIDATE_FIELDS)),
 ])
 LICENCE = pa.struct([("name", pa.string()), ("uri", pa.string())])
 COPY = pa.struct([("id", pa.string()), ("source", pa.string()), ("source_name", pa.string()),
@@ -286,35 +307,76 @@ def box_flags(box, shape):
     return flags
 
 
+def is_large_area(feature_class, feature_code):
+    """Return True for a GeoNames place too large to draw as a point (LARGE_AREA_CODES, or any country code)."""
+    if feature_class == "A" and (feature_code or "").startswith(COUNTRY_CODE_PREFIX):
+        return True
+    return (feature_code or "") in LARGE_AREA_CODES.get(feature_class, set())
+
+
+def candidate_fields(candidate, kind):
+    """Return one GeoNames candidate as the fields kept for it (all None for no candidate)."""
+    return {
+        "geonames_id": candidate.get("geonameid"), "geonames_name": candidate.get("main_name"),
+        "feature_class": candidate.get("feature_class"), "feature_code": candidate.get("feature_code"),
+        "country_code": candidate.get("country_code"), "admin1_name": candidate.get("admin1_name"),
+        "latitude": candidate.get("latitude"), "longitude": candidate.get("longitude"), "kind": kind,
+    }
+
+
+def pick_candidate(with_coordinates):
+    """
+    Return (candidate, kind, choice) for one place name from its candidates
+    with coordinates, in the lookup's own ranking: the best-ranked candidate
+    in BC (kind in_bc) if there is one, else the top candidate. choice is
+    "top" when that is the lookup's top candidate, "best_in_bc" when a BC
+    candidate was picked over a top candidate outside BC, and "" when there
+    is no candidate.
+    """
+    if not with_coordinates:
+        return {}, None, ""
+    in_bc = [pair for pair in with_coordinates if pair[1] == "in_bc"]
+    candidate, kind = in_bc[0] if in_bc else with_coordinates[0]
+    return candidate, kind, "top" if candidate is with_coordinates[0][0] else "best_in_bc"
+
+
 def place_from_lookup(place, lookup):
     """
-    Return one pass 1 place with our GeoNames lookup's top candidate (the
-    lookup's own ranking), or empty coordinates when no candidate has any.
-    any_candidate_in_bc says whether any candidate for the name lies in BC.
+    Return one pass 1 place with the GeoNames candidate we use for it (see
+    pick_candidate), or empty coordinates when no candidate has any; whether
+    that candidate is a large area; and the lookup's own top candidate in
+    top_candidate, so the choice can be checked. any_candidate_in_bc says
+    whether any candidate for the name lies in BC.
     """
     candidates = lookup["candidates"]
     kinds = lookup["summary"].get("candidate_kinds", [])
     with_coordinates = [(c, k) for c, k in zip(candidates, kinds)
                         if c.get("latitude") is not None and c.get("longitude") is not None]
-    top, kind = with_coordinates[0] if with_coordinates else ({}, None)
+    candidate, kind, choice = pick_candidate(with_coordinates)
+    top, top_kind = with_coordinates[0] if with_coordinates else ({}, None)
     return {
         "name": place.get("name"), "as_written": place.get("as_written"), "role": place.get("role"),
         "looked_up": lookup["summary"].get("looked_up"), "category": lookup["summary"].get("category"),
-        "geonames_id": top.get("geonameid"), "geonames_name": top.get("main_name"),
-        "feature_code": top.get("feature_code"), "country_code": top.get("country_code"),
-        "admin1_name": top.get("admin1_name"), "latitude": top.get("latitude"),
-        "longitude": top.get("longitude"), "kind": kind,
+        **candidate_fields(candidate, kind),
         "any_candidate_in_bc": any(k == "in_bc" for _, k in with_coordinates),
+        "choice": choice,
+        "large_area": bool(candidate) and is_large_area(candidate.get("feature_class"), candidate.get("feature_code")),
+        "top_candidate": candidate_fields(top, top_kind),
     }
 
 
+def drawable_place(place):
+    """Return True for a looked-up place the map draws: it has coordinates, is not a large area and is not an author's institution."""
+    return place["latitude"] is not None and not place["large_area"] and place["role"] != "affiliation"
+
+
 def location_type(boxes, points, looked_up_places):
-    """Return (location_type, location_source): box, then point, then a looked-up place with coordinates, then none."""
+    """Return (location_type, location_source): box, then point, then a looked-up place that can be drawn, then none."""
     if boxes:
         return "box", "harvested"
     if points:
         return "point", "harvested"
-    if any(p["latitude"] is not None for p in looked_up_places):
+    if any(drawable_place(p) for p in looked_up_places):
         return "looked_up_place", "our_geonames_lookup"
     return "none", ""
 
@@ -458,6 +520,14 @@ def print_counts(frame, changed, shape):
     print(pd.crosstab(frame["final_class"], frame["frontend_group"], margins=True, margins_name="total").to_string())
     print("\nrows per location_type:")
     print(pd.crosstab(frame["location_type"], frame["frontend_group"], margins=True, margins_name="total").to_string())
+    places = pd.DataFrame([place for row in frame["looked_up_places"] for place in row])
+    if not places.empty:
+        print("\nlooked-up places (all records): by choice, large areas, authors' institutions")
+        print("  choice:", places["choice"].value_counts().to_dict())
+        print("  large areas:", int(places["large_area"].sum()), places.loc[places["large_area"], "feature_code"]
+              .value_counts().to_dict())
+        print("  authors' institutions:", int((places["role"] == "affiliation").sum()),
+              "; drawable:", int(places.apply(drawable_place, axis=1).sum()))
     print("\nrows per link_type:")
     print(pd.crosstab(frame["link_type"], frame["frontend_group"], margins=True, margins_name="total").to_string())
     print("\nboxes flagged:", {flag: int(frame[f"box_{flag}"].sum())

@@ -18,8 +18,9 @@ import {
   FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonSizeLabel, hexagonWidthPixels, pickResolution,
 } from './zoomTiers'
 
-// The basemap style. Swap this one line to change providers.
-const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/bright'
+// The basemap style. Swap this one line to change providers (the Datasets
+// page map uses it too).
+export const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/bright'
 
 // Where the map sits when the page opens: the middle of British Columbia,
 // zoomed out far enough to see the whole province.

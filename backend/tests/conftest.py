@@ -164,10 +164,12 @@ BCSEE_WITH_NO_STATUS_SQL = f"""
 # The types of the Lunaris datasets' nested columns, as the export writes them.
 BOX_TYPE = "STRUCT(w DOUBLE, e DOUBLE, s DOUBLE, n DOUBLE)"
 POINT_TYPE = "STRUCT(lat DOUBLE, lon DOUBLE)"
-PLACE_TYPE = ("STRUCT(name VARCHAR, as_written VARCHAR, role VARCHAR, looked_up VARCHAR, "
-              "category VARCHAR, geonames_id BIGINT, geonames_name VARCHAR, feature_code VARCHAR, "
-              "country_code VARCHAR, admin1_name VARCHAR, latitude DOUBLE, longitude DOUBLE, "
-              "kind VARCHAR, any_candidate_in_bc BOOLEAN)")
+CANDIDATE_FIELDS = ("geonames_id BIGINT, geonames_name VARCHAR, feature_class VARCHAR, "
+                    "feature_code VARCHAR, country_code VARCHAR, admin1_name VARCHAR, latitude DOUBLE, "
+                    "longitude DOUBLE, kind VARCHAR")
+PLACE_TYPE = (f"STRUCT(name VARCHAR, as_written VARCHAR, role VARCHAR, looked_up VARCHAR, "
+              f"category VARCHAR, {CANDIDATE_FIELDS}, any_candidate_in_bc BOOLEAN, choice VARCHAR, "
+              f"large_area BOOLEAN, top_candidate STRUCT({CANDIDATE_FIELDS}))")
 COPY_TYPE = "STRUCT(id VARCHAR, source VARCHAR, source_name VARCHAR, link VARCHAR)"
 LICENCE_TYPE = "STRUCT(name VARCHAR, uri VARCHAR)"
 
@@ -191,10 +193,15 @@ DATASETS_SQL = f"""
            CASE WHEN location_type = 'looked_up_place'
                 THEN [{{'name': 'Winnipeg', 'as_written': 'Winnipeg', 'role': 'study_location',
                         'looked_up': 'Winnipeg', 'category': 'outside_bc_only',
-                        'geonames_id': 6183235, 'geonames_name': 'Winnipeg', 'feature_code': 'PPLA',
-                        'country_code': 'CA', 'admin1_name': 'Manitoba', 'latitude': 49.88,
-                        'longitude': -97.15, 'kind': 'outside_bc',
-                        'any_candidate_in_bc': false}}]::{PLACE_TYPE}[]
+                        'geonames_id': 6183235, 'geonames_name': 'Winnipeg', 'feature_class': 'P',
+                        'feature_code': 'PPLA', 'country_code': 'CA', 'admin1_name': 'Manitoba',
+                        'latitude': 49.88, 'longitude': -97.15, 'kind': 'outside_bc',
+                        'any_candidate_in_bc': false, 'choice': 'top', 'large_area': false,
+                        'top_candidate': {{'geonames_id': 6183235, 'geonames_name': 'Winnipeg',
+                                           'feature_class': 'P', 'feature_code': 'PPLA',
+                                           'country_code': 'CA', 'admin1_name': 'Manitoba',
+                                           'latitude': 49.88, 'longitude': -97.15,
+                                           'kind': 'outside_bc'}}}}]::{PLACE_TYPE}[]
                 ELSE []::{PLACE_TYPE}[] END AS looked_up_places,
            false AS box_swapped, false AS box_zero_width, false AS box_most_of_world,
            location_type = 'box' AS box_bc_rectangle, false AS box_canada_default,

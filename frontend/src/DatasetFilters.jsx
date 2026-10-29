@@ -24,15 +24,21 @@ function FilterSection({ title, children }) {
   )
 }
 
-// One checkbox with its label and count.
-function CountedCheckbox({ label, count, checked, onChange }) {
+// One checkbox with its label. The panel shows no counts: its choices only
+// take effect on Apply, so counts next to them would be misleading.
+function Checkbox({ label, checked, onChange }) {
   return (
     <label className="datasets-filter-option">
       <input type="checkbox" checked={checked} onChange={onChange} />
       <span>{label}</span>
-      <span className="datasets-count">{count.toLocaleString()}</span>
     </label>
   )
+}
+
+// Orders catalogue options by their readable name, A to Z, ignoring case
+// and accents.
+function byName(a, b) {
+  return (a.name ?? a.value).localeCompare(b.name ?? b.value, 'en', { sensitivity: 'base' })
 }
 
 // A list with value taken out if it is in it, or added if it is not.
@@ -98,16 +104,18 @@ function sameFilters(a, b) {
 // Enter in a text box) sends them all at once and closes it; Cancel, the
 // Filters button or Escape closes it and drops them. The panel is only
 // mounted while open, so it always starts from the applied filters (state).
-// options are the counts of the applied filters, so they do not change
-// while the user is choosing.
+// options are the API's answer for the applied filters: only the
+// catalogues that have datasets for them are offered (plus any ticked), and
+// the Published note gives their years.
 function FilterPanel({ state, options, onApply, onClose }) {
   const [draft, setDraft] = useState(() => draftFrom(state))
   const [problems, setProblems] = useState({})
   const years = options.published?.years ?? []
   const first = years[0]?.year
   const last = years[years.length - 1]?.year
-  const listedCatalogues = options.catalogue.filter(
-    (option) => option.count > 0 || draft.catalogues.includes(option.value))
+  const listedCatalogues = options.catalogue
+    .filter((option) => option.count > 0 || draft.catalogues.includes(option.value))
+    .sort(byName)
 
   // Changes some of the pending choices.
   function change(changes) {
@@ -127,14 +135,13 @@ function FilterPanel({ state, options, onApply, onClose }) {
 
   return (
     <form id="datasets-filter-panel" className="datasets-filter-panel" onSubmit={apply} aria-label="Filters">
-      <FilterSection title={`Source catalogue (${listedCatalogues.length})`}>
+      <FilterSection title="Source catalogue">
         <fieldset className="datasets-filter-options">
           <legend className="visually-hidden">Source catalogue</legend>
           {listedCatalogues.map((option) => (
-            <CountedCheckbox
+            <Checkbox
               key={option.value}
               label={option.name}
-              count={option.count}
               checked={draft.catalogues.includes(option.value)}
               onChange={() => change({ catalogues: toggled(draft.catalogues, option.value) })}
             />
@@ -176,10 +183,9 @@ function FilterPanel({ state, options, onApply, onClose }) {
 
       <FilterSection title="Access">
         {options.access.map((option) => (
-          <CountedCheckbox
+          <Checkbox
             key={option.value}
             label={ACCESS_LABELS[option.value] ?? option.value}
-            count={option.count}
             checked={draft.access.includes(option.value)}
             onChange={() => change({ access: toggled(draft.access, option.value) })}
           />
@@ -187,9 +193,8 @@ function FilterPanel({ state, options, onApply, onClose }) {
       </FilterSection>
 
       <FilterSection title="Location">
-        <CountedCheckbox
+        <Checkbox
           label="Only datasets that can be shown on the map"
-          count={options.location[0]?.count ?? 0}
           checked={draft.mappable}
           onChange={() => change({ mappable: !draft.mappable })}
         />

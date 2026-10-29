@@ -115,13 +115,27 @@ describe('the Datasets page', () => {
     expect(tags[0].closest('li').textContent).toContain('Golden eagle tracking worldwide')
   })
 
-  it('lists every catalogue with datasets in the Filters panel, with its name and count', async () => {
-    stubList()
+  it('lists the catalogues with datasets in the Filters panel by name, with no counts', async () => {
+    const answer = structuredClone(LIST)
+    answer.options.catalogue = [
+      { value: 'zenodo.org', name: 'Zenodo', count: 9 },
+      { value: 'catalogue.data.gov.bc.ca', name: 'BC Data Catalogue', count: 1 },
+      { value: 'canwin', name: 'Canadian Watershed Information Network (CanWIN)', count: 5 },
+      { value: 'datadryad.org', name: 'Dryad', count: 0 },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => answer })))
     await showPage('?view=datasets')
-    expect(screen.queryByText('Source catalogue (1)')).toBeNull()
+    expect(screen.queryByText('Source catalogue')).toBeNull()
     openFilters()
-    expect(screen.getByText('Source catalogue (1)')).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'BC Data Catalogue 1' })).toBeTruthy()
+    const panel = screen.getByRole('form', { name: 'Filters' })
+    const catalogues = [...panel.querySelector('.datasets-filter-options').querySelectorAll('label')]
+    expect(catalogues.map((label) => label.textContent)).toEqual(
+      ['BC Data Catalogue', 'Canadian Watershed Information Network (CanWIN)', 'Zenodo'])
+    // No counts anywhere in the panel; the result count stays outside it.
+    expect(panel.querySelector('.datasets-count')).toBeNull()
+    expect([...panel.querySelectorAll('label')].map((l) => l.textContent).join(' ')).not.toMatch(/\d/)
+    expect(screen.getByText('2 datasets')).toBeTruthy()
+    expect(screen.getByText(/These datasets were published from 2020 to 2021/)).toBeTruthy()
   })
 
   it('offers relevance only with a search, and keeps the default sort out of the address', async () => {
@@ -160,12 +174,12 @@ describe('the Datasets page', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /^BC Data Catalogue/ }))
     fireEvent.change(screen.getByRole('textbox', { name: 'From' }), { target: { value: '2010' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'salmon' } })
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Only datasets that can be shown on the map 1' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Only datasets that can be shown on the map' }))
     // Nothing is applied or fetched yet; the counts and the button still show the applied filters.
     expect(navigate).not.toHaveBeenCalled()
     expect(urls).toHaveLength(1)
-    expect(screen.getByRole('checkbox', { name: 'Open access 2' }).checked).toBe(true)
+    expect(screen.getByRole('checkbox', { name: 'Open access' }).checked).toBe(true)
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
@@ -183,14 +197,14 @@ describe('the Datasets page', () => {
     stubList()
     const navigate = await showPage('?view=datasets&access=restricted')
     openFilters()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'salmon' } })
     act(closePanel)
     expect(screen.queryByRole('form', { name: 'Filters' })).toBeNull()
     expect(navigate).not.toHaveBeenCalled()
     openFilters()
-    expect(screen.getByRole('checkbox', { name: 'Open access 2' }).checked).toBe(false)
-    expect(screen.getByRole('checkbox', { name: 'Restricted access 0' }).checked).toBe(true)
+    expect(screen.getByRole('checkbox', { name: 'Open access' }).checked).toBe(false)
+    expect(screen.getByRole('checkbox', { name: 'Restricted access' }).checked).toBe(true)
     expect(screen.getByRole('textbox', { name: 'Organism name' }).value).toBe('')
   })
 
@@ -198,7 +212,7 @@ describe('the Datasets page', () => {
     stubList()
     const navigate = await showPage('?view=datasets')
     openFilters()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'to' }), { target: { value: '2020' } })
     fireEvent.submit(screen.getByRole('textbox', { name: 'to' }))
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&year_to=2020&access=open')

@@ -880,6 +880,100 @@ body {
   background: #f4f6f8;
 }
 
+/* The row under the search box: the sort, the Filters button and "Clear
+   all". */
+.datasets-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 2px 0 6px;
+}
+
+.datasets-sort {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.datasets-sort select,
+.datasets-filter-panel input[type="text"] {
+  padding: 4px 6px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.datasets-filters-button,
+.datasets-filter-actions button {
+  padding: 4px 12px;
+  border: 1px solid #184f95;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: #184f95;
+  cursor: pointer;
+}
+
+/* Apply and Cancel at the bottom of the Filters panel; Apply stands out. */
+.datasets-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.datasets-filter-actions .datasets-apply-button {
+  background: #184f95;
+  color: #fff;
+}
+
+.datasets-filters-button.open {
+  background: #184f95;
+  color: #fff;
+}
+
+/* The Filters panel, under the row, above the result count. */
+.datasets-filter-panel {
+  margin: 0 0 8px;
+  padding: 4px 12px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fafbfc;
+}
+
+.datasets-filter-section h3 {
+  margin: 10px 0 4px;
+  font-size: 14px;
+}
+
+.datasets-year-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.datasets-year-form label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.datasets-year-form input {
+  width: 4.5em;
+}
+
+.datasets-organism-input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.datasets-filter-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #555;
+}
+
 /* The filters, each folded under its name. */
 .datasets-filter {
   margin: 0 0 6px;

@@ -165,6 +165,19 @@ def test_large_areas(feature_class, feature_code, large):
     assert ex.is_large_area(feature_class, feature_code) is large
 
 
+def test_mappable_means_the_map_can_draw_something():
+    """A drawn box (a box matching BC's rectangle is drawn, dashed), a point or a drawable place; not an odd box alone."""
+    small_place = {"latitude": 49.0, "large_area": False, "role": "study_location"}
+    bc = {"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}
+    swapped = {"w": -124.0, "e": -123.0, "s": 50.0, "n": 49.0}
+    assert ex.is_mappable([bc], [], [], BC)
+    assert ex.is_mappable([swapped, bc], [], [], BC)
+    assert not ex.is_mappable([swapped], [], [], BC)
+    assert ex.is_mappable([swapped], [{"lat": 49.0, "lon": -123.0}], [], BC)
+    assert ex.is_mappable([], [], [small_place], BC)
+    assert not ex.is_mappable([], [], [{**small_place, "large_area": True}, {**small_place, "role": "affiliation"}], BC)
+
+
 def test_only_places_that_can_be_drawn_make_a_looked_up_location():
     """A large area, an author's institution or a place with no coordinates alone gives location none."""
     small = {"latitude": 49.0, "large_area": False, "role": "study_location"}

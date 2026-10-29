@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchableLength } from './api'
 import DatasetDetail from './DatasetDetail'
+import SortAndFilters from './DatasetFilters'
 import DatasetMap from './DatasetMap'
 import DatasetsFooter from './DatasetsFooter'
 import { describeLocation, issuedLabel, licenceListLabel, plainText } from './datasetText'
@@ -56,46 +57,12 @@ function SearchForm({ initial, onSearch }) {
   )
 }
 
-// The source catalogue filter, folded under its name (open at first): one
-// checkbox per catalogue with its readable name and how many datasets it has
-// for the search, most first (the API's order), in a box that scrolls when
-// the list is long. options come from the API ({ value, count, name }).
-// Catalogues with no datasets for the search are left out unless ticked.
-function CatalogueFilter({ options, selected, onChange }) {
-  const listed = options.filter((option) => option.count > 0 || selected.includes(option.value))
-
-  // Ticks or unticks one value.
-  function toggle(value) {
-    onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value])
-  }
-
-  return (
-    <details className="datasets-filter" open>
-      <summary>
-        Source catalogue ({listed.length}){selected.length > 0 && `, ${selected.length} selected`}
-      </summary>
-      <fieldset className="datasets-filter-options">
-        <legend className="visually-hidden">Source catalogue</legend>
-        {listed.map((option) => (
-          <label key={option.value} className="datasets-filter-option">
-            <input
-              type="checkbox"
-              checked={selected.includes(option.value)}
-              onChange={() => toggle(option.value)}
-            />
-            <span>{option.name}</span>
-            <span className="datasets-count">{option.count.toLocaleString()}</span>
-          </label>
-        ))}
-      </fieldset>
-    </details>
-  )
-}
-
 // One dataset in the list: its title (a link that opens its details), its
 // catalogue, issued date and licence, the start of its abstract, and the
-// "May include BC" tag for a dataset that is not BC data.
-function ResultItem({ result, href, onOpen }) {
+// "May include BC" tag for a dataset that is not BC data. With
+// showOrganisms (while the Organisms filter is in use), also the organism
+// names stored for it, so it is clear why it matched.
+function ResultItem({ result, href, onOpen, showOrganisms }) {
   const issued = issuedLabel(result.issued)
   return (
     <li className="dataset-item">
@@ -118,6 +85,9 @@ function ResultItem({ result, href, onOpen }) {
         {' · '}{licenceListLabel(result.licences)}
       </p>
       <MayIncludeBcTag frontendGroup={result.frontend_group} />
+      {showOrganisms && result.organisms?.length > 0 && (
+        <p className="dataset-meta">Organisms: {result.organisms.join(', ')}</p>
+      )}
       {result.abstract_preview && <p className="dataset-preview">{plainText(result.abstract_preview)}</p>}
     </li>
   )
@@ -264,22 +234,11 @@ export default function DatasetsPage({ search, navigate }) {
               </p>
               <SearchForm key={state.q} initial={state.q} onSearch={(q) => filter({ q })} />
               <WiderSwitch checked={state.wider} onChange={(wider) => filter({ wider })} />
+              <SortAndFilters state={state} options={options ?? null} onChange={filter} />
 
               {list.error && <p className="datasets-error">{errorText(list.error)}</p>}
               {data && (
                 <>
-                  <div className="datasets-filters">
-                    <CatalogueFilter
-                      options={options.catalogue}
-                      selected={state.catalogues}
-                      onChange={(catalogues) => filter({ catalogues })}
-                    />
-                    {state.catalogues.length > 0 && (
-                      <button type="button" className="text-button" onClick={() => filter({ catalogues: [] })}>
-                        Clear the filter
-                      </button>
-                    )}
-                  </div>
                   <p className="datasets-total" aria-live="polite">
                     {data.total === 0
                       ? 'No datasets match.'
@@ -293,6 +252,7 @@ export default function DatasetsPage({ search, navigate }) {
                         result={result}
                         href={datasetsSearch({ ...state, dataset: result.id })}
                         onOpen={openDataset}
+                        showOrganisms={Boolean(state.organism)}
                       />
                     ))}
                   </ol>

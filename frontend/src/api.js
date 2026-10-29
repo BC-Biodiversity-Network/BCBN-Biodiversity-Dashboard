@@ -124,17 +124,37 @@ export function fetchSpeciesHexes(key, resolution, { signal, years = null } = {}
 }
 
 // Fetches one page of Lunaris datasets (/api/datasets). state is the
-// Datasets page's state (see route.js): q, catalogues as a list, wider
-// (also datasets that may include BC, the pending group) and page. The page
-// does not filter by the location classes, so final_class is never sent.
-// Returns the API's answer: { total, pages, results, options, ... }.
+// Datasets page's state (see route.js): q, sort, the filters (catalogues,
+// yearFrom, yearTo, organism, access, mappable), wider (also datasets that
+// may include BC, the pending group) and page. Relevance is only sent with
+// a search. The page does not filter by the location classes, so
+// final_class is never sent. Returns the API's answer: { total, pages,
+// sort, results, options, ... }.
 export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
   const params = new URLSearchParams({ page: String(state.page ?? 1), page_size: String(pageSize) })
   if (state.q?.trim()) {
     params.set('q', state.q.trim())
   }
+  if (state.sort && (state.sort !== 'relevance' || state.q?.trim())) {
+    params.set('sort', state.sort)
+  }
   for (const catalogue of state.catalogues ?? []) {
     params.append('catalogue', catalogue)
+  }
+  if (state.yearFrom != null) {
+    params.set('year_from', String(state.yearFrom))
+  }
+  if (state.yearTo != null) {
+    params.set('year_to', String(state.yearTo))
+  }
+  if (state.organism?.trim()) {
+    params.set('organism', state.organism.trim())
+  }
+  for (const access of state.access ?? []) {
+    params.append('access', access)
+  }
+  if (state.mappable) {
+    params.set('mappable', 'true')
   }
   params.append('frontend_group', 'bc_data')
   if (state.wider) {

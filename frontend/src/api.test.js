@@ -173,6 +173,16 @@ describe('the dataset requests', () => {
     expect(urls[1]).toBe('/api/datasets?page=1&page_size=20&frontend_group=bc_data&frontend_group=pending')
   })
 
+  it('sends the sort and every filter, and relevance only with a search', async () => {
+    const urls = recordUrls()
+    await fetchDatasets({ q: 'eagle', sort: 'title', catalogues: [], yearFrom: 2010, yearTo: null,
+      organism: ' Oncorhynchus ', access: ['open', 'restricted'], mappable: true, wider: false, page: 1 })
+    await fetchDatasets({ q: '', sort: 'relevance', catalogues: [], access: [], wider: false, page: 1 })
+    expect(urls[0]).toBe('/api/datasets?page=1&page_size=20&q=eagle&sort=title&year_from=2010' +
+      '&organism=Oncorhynchus&access=open&access=restricted&mappable=true&frontend_group=bc_data')
+    expect(urls[1]).toBe('/api/datasets?page=1&page_size=20&frontend_group=bc_data')
+  })
+
   it('keeps the slashes of an id, which the API reads as part of it', async () => {
     const urls = recordUrls()
     await fetchDataset('oai:datadryad.org:doi:10.5061/dryad.x y')

@@ -19,20 +19,21 @@ The test data:
     Lunaris datasets (DATASETS_SQL)
         oai:catalogue.data.gov.bc.ca:eagle-nests
                     bc_data, bc_only, "eagle" in the title, a box (BC's
-                    rectangle), issued 2020, a licence and an access right;
+                    rectangle), issued 2020, a licence and open access;
                     another copy oai:open.canada.ca:eagle-copy
         oai:catalogue.hakai.org:salmon
                     bc_data, canada_incl_bc, "eagles" in the abstract, a
-                    point, issued 2022
+                    point, issued 2022, restricted access
         oai:catalogue.data.gov.bc.ca:forest-plots
                     bc_data, bc_and_outside_canada, "Eagle habitat" as a
-                    subject, no location, issued 2018
+                    subject, no location, no issued date, no rights entry
         oai:canwin-datahub.ad.umanitoba.ca:beagle
                     pending, all_canada, "Beagle" (not eagle) in the title,
-                    a looked-up place, issued 2019
+                    a looked-up place, issued 2019, open access
         oai:datadryad.org:doi:10.5061/dryad.golden
                     pending, global, "eagle" in the title, an id with a
-                    slash, issued 2021
+                    slash, issued 2021, open access
+    Only datasets with a location are mappable.
 
 BCSEE_WITH_NO_STATUS_SQL is the BCSEE file as it would be if it also
 listed species whose BCSEE entries have no shown status: it adds CCCC,
@@ -182,7 +183,11 @@ DATASETS_SQL = f"""
                 THEN [{{'name': 'Open Government Licence - British Columbia',
                         'uri': 'https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc'}},
                       {{'name': NULL, 'uri': 'info:eu-repo/semantics/openAccess'}}]::{LICENCE_TYPE}[]
-                ELSE []::{LICENCE_TYPE}[] END AS licences,
+                WHEN id LIKE '%salmon'
+                THEN [{{'name': NULL, 'uri': 'info:eu-repo/semantics/restrictedAccess'}}]::{LICENCE_TYPE}[]
+                WHEN id LIKE '%forest-plots' THEN []::{LICENCE_TYPE}[]
+                ELSE [{{'name': NULL, 'uri': 'info:eu-repo/semantics/openAccess'}}]::{LICENCE_TYPE}[]
+                END AS licences,
            final_class, frontend_group, location_type, location_source,
            CASE WHEN location_type = 'box'
                 THEN [{{'w': -139.5, 'e': -113.5, 's': 48.0, 'n': 60.0}}]::{BOX_TYPE}[]
@@ -206,6 +211,7 @@ DATASETS_SQL = f"""
            false AS box_swapped, false AS box_zero_width, false AS box_most_of_world,
            location_type = 'box' AS box_matches_bc_rectangle, false AS box_matches_canada_extent,
            CASE WHEN location_type = 'box' THEN [191]::BIGINT[] ELSE []::BIGINT[] END AS box_shared_by,
+           location_type <> 'none' AS mappable,
            organisms AS organisms_4b, organisms AS organisms_35b,
            organism_level AS organism_level_4b, organism_level AS organism_level_35b,
            organisms, organism_level,
@@ -227,7 +233,7 @@ DATASETS_SQL = f"""
          'doi', 'canada_incl_bc', 'bc_data', 'point', 'harvested', ['salmon'], 'group'),
         ('oai:catalogue.data.gov.bc.ca:forest-plots', 'Forest plots',
          'Tree measurements in permanent plots.', ['Eagle habitat', 'Forests'],
-         '2018-03-01', 'catalogue.data.gov.bc.ca', 'BC Data Catalogue',
+         NULL, 'catalogue.data.gov.bc.ca', 'BC Data Catalogue',
          'https://catalogue.data.gov.bc.ca/dataset/forest-plots', 'url', 'bc_and_outside_canada',
          'bc_data', 'none', '', []::VARCHAR[], 'none'),
         ('oai:canwin-datahub.ad.umanitoba.ca:beagle', 'Beagle Channel water chemistry',

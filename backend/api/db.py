@@ -51,7 +51,7 @@ REQUIRED_COLUMNS = {
         "source", "source_name", "link", "link_type", "licences", "final_class", "frontend_group",
         "location_type", "location_source", "boxes", "points", "looked_up_places",
         "box_swapped", "box_zero_width", "box_most_of_world", "box_matches_bc_rectangle",
-        "box_matches_canada_extent", "box_shared_by",
+        "box_matches_canada_extent", "box_shared_by", "mappable",
         "organisms_4b", "organisms_35b", "organism_level_4b", "organism_level_35b",
         "organisms", "organism_level", "copy_count", "other_copies",
     ],

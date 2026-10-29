@@ -51,6 +51,9 @@ The columns:
                        what the record's boxes are like (see box_flags);
                        true when any of its boxes has the flag. The boxes
                        themselves are kept as harvested
+  mappable             true when the site's map can draw something for the
+                       dataset (see is_mappable): a box that is drawn, a
+                       point, or a looked-up place that is drawn
   box_shared_by        for each box, in the order of boxes, how many
                        records of the same catalogue in the whole harvest
                        have exactly the same box (this record included)
@@ -151,7 +154,7 @@ SCHEMA = pa.schema([
     ("boxes", pa.list_(BOX)), ("points", pa.list_(POINT)), ("looked_up_places", pa.list_(PLACE)),
     ("box_swapped", pa.bool_()), ("box_zero_width", pa.bool_()), ("box_most_of_world", pa.bool_()),
     ("box_matches_bc_rectangle", pa.bool_()), ("box_matches_canada_extent", pa.bool_()),
-    ("box_shared_by", pa.list_(pa.int64())),
+    ("box_shared_by", pa.list_(pa.int64())), ("mappable", pa.bool_()),
     ("organisms_4b", pa.list_(pa.string())), ("organisms_35b", pa.list_(pa.string())),
     ("organism_level_4b", pa.string()), ("organism_level_35b", pa.string()),
     ("organisms", pa.list_(pa.string())), ("organism_level", pa.string()),
@@ -396,6 +399,22 @@ def drawable_place(place):
     return place["latitude"] is not None and not place["large_area"] and place["role"] != "affiliation"
 
 
+# Boxes with these flags are not drawn on the map (boxes that match BC's
+# rectangle or the Canada-wide extent are drawn, dashed).
+NOT_DRAWN_FLAGS = {"swapped", "zero_width", "most_of_world"}
+
+
+def is_mappable(boxes, points, looked_up_places, shape):
+    """
+    Return True if the site's map can draw something for a dataset: a box
+    without a NOT_DRAWN_FLAGS flag, a point, or a looked-up place that can be
+    drawn (drawable_place). The same rules as describeLocation in the front
+    end's datasetText.js.
+    """
+    return (any(not (box_flags(box, shape) & NOT_DRAWN_FLAGS) for box in boxes) or bool(points)
+            or any(drawable_place(place) for place in looked_up_places))
+
+
 def location_type(boxes, points, looked_up_places):
     """Return (location_type, location_source): box, then point, then a looked-up place that can be drawn, then none."""
     if boxes:
@@ -505,6 +524,7 @@ def build_rows(members, facts, harvest, places, answers_4b, answers_35b, names, 
             "box_matches_bc_rectangle": "matches_bc_rectangle" in flags,
             "box_matches_canada_extent": "matches_canada_extent" in flags,
             "box_shared_by": [(box_counts or {}).get(box_key(row["source"], b), 1) for b in boxes],
+            "mappable": is_mappable(boxes, points, looked_up, shape),
             "organisms_4b": organisms["4b"][0], "organisms_35b": organisms["35b"][0],
             "organism_level_4b": organisms["4b"][1], "organism_level_35b": organisms["35b"][1],
             "organisms": merged_names(organisms["4b"][0], organisms["35b"][0]),
@@ -562,6 +582,8 @@ def print_counts(frame, changed, shape):
               .value_counts().to_dict())
         print("  authors' institutions:", int((places["role"] == "affiliation").sum()),
               "; drawable:", int(places.apply(drawable_place, axis=1).sum()))
+    print("\nrows the map can draw (mappable):")
+    print(pd.crosstab(frame["mappable"], frame["frontend_group"], margins=True, margins_name="total").to_string())
     print("\nrows per link_type:")
     print(pd.crosstab(frame["link_type"], frame["frontend_group"], margins=True, margins_name="total").to_string())
     flag_names = ["swapped", "zero_width", "most_of_world", "matches_bc_rectangle", "matches_canada_extent"]

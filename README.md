@@ -982,7 +982,8 @@ It stops if the file already exists (`--replace` writes over it).
   pass 1 marked as an author's institution (`role` `affiliation`) is
   neither drawn nor named. `location_type` is `looked_up_place` only when
   some place can be drawn; `location_source` then says
-  `our_geonames_lookup`.
+  `our_geonames_lookup`. `mappable` is true when the site's map can draw
+  anything for the dataset (1,955 of the 3,610).
   Each dataset uses only its own location, never another copy's.
   `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
   The page does not draw those.
@@ -1008,25 +1009,42 @@ It stops if the file already exists (`--replace` writes over it).
   are in `backend/pipeline/lunaris/lunaris_catalogue_names.csv`; the
   export stops if a catalogue has none.
 
-`GET /api/datasets?q=&catalogue=&final_class=&frontend_group=&page=&page_size=`
+`GET /api/datasets?q=&sort=&catalogue=&year_from=&year_to=&organism=&access=&mappable=&final_class=&frontend_group=&page=&page_size=`
 (`backend/api/datasets.py`) lists datasets a page at a time (`page_size`
 default 20, at most 100), with `total` and `pages`. Each result has the
-fields a list needs, its `licences` included, and the start of the
-abstract (`abstract_preview`).
+fields a list needs, its `licences` and `organisms` included, and the
+start of the abstract (`abstract_preview`).
 
 - `q` searches the title, abstract and subjects. Every word must start a
   word in them ("eagle" finds "eagles" but not "beagle"). Letter case,
   accents and punctuation are ignored, as in the species search.
-- **Order:** datasets with every word in the title first, then the most
-  recently issued.
-- **Filters:** `catalogue` (a source id), `final_class` and
-  `frontend_group` can each be given more than once. `frontend_group`
-  defaults to `bc_data`.
+- **Sort** (`sort`): `relevance` (datasets with every word in the title
+  first, then the most recently issued; only with `q`, and the default
+  then), `newest` (the default without `q`), `oldest`, or `title` (A to Z,
+  ignoring case and accents). Datasets with no issued date go last, and
+  ties are broken by id, so paging is stable.
+- **Filters:**
+  - `catalogue` (a source id), `final_class`, `frontend_group` and
+    `access` (`open` or `restricted`, from the record's access right) can
+    each be given more than once. `frontend_group` defaults to `bc_data`.
+  - `year_from` and `year_to` give a range of the issued year (when the
+    record was published, not when the data were collected), either end
+    open; datasets with no issued date are left out only when one is
+    given.
+  - `organism` must start a word of one of the organism names stored for
+    the dataset (both filter 2 runs), ignoring case; several words must
+    follow each other in one name.
+  - `mappable=true` keeps only the datasets the map can draw something
+    for (the export's `mappable` column: a box that is drawn, a point, or
+    a looked-up place that is drawn).
 - `options` gives the counts the filter options need: each catalogue
-  (with its readable name), class and front end group. Each filter's counts
-  use the query and the other filters but not its own.
-- **Errors:** a query with fewer than 2 letters or digits, or an unknown
-  filter value, gives 400.
+  (with its readable name), class, front end group and access right, the
+  datasets per issued year (`published`, with `no_date`), and how many are
+  mappable (`location`). Each filter's counts use the query and the other
+  filters but not its own.
+- **Errors:** a query or organism with fewer than 2 letters or digits, an
+  unknown value, `sort=relevance` with no `q`, or `year_from` after
+  `year_to` gives 400.
 
 `GET /api/datasets/{id}` returns one dataset with every column, including
 its location. The id of another copy gives the copy shown, with

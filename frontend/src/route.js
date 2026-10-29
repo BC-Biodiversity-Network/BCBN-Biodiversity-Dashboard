@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from 'react'
 // bar's query string so a link can be shared and the back button works.
 //
 //   (no query)                        the species map, as the site always was
-//   ?view=datasets&q=eagle&catalogue=catalogue.data.gov.bc.ca&wider=1&page=2
-//       &dataset=<id>                 the Datasets page
+//   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
+//       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
+//       &wider=1&page=2&dataset=<id>  the Datasets page
 //
-// catalogue can be given more than once. The query string is used rather
+// catalogue and access can be given more than once; sort is left out for
+// the default order. The query string is used rather
 // than paths such as /datasets so the built site works on any static host,
 // with no rewrite rules.
 
@@ -16,14 +18,33 @@ export function readView(search) {
   return new URLSearchParams(search).get('view') === 'datasets' ? 'datasets' : 'species'
 }
 
-// The Datasets page's state from a query string: { q, catalogues, wider,
-// page, dataset }. Missing or odd values fall back to the defaults.
+// The orders the list can be sorted in. Relevance only makes sense with a
+// search, and is the default then; without one the default is newest.
+export const SORTS = ['relevance', 'newest', 'oldest', 'title']
+
+// Reads a year from the address: a whole number from 1000 to 9999, or null.
+function readYear(text) {
+  const year = Number.parseInt(text ?? '', 10)
+  return Number.isInteger(year) && year >= 1000 && year <= 9999 ? year : null
+}
+
+// The Datasets page's state from a query string: { q, sort, catalogues,
+// yearFrom, yearTo, organism, access, mappable, wider, page, dataset }.
+// Missing or odd values fall back to the defaults (sort '' is the default
+// order).
 export function readDatasetsState(search) {
   const params = new URLSearchParams(search)
   const page = Number.parseInt(params.get('page') ?? '', 10)
+  const sort = params.get('sort') ?? ''
   return {
     q: params.get('q') ?? '',
+    sort: SORTS.includes(sort) ? sort : '',
     catalogues: params.getAll('catalogue'),
+    yearFrom: readYear(params.get('year_from')),
+    yearTo: readYear(params.get('year_to')),
+    organism: params.get('organism') ?? '',
+    access: params.getAll('access'),
+    mappable: params.get('mappable') === '1',
     wider: params.get('wider') === '1',
     page: Number.isFinite(page) && page > 1 ? page : 1,
     dataset: params.get('dataset') || null,
@@ -37,8 +58,26 @@ export function datasetsSearch(state) {
   if (state.q?.trim()) {
     params.set('q', state.q.trim())
   }
+  if (state.sort) {
+    params.set('sort', state.sort)
+  }
   for (const catalogue of state.catalogues ?? []) {
     params.append('catalogue', catalogue)
+  }
+  if (state.yearFrom != null) {
+    params.set('year_from', String(state.yearFrom))
+  }
+  if (state.yearTo != null) {
+    params.set('year_to', String(state.yearTo))
+  }
+  if (state.organism?.trim()) {
+    params.set('organism', state.organism.trim())
+  }
+  for (const access of state.access ?? []) {
+    params.append('access', access)
+  }
+  if (state.mappable) {
+    params.set('mappable', '1')
   }
   if (state.wider) {
     params.set('wider', '1')
@@ -51,6 +90,27 @@ export function datasetsSearch(state) {
   }
   return `?${params}`
 }
+
+// The sort the list is shown in: the one asked for, unless it is relevance
+// with no search (or none was asked for), when it is the default.
+export function shownSort(state) {
+  const searching = Boolean(state.q?.trim())
+  if (!state.sort || (state.sort === 'relevance' && !searching)) {
+    return searching ? 'relevance' : 'newest'
+  }
+  return state.sort
+}
+
+// How many filters of the Filters panel are in use: the catalogue, the
+// published years, the organism, the access and the location each count
+// once.
+export function activeFilterCount(state) {
+  return [state.catalogues?.length > 0, state.yearFrom != null || state.yearTo != null,
+    Boolean(state.organism?.trim()), state.access?.length > 0, Boolean(state.mappable)].filter(Boolean).length
+}
+
+// The changes that clear every filter of the Filters panel.
+export const NO_FILTERS = { catalogues: [], yearFrom: null, yearTo: null, organism: '', access: [], mappable: false }
 
 // Keeps track of the address bar's query string. Returns [search, navigate]:
 // navigate(newSearch) puts a new entry in the browser history (so back

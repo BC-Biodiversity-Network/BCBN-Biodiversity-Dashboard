@@ -1,13 +1,16 @@
 """Tests for the Lunaris dataset endpoints (api/datasets.py): the list's
-keyword search, filters, paging and option counts, the detail by id
+keyword search, sort, filters, paging and option counts, the detail by id
 (including another copy's id and an id with a slash), the errors, and the
 start-up checks on the dataset file. The test datasets are described at
 the top of conftest.py."""
 
 import pytest
 
+from fastapi.testclient import TestClient
+
 from api.datasets import PREVIEW_LENGTH, preview
 from api.db import DataFilesError, open_data
+from api.main import create_app
 from api.settings import Settings
 from conftest import DATASETS_SQL, write_test_data
 
@@ -22,6 +25,11 @@ COPY = "oai:open.canada.ca:eagle-copy"
 def ids(response):
     """The ids of a list response's results, in order."""
     return [result["id"] for result in response.json()["results"]]
+
+
+def ids_of(body):
+    """The ids of a list response body's results, in order."""
+    return [result["id"] for result in body["results"]]
 
 
 def counts(response, name):
@@ -144,6 +152,106 @@ def test_a_page_size_over_the_limit_is_refused(client):
 def test_a_blank_query_lists_everything(client):
     """q given but empty is the same as no query."""
     assert ids(client.get("/api/datasets", params={"q": " "})) == [SALMON, EAGLE_NESTS, FOREST]
+
+
+# --- Sort --------------------------------------------------------------------
+
+BOTH = {"frontend_group": ["bc_data", "pending"]}
+
+
+def test_the_default_sort_is_newest_without_a_search_and_relevance_with_one(client):
+    """Without q the newest first (no issued date last); with q the title matches first."""
+    body = client.get("/api/datasets").json()
+    assert (body["sort"], ids_of(body)) == ("newest", [SALMON, EAGLE_NESTS, FOREST])
+    body = client.get("/api/datasets", params={"q": "eagle"}).json()
+    assert (body["sort"], ids_of(body)) == ("relevance", [EAGLE_NESTS, SALMON, FOREST])
+
+
+@pytest.mark.parametrize("sort, expected", [
+    ("newest", [SALMON, GOLDEN, EAGLE_NESTS, BEAGLE, FOREST]),
+    ("oldest", [BEAGLE, EAGLE_NESTS, GOLDEN, SALMON, FOREST]),
+    ("title", [EAGLE_NESTS, BEAGLE, FOREST, GOLDEN, SALMON]),
+])
+def test_each_sort(client, sort, expected):
+    """Newest and oldest by the issued date, no date always last; title A to Z ignoring case."""
+    assert ids(client.get("/api/datasets", params={**BOTH, "sort": sort})) == expected
+
+
+def test_a_search_can_be_sorted_another_way(client):
+    """With q, newest first instead of the title matches first."""
+    assert ids(client.get("/api/datasets", params={"q": "eagle", "sort": "newest"})) == [SALMON, EAGLE_NESTS, FOREST]
+
+
+def test_ties_are_broken_by_id(tmp_path):
+    """Datasets with the same issued date and title come in id order, so paging is stable."""
+    write_test_data(tmp_path, datasets_sql=f"SELECT * REPLACE ('2020-01-01' AS issued, 'Same' AS title) "
+                                           f"FROM ({DATASETS_SQL})")
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as same:
+        for sort in ["newest", "oldest", "title"]:
+            assert ids(same.get("/api/datasets", params={**BOTH, "sort": sort})) == sorted(
+                [SALMON, GOLDEN, EAGLE_NESTS, BEAGLE, FOREST])
+
+
+# --- Filters ---------------------------------------------------------------
+
+def test_published_years_leave_out_datasets_with_no_date_only_when_set(client):
+    """year_from and year_to are inclusive, either end open; no issued date only counts with no range."""
+    assert ids(client.get("/api/datasets", params={"year_from": 2020})) == [SALMON, EAGLE_NESTS]
+    assert ids(client.get("/api/datasets", params={"year_to": 2020})) == [EAGLE_NESTS]
+    assert ids(client.get("/api/datasets", params={"year_from": 2020, "year_to": 2020})) == [EAGLE_NESTS]
+    published = client.get("/api/datasets", params={"year_from": 2021}).json()["options"]["published"]
+    assert published == {"years": [{"year": 2020, "count": 1}, {"year": 2022, "count": 1}], "no_date": 1}
+
+
+@pytest.mark.parametrize("organism, expected", [
+    ("eagle", [GOLDEN, EAGLE_NESTS]),
+    ("LEUCO", [EAGLE_NESTS]),
+    ("Golden Eagle", [GOLDEN]),
+    ("cephalus", []),
+    ("eagle aquila", []),
+])
+def test_organism_names_match_the_start_of_words(client, organism, expected):
+    """Case-insensitive, from the start of a word, the words following each other in one name."""
+    assert ids(client.get("/api/datasets", params={**BOTH, "organism": organism})) == expected
+
+
+def test_access_filter_and_counts(client):
+    """Open or restricted from the record's access right; a dataset with none is in neither."""
+    response = client.get("/api/datasets", params={"access": "restricted"})
+    assert ids(response) == [SALMON]
+    assert counts(response, "access") == {"open": 1, "restricted": 1}
+    assert counts(client.get("/api/datasets", params=BOTH), "access") == {"open": 3, "restricted": 1}
+
+
+def test_only_datasets_the_map_can_draw(client):
+    """mappable keeps the datasets with something to draw; the count leaves out its own filter."""
+    response = client.get("/api/datasets", params={"mappable": "true"})
+    assert ids(response) == [SALMON, EAGLE_NESTS]
+    assert response.json()["options"]["location"] == [{"value": "mappable", "count": 2}]
+    assert client.get("/api/datasets", params=BOTH).json()["options"]["location"][0]["count"] == 3
+
+
+def test_filters_combine_and_are_echoed(client):
+    """Every filter together, and the response says which were used."""
+    body = client.get("/api/datasets", params={**BOTH, "organism": "eagle", "access": "open", "mappable": "true",
+                                                "year_from": 2015, "sort": "oldest"}).json()
+    assert ids_of(body) == [EAGLE_NESTS]
+    assert body["filters"] == {"catalogue": [], "final_class": [], "frontend_group": ["bc_data", "pending"],
+                               "year_from": 2015, "year_to": None, "organism": "eagle", "access": ["open"],
+                               "mappable": True}
+
+
+@pytest.mark.parametrize("params, message", [
+    ({"sort": "relevance"}, "sort=relevance needs a search"),
+    ({"sort": "random"}, "Unknown sort 'random'"),
+    ({"year_from": 2022, "year_to": 2020}, "year_from (2022) is after year_to (2020)"),
+    ({"access": "closed"}, "Unknown access 'closed'"),
+    ({"organism": "e"}, "organism search needs at least 2 letters"),
+])
+def test_bad_sort_and_filters_give_400(client, params, message):
+    """A sort or filter that cannot be used gives 400 with a clear message."""
+    response = client.get("/api/datasets", params=params)
+    assert response.status_code == 400 and message in response.json()["detail"]
 
 
 # --- The detail ------------------------------------------------------------

@@ -33,13 +33,16 @@ Endpoints so far:
                     the overview map: records and distinct species per H3
                     hexagon at res (4 to 7), optionally for a year range
                     (see overview.py). A bad res or year range gives 400.
-    GET /api/datasets?q=&catalogue=&final_class=&frontend_group=&page=&page_size=
+    GET /api/datasets?q=&sort=&catalogue=&final_class=&frontend_group=&year_from=
+                     &year_to=&organism=&access=&mappable=&page=&page_size=
                     Lunaris datasets matching the keyword q (title,
                     abstract, subjects) and the filters, a page at a time,
-                    with the total and the counts for the filter options
-                    (see datasets.py). frontend_group defaults to bc_data.
-                    A query with fewer than 2 letters or digits, or an
-                    unknown filter value, gives 400.
+                    in the order sort asks for, with the total and the
+                    counts for the filter options (see datasets.py).
+                    frontend_group defaults to bc_data. A query or
+                    organism with fewer than 2 letters or digits, an
+                    unknown value, sort=relevance with no q, or
+                    year_from after year_to gives 400.
     GET /api/datasets/{id}
                     one Lunaris dataset with every field, including its
                     location (see datasets.py). The id of another copy
@@ -158,15 +161,23 @@ def create_app(settings=None):
                  catalogue: list[str] | None = Query(None),
                  final_class: list[str] | None = Query(None),
                  frontend_group: list[str] | None = Query(None),
+                 sort: str | None = Query(None),
+                 year_from: int | None = Query(None, ge=1000, le=9999),
+                 year_to: int | None = Query(None, ge=1000, le=9999),
+                 organism: str | None = Query(None, max_length=200),
+                 access: list[str] | None = Query(None),
+                 mappable: bool = Query(False),
                  page: int = Query(1, ge=1),
                  page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)):
-        """Return one page of Lunaris datasets matching q and the filters,
-        datasets with every word in the title first, then the most recently
-        issued (see datasets.py). Each filter can be given more than once;
-        frontend_group defaults to bc_data."""
+        """Return one page of Lunaris datasets matching q and the filters, in
+        the order sort asks for (relevance by default with q, else newest;
+        see datasets.py). catalogue, final_class, frontend_group and access
+        can each be given more than once; frontend_group defaults to
+        bc_data."""
         try:
-            return list_datasets(request.app.state.data, q, catalogue, final_class,
-                                 frontend_group, page, page_size)
+            return list_datasets(request.app.state.data, q, catalogue, final_class, frontend_group,
+                                 page, page_size, sort=sort, year_from=year_from, year_to=year_to,
+                                 organism=organism, access=access, mappable=mappable)
         except (QueryTooShort, DatasetsRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
 

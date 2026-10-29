@@ -39,7 +39,15 @@ const LIST = {
       { value: 'datadryad.org', name: 'Dryad', count: 0 }],
     final_class: [{ value: 'bc_only', count: 1 }, { value: 'global', count: 0 }],
     frontend_group: [{ value: 'bc_data', count: 1 }, { value: 'pending', count: 2 }],
+    access: [{ value: 'open', count: 2 }, { value: 'restricted', count: 0 }],
+    published: { years: [{ year: 2020, count: 1 }, { year: 2021, count: 1 }], no_date: 0 },
+    location: [{ value: 'mappable', count: 1 }],
   },
+}
+
+// Opens the Filters panel.
+function openFilters() {
+  fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
 }
 
 // Answers every request with LIST, recording the addresses asked for.
@@ -90,7 +98,9 @@ describe('the Datasets page', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'salmon' } })
     fireEvent.click(screen.getByRole('button', { name: 'Search' }))
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=salmon')
+    openFilters()
     fireEvent.click(screen.getByRole('checkbox', { name: /^BC Data Catalogue/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&catalogue=catalogue.data.gov.bc.ca')
     fireEvent.click(screen.getByRole('link', { name: 'Bald Eagle nest survey' }))
     expect(navigate).toHaveBeenLastCalledWith(
@@ -105,11 +115,139 @@ describe('the Datasets page', () => {
     expect(tags[0].closest('li').textContent).toContain('Golden eagle tracking worldwide')
   })
 
-  it('lists every catalogue with datasets, most first, with its name and count', async () => {
+  it('lists every catalogue with datasets in the Filters panel, with its name and count', async () => {
     stubList()
     await showPage('?view=datasets')
+    expect(screen.queryByText('Source catalogue (1)')).toBeNull()
+    openFilters()
     expect(screen.getByText('Source catalogue (1)')).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'BC Data Catalogue 1' })).toBeTruthy()
+  })
+
+  it('offers relevance only with a search, and keeps the default sort out of the address', async () => {
+    stubList()
+    let navigate = await showPage('?view=datasets')
+    const sort = screen.getByRole('combobox', { name: 'Sort by' })
+    expect([...sort.options].map((o) => o.textContent)).toEqual(['Newest first', 'Oldest first', 'Title A-Z'])
+    expect(sort.value).toBe('newest')
+    fireEvent.change(sort, { target: { value: 'title' } })
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&sort=title')
+    cleanup()
+    navigate = await showPage('?view=datasets&q=eagle&sort=oldest&page=3')
+    const searched = screen.getByRole('combobox', { name: 'Sort by' })
+    expect([...searched.options].map((o) => o.value)).toEqual(['relevance', 'newest', 'oldest', 'title'])
+    fireEvent.change(searched, { target: { value: 'relevance' } })
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle')
+  })
+
+  it('counts the filters in use and clears them all, keeping the search and sort', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&q=eagle&sort=title&catalogue=a&catalogue=b&organism=salmon' +
+      '&mappable=1')
+    expect(screen.getByRole('button', { name: 'Filters (3)' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle&sort=title')
+  })
+
+  it('keeps every change in the panel pending, then applies them all at once and closes', async () => {
+    const urls = stubList()
+    const navigate = await showPage('?view=datasets&sort=title&page=2')
+    openFilters()
+    expect(screen.getByText(/When the record was published, not when the data were collected/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Apply' })).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^BC Data Catalogue/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'From' }), { target: { value: '2010' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'salmon' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Only datasets that can be shown on the map 1' }))
+    // Nothing is applied or fetched yet; the counts and the button still show the applied filters.
+    expect(navigate).not.toHaveBeenCalled()
+    expect(urls).toHaveLength(1)
+    expect(screen.getByRole('checkbox', { name: 'Open access 2' }).checked).toBe(true)
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&sort=title&catalogue=catalogue.data.gov.bc.ca' +
+      '&year_from=2010&organism=salmon&access=open&mappable=1')
+    expect(screen.queryByRole('form', { name: 'Filters' })).toBeNull()
+  })
+
+  it.each([
+    ['Cancel', () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))],
+    ['the Filters button', () => fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))],
+    ['Escape', () => fireEvent.keyDown(document, { key: 'Escape' })],
+  ])('closing the panel with %s drops the pending changes', async (way, closePanel) => {
+    stubList()
+    const navigate = await showPage('?view=datasets&access=restricted')
+    openFilters()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'salmon' } })
+    act(closePanel)
+    expect(screen.queryByRole('form', { name: 'Filters' })).toBeNull()
+    expect(navigate).not.toHaveBeenCalled()
+    openFilters()
+    expect(screen.getByRole('checkbox', { name: 'Open access 2' }).checked).toBe(false)
+    expect(screen.getByRole('checkbox', { name: 'Restricted access 0' }).checked).toBe(true)
+    expect(screen.getByRole('textbox', { name: 'Organism name' }).value).toBe('')
+  })
+
+  it('applies everything when Enter is pressed in the Published or Organisms box', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets')
+    openFilters()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Open access 2' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'to' }), { target: { value: '2020' } })
+    fireEvent.submit(screen.getByRole('textbox', { name: 'to' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&year_to=2020&access=open')
+    cleanup()
+    const again = await showPage('?view=datasets')
+    openFilters()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'Oncorhynchus' } })
+    fireEvent.submit(screen.getByRole('textbox', { name: 'Organism name' }))
+    expect(again).toHaveBeenLastCalledWith('?view=datasets&organism=Oncorhynchus')
+  })
+
+  it('keeps the panel open and applies nothing while a year or organism is wrong', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets')
+    openFilters()
+    fireEvent.change(screen.getByRole('textbox', { name: 'From' }), { target: { value: '2021' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'to' }), { target: { value: '2015' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Organism name' }), { target: { value: 'e' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(screen.getByText('The first year must not be after the second.')).toBeTruthy()
+    expect(screen.getByText('Type at least 2 letters or digits.')).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('closes without a new address when nothing changed', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&access=open')
+    openFilters()
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(navigate).not.toHaveBeenCalled()
+    expect(screen.queryByRole('form', { name: 'Filters' })).toBeNull()
+  })
+
+  it('clears the applied filters at once with "Clear all", closing the panel', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&access=open&mappable=1')
+    openFilters()
+    fireEvent.click(screen.getByRole('checkbox', { name: /^BC Data Catalogue/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets')
+    expect(screen.queryByRole('form', { name: 'Filters' })).toBeNull()
+  })
+
+  it('shows the organism names of each result while the organism filter is in use', async () => {
+    stubList()
+    LIST.results[0].organisms = ['bald eagle', 'Haliaeetus leucocephalus']
+    await showPage('?view=datasets&organism=haliaeetus')
+    expect(screen.getByText('Organisms: bald eagle, Haliaeetus leucocephalus')).toBeTruthy()
+    delete LIST.results[0].organisms
   })
 
   it('does not send a search that is too short', async () => {

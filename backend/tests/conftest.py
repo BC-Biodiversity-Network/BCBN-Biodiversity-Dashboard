@@ -204,7 +204,8 @@ DATASETS_SQL = f"""
                                            'kind': 'outside_bc'}}}}]::{PLACE_TYPE}[]
                 ELSE []::{PLACE_TYPE}[] END AS looked_up_places,
            false AS box_swapped, false AS box_zero_width, false AS box_most_of_world,
-           location_type = 'box' AS box_bc_rectangle, false AS box_canada_default,
+           location_type = 'box' AS box_matches_bc_rectangle, false AS box_matches_canada_extent,
+           CASE WHEN location_type = 'box' THEN [191]::BIGINT[] ELSE []::BIGINT[] END AS box_shared_by,
            organisms AS organisms_4b, organisms AS organisms_35b,
            organism_level AS organism_level_4b, organism_level AS organism_level_35b,
            organisms, organism_level,

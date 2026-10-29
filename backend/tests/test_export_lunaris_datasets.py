@@ -89,11 +89,11 @@ def test_links():
     ({"w": -123.0, "e": -123.0, "s": 49.0, "n": 49.0}, {"zero_width"}),
     ({"w": -180.0, "e": 180.0, "s": -90.0, "n": 90.0}, {"most_of_world"}),
     ({"w": -180.0, "e": 180.0, "s": 0.0, "n": 80.0}, set()),
-    ({"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}, {"bc_rectangle"}),
-    ({"w": -139.06, "e": -114.03, "s": 60.0, "n": 48.3}, {"bc_rectangle", "swapped"}),
+    ({"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}, {"matches_bc_rectangle"}),
+    ({"w": -139.06, "e": -114.03, "s": 60.0, "n": 48.3}, {"matches_bc_rectangle", "swapped"}),
     ({"w": -140.5, "e": -113.5, "s": 48.0, "n": 60.0}, set()),
-    ({"w": -141.003, "e": -52.6174, "s": 41.6755, "n": 83.1139}, {"canada_default"}),
-    ({"w": -141.02, "e": -52.62, "s": 41.68, "n": 83.14}, {"canada_default"}),
+    ({"w": -141.003, "e": -52.6174, "s": 41.6755, "n": 83.1139}, {"matches_canada_extent"}),
+    ({"w": -141.02, "e": -52.62, "s": 41.68, "n": 83.14}, {"matches_canada_extent"}),
     ({"w": -140.0, "e": -50.0, "s": 42.0, "n": 82.0}, set()),
 ])
 def test_box_flags(box, flags):
@@ -102,9 +102,9 @@ def test_box_flags(box, flags):
     assert ex.box_flags(box, BC) == flags
 
 
-def test_a_box_over_the_180_degree_line_is_never_a_standard_box():
+def test_a_box_over_the_180_degree_line_never_matches_the_canada_extent():
     """Like step 1's BC rectangle, the Canada-wide extent never crosses the 180 degree line."""
-    assert not ex.is_canada_default({"w": 141.0, "e": -52.6, "s": 41.7, "n": 83.1})
+    assert not ex.is_canada_extent({"w": 141.0, "e": -52.6, "s": 41.7, "n": 83.1})
 
 
 def test_the_location_type_is_the_first_that_applies():
@@ -292,7 +292,7 @@ def test_build_rows_handles_missing_fields_and_answers():
     assert row["other_copies"] == [] and row["copy_count"] == 1
 
 
-def test_build_rows_carries_the_licences_and_standard_box_flags():
+def test_build_rows_carries_the_licences_box_flags_and_shared_counts():
     """The shown copy's own licences and box flags; the box is kept as harvested."""
     members, facts, harvest, a4, a35 = made_up_export()
     licences = [{"name": "CC0 1.0", "uri": None}, {"name": None, "uri": "info:eu-repo/semantics/openAccess"}]
@@ -302,18 +302,35 @@ def test_build_rows_carries_the_licences_and_standard_box_flags():
     row = {r["id"]: r for r in ex.build_rows(members, facts, harvest, {}, a4, a35, NAMES, BC)}[
         "oai:datadryad.org:doi:10.1/d"]
     assert row["licences"] == licences and row["boxes"] == [canada]
-    assert (row["box_canada_default"], row["box_bc_rectangle"], row["location_type"]) == (True, False, "box")
+    assert (row["box_matches_canada_extent"], row["box_matches_bc_rectangle"], row["location_type"]) == (
+        True, False, "box")
+    assert row["box_shared_by"] == [1]
 
 
-def test_only_standard_boxes():
+def test_box_counts_count_records_per_catalogue_and_exact_box(tmp_path):
+    """Records of one catalogue with exactly the same box are counted together; other catalogues apart."""
+    bc = {"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}
+    near = {"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.1}
+    ex.pa.Table.from_pylist([
+        {"id": "oai:canwin:1", "boxes": [bc, bc]}, {"id": "oai:canwin:2", "boxes": [bc]},
+        {"id": "oai:canwin:3", "boxes": [near]}, {"id": "oai:other:1", "boxes": [bc]},
+        {"id": "oai:other:2", "boxes": None},
+    ], schema=ex.pa.schema([("id", ex.pa.string()), ("boxes", ex.pa.list_(ex.BOX))])).to_pandas().to_parquet(
+        tmp_path / "harvest.parquet")
+    counts = ex.read_box_counts(tmp_path / "harvest.parquet")
+    assert counts[ex.box_key("canwin", bc)] == 2 and counts[ex.box_key("canwin", near)] == 1
+    assert counts[ex.box_key("other", bc)] == 1
+
+
+def test_only_bc_or_canada_boxes():
     """True only when every box is BC's rectangle or the Canada-wide extent and there is no point."""
     bc = {"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}
     canada = {"w": -141.0, "e": -52.6, "s": 41.7, "n": 83.1}
     small = {"w": -124.0, "e": -123.0, "s": 49.0, "n": 50.0}
-    assert ex.only_standard_boxes({"boxes": [bc, canada], "points": [], "shape": BC})
-    assert not ex.only_standard_boxes({"boxes": [bc, small], "points": [], "shape": BC})
-    assert not ex.only_standard_boxes({"boxes": [bc], "points": [{"lat": 49.0, "lon": -123.0}], "shape": BC})
-    assert not ex.only_standard_boxes({"boxes": [], "points": [], "shape": BC})
+    assert ex.only_bc_or_canada_boxes({"boxes": [bc, canada], "points": [], "shape": BC})
+    assert not ex.only_bc_or_canada_boxes({"boxes": [bc, small], "points": [], "shape": BC})
+    assert not ex.only_bc_or_canada_boxes({"boxes": [bc], "points": [{"lat": 49.0, "lon": -123.0}], "shape": BC})
+    assert not ex.only_bc_or_canada_boxes({"boxes": [], "points": [], "shape": BC})
 
 
 def test_a_catalogue_with_no_readable_name_stops():

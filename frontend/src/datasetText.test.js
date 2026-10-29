@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  LICENCE_NAME_LENGTH, boxIssue, describeLocation, issuedLabel, licenceListLabel, placeLabel,
+  LICENCE_NAME_LENGTH, boxKind, describeLocation, issuedLabel, licenceListLabel, placeLabel,
   plainText, readLicence, readLicences, shorten,
 } from './datasetText'
 
@@ -104,18 +104,18 @@ describe('licences', () => {
 describe('boxes', () => {
   it.each([
     [{ w: -124, e: -123, s: 49, n: 50 }, null],
-    [{ w: -139.5, e: -113.5, s: 48, n: 60 }, 'bc_rectangle'],
-    [{ w: -139.06, e: -114.03, s: 60, n: 48.3 }, 'bc_rectangle'],
+    [{ w: -139.5, e: -113.5, s: 48, n: 60 }, 'matches_bc_rectangle'],
+    [{ w: -139.06, e: -114.03, s: 60, n: 48.3 }, 'matches_bc_rectangle'],
     [{ w: -140.5, e: -113.5, s: 48, n: 60 }, null],
-    [{ w: -141.003, e: -52.6174, s: 41.6755, n: 83.1139 }, 'canada_default'],
+    [{ w: -141.003, e: -52.6174, s: 41.6755, n: 83.1139 }, 'matches_canada_extent'],
     [{ w: -140, e: -50, s: 42, n: 82 }, null],
     [{ w: -124, e: -123, s: 50, n: 49 }, 'swapped'],
     [{ w: 170, e: -170, s: 50, n: 60 }, null],
     [{ w: -123, e: -123, s: 49, n: 49 }, 'zero_width'],
     [{ w: -180, e: 180, s: -90, n: 90 }, 'most_of_world'],
-  ])('box %o is %s', (box, issue) => {
+  ])('box %o is %s', (box, kind) => {
     // The same cases as test_box_flags in the export's tests.
-    expect(boxIssue(box)).toBe(issue)
+    expect(boxKind(box)).toBe(kind)
   })
 })
 
@@ -136,13 +136,27 @@ describe('where the location comes from', () => {
     expect(location.notes).toEqual(['Extent: from the CanWIN record.'])
   })
 
-  it('does not draw a standard BC or Canada box, and says why', () => {
-    const bc = describeLocation(dataset({ boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }] }))
-    expect(bc.boxes).toEqual([])
-    expect(bc.notes).toEqual([
-      "Extent: whole of BC (standard box used by CanWIN, not the dataset's real extent). Not drawn."])
-    const canada = describeLocation(dataset({ boxes: [{ w: -141, e: -52.6, s: 41.7, n: 83.1 }] }))
-    expect(canada.notes).toEqual(['Extent: all of Canada (standard box used by CanWIN). Not drawn.'])
+  it('draws a box matching all of BC or all of Canada dashed, with how many records share it', () => {
+    const bc = describeLocation(dataset({ boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }], box_shared_by: [620] }))
+    expect([bc.boxes, bc.matchingBoxes]).toEqual([[], [{ w: -139.5, e: -113.5, s: 48, n: 60 }]])
+    expect(bc.notes).toEqual(['Extent: whole of BC. The box covers all of BC; CanWIN uses this same box for ' +
+      "620 of its records in Lunaris, so it may not show where this dataset's data actually are."])
+    const canada = describeLocation(dataset({ boxes: [{ w: -141, e: -52.6, s: 41.7, n: 83.1 }], box_shared_by: [951] }))
+    expect(canada.notes).toEqual(['Extent: all of Canada. The box covers all of Canada; CanWIN uses this same ' +
+      "box for 951 of its records in Lunaris, so it may not show where this dataset's data actually are."])
+  })
+
+  it('states only what the box covers when no other record shares it, and puts swapped edges back', () => {
+    const location = describeLocation(dataset({ boxes: [{ w: -139.06, e: -114.03, s: 60, n: 48.3 }], box_shared_by: [1] }))
+    expect(location.notes).toEqual(['Extent: whole of BC. The box covers all of BC.'])
+    expect(location.matchingBoxes).toEqual([{ w: -139.06, e: -114.03, s: 48.3, n: 60 }])
+  })
+
+  it('draws a solid box and a dashed one side by side', () => {
+    const location = describeLocation(dataset({
+      boxes: [{ w: -124, e: -123, s: 49, n: 50 }, { w: -139.5, e: -113.5, s: 48, n: 60 }], box_shared_by: [1, 620] }))
+    expect([location.boxes.length, location.matchingBoxes.length]).toEqual([1, 1])
+    expect(location.notes[0]).toBe('Extent: from the CanWIN record.')
   })
 
   it('writes an odd box as harvested and says why it is not drawn', () => {

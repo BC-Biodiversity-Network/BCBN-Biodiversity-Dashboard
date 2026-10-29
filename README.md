@@ -985,12 +985,17 @@ It stops if the file already exists (`--replace` writes over it).
   `our_geonames_lookup`.
   Each dataset uses only its own location, never another copy's.
   `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
-  Two more flag the standard boxes some catalogues seem to give records by
-  default (mostly CanWIN and open.canada.ca): `box_bc_rectangle`, BC's
-  bounding rectangle within 1 degree as in step 1 (195 datasets), and
-  `box_canada_default`, the Canada-wide extent w -141, e -52.6, s 41.7,
-  n 83.1 within 0.5 degrees (236). The boxes themselves are kept as
-  harvested; 430 datasets have no location but such boxes.
+  The page does not draw those.
+  `box_matches_bc_rectangle` marks a box that matches BC's bounding
+  rectangle within 1 degree, as in step 1 (195 datasets), and
+  `box_matches_canada_extent` one that matches the Canada-wide extent
+  w -141, e -52.6, s 41.7, n 83.1 within 0.5 degrees (236). Some datasets
+  really do cover all of BC or Canada, but some catalogues (mostly CanWIN
+  and open.canada.ca) use the same box for hundreds of records, so
+  `box_shared_by` gives, for each box, how many records of the same
+  catalogue in the whole harvest have exactly that box. The page draws
+  these boxes dashed and states those facts. The boxes themselves are
+  kept as harvested; 430 datasets have no location but such boxes.
 - **Licences:** `licences` holds every DataCite rightsList entry, its
   `name` and `uri` exactly as harvested (`null` when missing). Most
   datasets also have an entry with no name whose URI is an access right

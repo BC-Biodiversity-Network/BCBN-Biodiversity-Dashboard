@@ -112,7 +112,7 @@ def test_a_result_has_the_list_fields_and_a_preview(client):
     assert (result["source_name"], result["link_type"], result["location_type"], result["copy_count"]) == (
         "BC Data Catalogue", "url", "box", 2)
     assert [licence["name"] for licence in result["licences"]] == ["Open Government Licence - British Columbia", None]
-    assert "box_bc_rectangle" not in result
+    assert "box_matches_bc_rectangle" not in result
 
 
 def test_preview_cuts_at_a_space():
@@ -152,7 +152,8 @@ def test_the_detail_has_every_field(client):
     """Every column of the file, the location included, and requested_copy None."""
     body = client.get(f"/api/datasets/{EAGLE_NESTS}").json()
     assert body["boxes"] == [{"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}]
-    assert (body["box_bc_rectangle"], body["box_canada_default"]) == (True, False)
+    assert (body["box_matches_bc_rectangle"], body["box_matches_canada_extent"], body["box_shared_by"]) == (
+        True, False, [191])
     assert body["licences"][1] == {"name": None, "uri": "info:eu-repo/semantics/openAccess"}
     assert body["organisms"] == ["bald eagle", "Haliaeetus leucocephalus"]
     assert body["other_copies"][0]["id"] == COPY and body["requested_copy"] is None

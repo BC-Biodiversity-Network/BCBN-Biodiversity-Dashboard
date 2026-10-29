@@ -229,7 +229,8 @@ export default function DatasetsPage({ search, navigate }) {
     mapMessage = 'Select a dataset to see its location here.'
   } else if (detail.loading) {
     mapMessage = 'Loading the dataset...'
-  } else if (location && location.boxes.length + location.points.length + location.places.length === 0) {
+  } else if (location && location.boxes.length + location.matchingBoxes.length + location.points.length
+      + location.places.length === 0) {
     mapMessage = 'Nothing to draw for this dataset. See Location for why.'
   }
 

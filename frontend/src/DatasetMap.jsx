@@ -7,8 +7,8 @@ import { BASEMAP_STYLE, INITIAL_VIEW_STATE } from './HexMap'
 import { placeLabel } from './datasetText'
 
 // The colours of what the map draws: the record's own boxes and points in
-// the site's blue, the places our lookup found in orange rings, so the two
-// never look alike.
+// the site's blue (boxes that match all of BC or all of Canada dashed), the
+// places our lookup found in orange rings, so the two never look alike.
 const RECORD_COLOUR = '#184f95'
 const LOOKED_UP_COLOUR = '#c2410c'
 
@@ -19,6 +19,16 @@ const FIT_MAX_ZOOM = 9
 // The box layers: a light fill and a solid outline.
 const BOX_FILL = { id: 'dataset-box-fill', type: 'fill', paint: { 'fill-color': RECORD_COLOUR, 'fill-opacity': 0.08 } }
 const BOX_LINE = { id: 'dataset-box-line', type: 'line', paint: { 'line-color': RECORD_COLOUR, 'line-width': 2 } }
+// Boxes that match BC's rectangle or the Canada-wide extent: a fainter
+// fill and a dashed outline.
+const MATCHING_BOX_FILL = {
+  id: 'dataset-matching-box-fill', type: 'fill', paint: { 'fill-color': RECORD_COLOUR, 'fill-opacity': 0.04 },
+}
+const MATCHING_BOX_LINE = {
+  id: 'dataset-matching-box-line',
+  type: 'line',
+  paint: { 'line-color': RECORD_COLOUR, 'line-width': 2, 'line-dasharray': [3, 2] },
+}
 // The record's points: filled dots.
 const POINT_LAYER = {
   id: 'dataset-points',
@@ -58,11 +68,12 @@ function pointFeature(longitude, latitude, label = '') {
 }
 
 // The GeoJSON of everything drawn for a location (see describeLocation):
-// { boxes, points, places }, each a FeatureCollection.
+// { boxes, matchingBoxes, points, places }, each a FeatureCollection.
 export function locationGeoJson(location) {
   const collection = (features) => ({ type: 'FeatureCollection', features })
   return {
     boxes: collection((location?.boxes ?? []).map(boxFeature)),
+    matchingBoxes: collection((location?.matchingBoxes ?? []).map(boxFeature)),
     points: collection((location?.points ?? []).map((point) => pointFeature(point.lon, point.lat))),
     places: collection((location?.places ?? []).map(
       (place) => pointFeature(place.longitude, place.latitude, placeLabel(place)))),
@@ -83,7 +94,7 @@ export function boundsOfLocation(geojson) {
     south = Math.min(south, lat)
     north = Math.max(north, lat)
   }
-  for (const feature of geojson.boxes.features) {
+  for (const feature of [...geojson.boxes.features, ...geojson.matchingBoxes.features]) {
     feature.geometry.coordinates[0].forEach(take)
   }
   for (const feature of [...geojson.points.features, ...geojson.places.features]) {
@@ -97,7 +108,10 @@ export function boundsOfLocation(geojson) {
 function MapKey({ geojson, sourceName }) {
   const lines = []
   if (geojson.boxes.features.length > 0) {
-    lines.push(['box', `Extent from the ${sourceName} record`])
+    lines.push(['box', `Solid line: extent from the ${sourceName} record`])
+  }
+  if (geojson.matchingBoxes.features.length > 0) {
+    lines.push(['matching-box', `Dashed line: extent from the ${sourceName} record that covers all of BC or all of Canada`])
   }
   if (geojson.points.features.length > 0) {
     lines.push(['point', `Point from the ${sourceName} record`])
@@ -166,6 +180,10 @@ export default function DatasetMap({ location, datasetId, sourceName, message })
         onMouseMove={handleHover}
         onMouseLeave={() => setHovered(null)}
       >
+        <Source id="dataset-matching-boxes" type="geojson" data={geojson.matchingBoxes}>
+          <Layer {...MATCHING_BOX_FILL} />
+          <Layer {...MATCHING_BOX_LINE} />
+        </Source>
         <Source id="dataset-boxes" type="geojson" data={geojson.boxes}>
           <Layer {...BOX_FILL} />
           <Layer {...BOX_LINE} />

@@ -179,14 +179,14 @@ export function licenceListLabel(entries) {
 // BC's bounding rectangle and margin, the same as step 1 of the BC filter
 // (BcShape.rectangle of bc_boundary_gbif.wkt, and BC_RECTANGLE_MARGIN in
 // backend/pipeline/lunaris/bc_filter_rules.py), and the Canada-wide extent
-// and margin of the export (CANADA_DEFAULT_BOX and CANADA_DEFAULT_MARGIN in
+// and margin of the export (CANADA_EXTENT_BOX and CANADA_EXTENT_MARGIN in
 // export_lunaris_datasets.py). The export flags a dataset when any of its
 // boxes matches; the page needs to know which box, so it checks each box
 // again with the same numbers. A test checks these give the export's flags.
 const BC_RECTANGLE = { w: -139.12771, s: 48.20636, e: -114.02091, n: 60.02025 }
 const BC_RECTANGLE_MARGIN = 1.0
-const CANADA_DEFAULT_BOX = { w: -141.0, e: -52.6, s: 41.7, n: 83.1 }
-const CANADA_DEFAULT_MARGIN = 0.5
+const CANADA_EXTENT_BOX = { w: -141.0, e: -52.6, s: 41.7, n: 83.1 }
+const CANADA_EXTENT_MARGIN = 0.5
 // A box covering at least this share of the whole longitude by latitude
 // range covers most of the world (MOST_OF_WORLD in the export).
 const MOST_OF_WORLD = 0.5
@@ -198,9 +198,9 @@ function crosses180(box) {
 }
 
 // The box with swapped edges put back (south below north, west left of
-// east), as step 1 does before comparing it with a standard box; null for a
-// box that crosses the 180 degree line, which is never a standard box.
-function straightened(box) {
+// east), as step 1 does before comparing it with BC's rectangle; null for a
+// box that crosses the 180 degree line, which never matches BC or Canada.
+export function straightened(box) {
   if (crosses180(box)) {
     return null
   }
@@ -211,22 +211,23 @@ function straightened(box) {
 }
 
 // True if every edge of box is within margin degrees of the same edge of
-// standard.
-function matches(box, standard, margin) {
-  return box !== null && ['w', 'e', 's', 'n'].every((edge) => Math.abs(box[edge] - standard[edge]) <= margin)
+// target.
+function matches(box, target, margin) {
+  return box !== null && ['w', 'e', 's', 'n'].every((edge) => Math.abs(box[edge] - target[edge]) <= margin)
 }
 
-// Why one harvested box ({ w, e, s, n }) is not drawn, or null if it is
-// drawn: 'bc_rectangle' or 'canada_default' for a standard box (checked
-// first, so a standard box with swapped edges is still called standard),
-// then 'swapped', 'zero_width' or 'most_of_world', as the export's flags.
-export function boxIssue(box) {
+// What kind of box one harvested box ({ w, e, s, n }) is, as the export's
+// flags say: 'matches_bc_rectangle' or 'matches_canada_extent' (drawn
+// dashed; checked first, so such a box with swapped edges still counts),
+// 'swapped', 'zero_width' or 'most_of_world' (not drawn), or null for any
+// other box (drawn solid).
+export function boxKind(box) {
   const straight = straightened(box)
   if (matches(straight, BC_RECTANGLE, BC_RECTANGLE_MARGIN)) {
-    return 'bc_rectangle'
+    return 'matches_bc_rectangle'
   }
-  if (matches(straight, CANADA_DEFAULT_BOX, CANADA_DEFAULT_MARGIN)) {
-    return 'canada_default'
+  if (matches(straight, CANADA_EXTENT_BOX, CANADA_EXTENT_MARGIN)) {
+    return 'matches_canada_extent'
   }
   if (box.s > box.n || (box.w > box.e && !crosses180(box))) {
     return 'swapped'
@@ -282,13 +283,30 @@ function once(items) {
   return [...new Set(items)]
 }
 
+// The note for a box that matches BC's rectangle or the Canada-wide extent:
+// what it covers, and, when other records of the same catalogue have exactly
+// the same box (sharedBy, the export's box_shared_by), how many. Facts only:
+// some datasets really do cover all of BC or Canada.
+function matchingBoxNote(kind, source, sharedBy) {
+  const [extent, area] = kind === 'matches_bc_rectangle' ? ['whole of BC', 'BC'] : ['all of Canada', 'Canada']
+  const shared = sharedBy > 1
+    ? `; ${source} uses this same box for ${sharedBy.toLocaleString()} of its records in Lunaris, so it may ` +
+      "not show where this dataset's data actually are"
+    : ''
+  return `Extent: ${extent}. The box covers all of ${area}${shared}.`
+}
+
 // Works out what the map draws for a dataset and what the page says about
-// where its location comes from. Returns { boxes, points, places, notes,
-// geonames }:
-//   boxes   the harvested boxes to draw (those with no issue)
+// where its location comes from. Returns { boxes, matchingBoxes, points,
+// places, notes, geonames }:
+//   boxes   the harvested boxes drawn with a solid line (any box that is
+//           not one of the kinds below)
+//   matchingBoxes  the harvested boxes that match BC's rectangle or the
+//           Canada-wide extent, drawn with a dashed line (swapped edges put
+//           back)
 //   points  the harvested points to draw
-//   places  the looked-up places to draw, only when nothing from the
-//           record itself is drawn: each has coordinates and is not a large
+//   places  the looked-up places to draw, only when the record gives no
+//           solid box and no point: each has coordinates and is not a large
 //           area (large_area, worked out by the export from the GeoNames
 //           feature class and code)
 //   notes   the sentences to show, in order
@@ -301,21 +319,24 @@ export function describeLocation(dataset) {
   const points = dataset.points ?? []
   const notes = []
 
-  const drawn = boxes.filter((box) => boxIssue(box) === null)
+  const kinds = boxes.map(boxKind)
+  const drawn = boxes.filter((box, index) => kinds[index] === null)
   if (drawn.length === 1) {
     notes.push(`Extent: from the ${source} record.`)
   } else if (drawn.length > 1) {
     notes.push(`Extent: ${drawn.length} boxes from the ${source} record.`)
   }
-  const issues = boxes.map(boxIssue)
-  if (issues.includes('bc_rectangle')) {
-    notes.push(`Extent: whole of BC (standard box used by ${source}, not the dataset's real extent). Not drawn.`)
-  }
-  if (issues.includes('canada_default')) {
-    notes.push(`Extent: all of Canada (standard box used by ${source}). Not drawn.`)
+  const matchingBoxes = []
+  for (const kind of ['matches_bc_rectangle', 'matches_canada_extent']) {
+    const indexes = kinds.flatMap((k, index) => (k === kind ? [index] : []))
+    if (indexes.length > 0) {
+      matchingBoxes.push(...indexes.map((index) => straightened(boxes[index])))
+      const sharedBy = Math.max(...indexes.map((index) => dataset.box_shared_by?.[index] ?? 1))
+      notes.push(matchingBoxNote(kind, source, sharedBy))
+    }
   }
   boxes.forEach((box, index) => {
-    const because = NOT_DRAWN_BECAUSE[issues[index]]
+    const because = NOT_DRAWN_BECAUSE[kinds[index]]
     if (because) {
       notes.push(`Box in the record: ${boxAsWritten(box)}. Not drawn, because ${because}.`)
     }
@@ -348,5 +369,5 @@ export function describeLocation(dataset) {
     notes.push('No location given in the record.')
   }
 
-  return { boxes: drawn, points, places, notes, geonames: looked.length > 0 }
+  return { boxes: drawn, matchingBoxes, points, places, notes, geonames: looked.length > 0 }
 }

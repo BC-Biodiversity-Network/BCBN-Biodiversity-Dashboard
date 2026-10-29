@@ -1072,8 +1072,15 @@ body {
 }
 
 .dataset-map-key-swatch.box {
+  width: 20px;
   border: 2px solid #184f95;
   background: rgba(24, 79, 149, 0.08);
+}
+
+.dataset-map-key-swatch.matching-box {
+  width: 20px;
+  border: 2px dashed #184f95;
+  background: rgba(24, 79, 149, 0.04);
 }
 
 .dataset-map-key-swatch.point {

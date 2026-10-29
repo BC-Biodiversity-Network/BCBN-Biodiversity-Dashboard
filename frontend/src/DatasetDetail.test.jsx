@@ -7,7 +7,7 @@ import { describeLocation } from './datasetText'
 afterEach(cleanup)
 
 // A dataset as /api/datasets/{id} gives it: the CanWIN Bald Eagles record,
-// with its standard BC box, and made-up licences and copies.
+// with its box matching BC's rectangle, and made-up licences and copies.
 function eagles(fields = {}) {
   return {
     id: 'oai:canwin-datahub.ad.umanitoba.ca:1dc40efc',
@@ -25,6 +25,7 @@ function eagles(fields = {}) {
     final_class: 'bc_only',
     frontend_group: 'bc_data',
     boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }],
+    box_shared_by: [620],
     points: [],
     looked_up_places: [],
     other_copies: [{ id: 'oai:catalogue.data.gov.bc.ca:crims', source_name: 'BC Data Catalogue',
@@ -80,10 +81,11 @@ describe('the dataset details', () => {
     expect(screen.getByText('Access: Restricted access.')).toBeTruthy()
   })
 
-  it('says a standard BC box is not the real extent', () => {
+  it('says, as facts only, that a box covers all of BC and how many records share it', () => {
     show(eagles())
-    expect(screen.getByText('Extent: whole of BC (standard box used by Canadian Watershed Information ' +
-      "Network (CanWIN), not the dataset's real extent). Not drawn.")).toBeTruthy()
+    expect(screen.getByText('Extent: whole of BC. The box covers all of BC; Canadian Watershed Information ' +
+      'Network (CanWIN) uses this same box for 620 of its records in Lunaris, so it may not show where this ' +
+      "dataset's data actually are.")).toBeTruthy()
     expect(screen.queryByText(/GeoNames/)).toBeNull()
   })
 

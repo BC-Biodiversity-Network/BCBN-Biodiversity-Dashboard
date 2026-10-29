@@ -46,10 +46,14 @@ The columns:
                        and the lookup's own top candidate, kept for
                        checking; empty for records decided by step 1 rules
                        (no pass 1)
-  box_swapped, box_zero_width, box_most_of_world, box_bc_rectangle,
-  box_canada_default   odd or standard boxes (see box_flags); true when
-                       any of the record's boxes has the flag. The boxes
+  box_swapped, box_zero_width, box_most_of_world, box_matches_bc_rectangle,
+  box_matches_canada_extent
+                       what the record's boxes are like (see box_flags);
+                       true when any of its boxes has the flag. The boxes
                        themselves are kept as harvested
+  box_shared_by        for each box, in the order of boxes, how many
+                       records of the same catalogue in the whole harvest
+                       have exactly the same box (this record included)
   organisms_4b, organisms_35b, organism_level_4b, organism_level_35b
                        filter 2 answers of each run (empty if it failed)
   organisms, organism_level
@@ -73,6 +77,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from bc_filter_rules import is_bc_rectangle, load_bc_shape
+from check_harvest import source_of
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -96,14 +101,13 @@ DATACITE = {"d": "http://datacite.org/schema/kernel-4"}
 # A box covering at least this share of the whole longitude by latitude
 # range counts as covering most of the world.
 MOST_OF_WORLD = 0.5
-# The Canada-wide extent we asked Lunaris about (west, east, south, north):
-# some catalogues seem to give records this box by default. A box with every
-# edge within CANADA_DEFAULT_MARGIN degrees of it is flagged. On the
-# 2026-10-20 harvest any margin from 0.05 to 0.5 degrees finds the same
-# boxes; the next nearest are rounded boxes such as w -140, e -50, s 42,
-# n 82, which are left unflagged.
-CANADA_DEFAULT_BOX = (-141.0, -52.6, 41.7, 83.1)
-CANADA_DEFAULT_MARGIN = 0.5
+# The Canada-wide extent we asked Lunaris about (west, east, south, north).
+# A box with every edge within CANADA_EXTENT_MARGIN degrees of it is
+# flagged. On the 2026-10-20 harvest any margin from 0.05 to 0.5 degrees
+# finds the same boxes; the next nearest are rounded boxes such as w -140,
+# e -50, s 42, n 82, which are left unflagged.
+CANADA_EXTENT_BOX = (-141.0, -52.6, 41.7, 83.1)
+CANADA_EXTENT_MARGIN = 0.5
 # The GeoNames feature codes, by feature class, of places too large to
 # draw as a point: countries, provinces and states (A); continents and
 # regions, such as Pacific Northwest or Kootenay (L); oceans, seas and gulfs
@@ -146,7 +150,8 @@ SCHEMA = pa.schema([
     ("location_type", pa.string()), ("location_source", pa.string()),
     ("boxes", pa.list_(BOX)), ("points", pa.list_(POINT)), ("looked_up_places", pa.list_(PLACE)),
     ("box_swapped", pa.bool_()), ("box_zero_width", pa.bool_()), ("box_most_of_world", pa.bool_()),
-    ("box_bc_rectangle", pa.bool_()), ("box_canada_default", pa.bool_()),
+    ("box_matches_bc_rectangle", pa.bool_()), ("box_matches_canada_extent", pa.bool_()),
+    ("box_shared_by", pa.list_(pa.int64())),
     ("organisms_4b", pa.list_(pa.string())), ("organisms_35b", pa.list_(pa.string())),
     ("organism_level_4b", pa.string()), ("organism_level_35b", pa.string()),
     ("organisms", pa.list_(pa.string())), ("organism_level", pa.string()),
@@ -223,6 +228,26 @@ def read_filter2(path):
     return answers.set_index("record_id")[["organisms", "organism_level"]]
 
 
+def box_key(source, box):
+    """Return the key of one box of a record from a catalogue: the catalogue and the box's edges exactly as harvested."""
+    return (source, box["w"], box["e"], box["s"], box["n"])
+
+
+def read_box_counts(path):
+    """
+    Return {box_key: number of records} over the whole harvest: for each
+    catalogue and exact box, how many records have that box (a record with
+    the same box twice counts once).
+    """
+    harvest = pd.read_parquet(path, columns=["id", "boxes"]).drop_duplicates("id")
+    counts = {}
+    for record_id, boxes in zip(harvest["id"], harvest["boxes"]):
+        source = source_of(record_id)
+        for key in {box_key(source, box) for box in as_list(boxes)}:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def read_pass1_places(run_dirs):
     """
     Return {record id: list of places} from the pass 1 answers and GeoNames
@@ -259,10 +284,10 @@ def link_of(identifier, identifier_type):
     return "", ""
 
 
-def is_canada_default(box):
+def is_canada_extent(box):
     """
-    Return True if a box is the Canada-wide extent (CANADA_DEFAULT_BOX):
-    each edge within CANADA_DEFAULT_MARGIN degrees. Swapped edges are put
+    Return True if a box is the Canada-wide extent (CANADA_EXTENT_BOX):
+    each edge within CANADA_EXTENT_MARGIN degrees. Swapped edges are put
     back first, as in step 1's is_bc_rectangle; a box that crosses the 180
     degree line never matches.
     """
@@ -272,8 +297,8 @@ def is_canada_default(box):
         if west > 0 > east:
             return False
         west, east = east, west
-    return all(abs(edge - default) <= CANADA_DEFAULT_MARGIN
-               for edge, default in zip((west, east, south, north), CANADA_DEFAULT_BOX))
+    return all(abs(edge - extent) <= CANADA_EXTENT_MARGIN
+               for edge, extent in zip((west, east, south, north), CANADA_EXTENT_BOX))
 
 
 def box_flags(box, shape):
@@ -286,9 +311,10 @@ def box_flags(box, shape):
       zero_width      west equal to east, or south equal to north
       most_of_world   the box covers at least MOST_OF_WORLD of the whole
                       longitude by latitude range
-      bc_rectangle    BC's own bounding rectangle, as step 1 decides it
-                      (is_bc_rectangle, within BC_RECTANGLE_MARGIN degrees)
-      canada_default  the Canada-wide extent (is_canada_default)
+      matches_bc_rectangle   BC's own bounding rectangle, as step 1 decides
+                             it (is_bc_rectangle, within BC_RECTANGLE_MARGIN
+                             degrees)
+      matches_canada_extent  the Canada-wide extent (is_canada_extent)
     """
     flags = set()
     west, east, south, north = box["w"], box["e"], box["s"], box["n"]
@@ -301,9 +327,9 @@ def box_flags(box, shape):
     if (width / 360) * (abs(north - south) / 180) >= MOST_OF_WORLD:
         flags.add("most_of_world")
     if is_bc_rectangle(box, shape):
-        flags.add("bc_rectangle")
-    if is_canada_default(box):
-        flags.add("canada_default")
+        flags.add("matches_bc_rectangle")
+    if is_canada_extent(box):
+        flags.add("matches_canada_extent")
     return flags
 
 
@@ -439,8 +465,12 @@ def exported_groups(table):
     return table[table["group_key"].isin(keys)]
 
 
-def build_rows(members, facts, harvest, places, answers_4b, answers_35b, names, shape):
-    """Return the export as a list of dicts, one per copy group, in the order of SCHEMA (shape is BC's outline, for box_flags)."""
+def build_rows(members, facts, harvest, places, answers_4b, answers_35b, names, shape, box_counts=None):
+    """
+    Return the export as a list of dicts, one per copy group, in the order
+    of SCHEMA. shape is BC's outline, for box_flags; box_counts is
+    read_box_counts' answer, for box_shared_by (None counts each box once).
+    """
     missing = sorted(set(members["source"]) - set(names))
     if missing:
         raise SystemExit(f"ERROR: no readable name in {NAMES_CSV} for: {', '.join(missing)}")
@@ -471,8 +501,10 @@ def build_rows(members, facts, harvest, places, answers_4b, answers_35b, names, 
             "location_type": kind, "location_source": source_of_location,
             "boxes": boxes, "points": points, "looked_up_places": looked_up,
             "box_swapped": "swapped" in flags, "box_zero_width": "zero_width" in flags,
-            "box_most_of_world": "most_of_world" in flags, "box_bc_rectangle": "bc_rectangle" in flags,
-            "box_canada_default": "canada_default" in flags,
+            "box_most_of_world": "most_of_world" in flags,
+            "box_matches_bc_rectangle": "matches_bc_rectangle" in flags,
+            "box_matches_canada_extent": "matches_canada_extent" in flags,
+            "box_shared_by": [(box_counts or {}).get(box_key(row["source"], b), 1) for b in boxes],
             "organisms_4b": organisms["4b"][0], "organisms_35b": organisms["35b"][0],
             "organism_level_4b": organisms["4b"][1], "organism_level_35b": organisms["35b"][1],
             "organisms": merged_names(organisms["4b"][0], organisms["35b"][0]),
@@ -490,10 +522,10 @@ def changed_from_dup_show(members, rows):
     return sum(row["id"] not in old for row in rows)
 
 
-def only_standard_boxes(row):
+def only_bc_or_canada_boxes(row):
     """Return True if a row has boxes, every one BC's rectangle or the Canada-wide extent, and no point."""
     return (bool(row["boxes"]) and not row["points"]
-            and all(is_bc_rectangle(b, row["shape"]) or is_canada_default(b) for b in row["boxes"]))
+            and all(is_bc_rectangle(b, row["shape"]) or is_canada_extent(b) for b in row["boxes"]))
 
 
 def licence_label(licence):
@@ -512,8 +544,10 @@ def is_access_right(licence):
 def print_counts(frame, changed, shape):
     """
     Print the counts asked for: rows per front end group and class, per
-    location type, per link type; the box flags (the standard boxes split by
-    catalogue); and the most common licences.
+    location type, per link type; the box flags, with each exact box that
+    matches BC's rectangle or the Canada-wide extent by catalogue (how many
+    shown datasets have it, and how many records of the catalogue in the
+    whole harvest); and the most common licences.
     """
     print(f"{len(frame):,} rows (one per copy group); {changed} groups show a more recent copy than dup_show")
     print("\nrows per frontend_group and final_class:")
@@ -530,15 +564,24 @@ def print_counts(frame, changed, shape):
               "; drawable:", int(places.apply(drawable_place, axis=1).sum()))
     print("\nrows per link_type:")
     print(pd.crosstab(frame["link_type"], frame["frontend_group"], margins=True, margins_name="total").to_string())
-    print("\nboxes flagged:", {flag: int(frame[f"box_{flag}"].sum())
-                               for flag in ["swapped", "zero_width", "most_of_world", "bc_rectangle", "canada_default"]})
-    for flag in ["bc_rectangle", "canada_default"]:
-        flagged = frame[frame[f"box_{flag}"]]
-        print(f"\nbox_{flag} by catalogue (top 5 of {flagged['source_name'].nunique()}):")
-        print(pd.crosstab(flagged["source_name"], flagged["frontend_group"], margins=True, margins_name="total")
-              .sort_values("total", ascending=False).head(6).to_string())
-    only = frame.assign(shape=[shape] * len(frame)).apply(only_standard_boxes, axis=1)
-    print(f"\nrows whose only location is standard boxes (no other box, no point): {int(only.sum())}")
+    flag_names = ["swapped", "zero_width", "most_of_world", "matches_bc_rectangle", "matches_canada_extent"]
+    print("\nboxes flagged:", {flag: int(frame[f"box_{flag}"].sum()) for flag in flag_names})
+    shared = []
+    for _, row in frame.iterrows():
+        for box, count in zip(row["boxes"], row["box_shared_by"]):
+            for flag in {"matches_bc_rectangle", "matches_canada_extent"} & box_flags(box, shape):
+                shared.append({"flag": flag, "catalogue": row["source_name"],
+                               "box (w, e, s, n)": f"{box['w']:g}, {box['e']:g}, {box['s']:g}, {box['n']:g}",
+                               "harvest_records": count})
+    if shared:
+        shared = pd.DataFrame(shared)
+        table = (shared.groupby(["flag", "catalogue", "box (w, e, s, n)"])
+                 .agg(shown_datasets=("harvest_records", "size"), harvest_records=("harvest_records", "first"))
+                 .reset_index().sort_values(["flag", "shown_datasets"], ascending=[True, False]))
+        print("\nexact boxes matching BC's rectangle or the Canada-wide extent, by catalogue:")
+        print(table.to_string(index=False))
+    only = frame.assign(shape=[shape] * len(frame)).apply(only_bc_or_canada_boxes, axis=1)
+    print(f"\nrows whose only location is boxes matching BC or Canada (no other box, no point): {int(only.sum())}")
     print(pd.crosstab(frame.loc[only, "source_name"], frame.loc[only, "frontend_group"], margins=True,
                       margins_name="total").sort_values("total", ascending=False).head(6).to_string())
 
@@ -575,8 +618,9 @@ def main():
     ids = set(members["record_id"])
     facts = read_datacite(args.raw_xml, ids)
     harvest = read_harvest(args.harvest, ids)
+    box_counts = read_box_counts(args.harvest)
     rows = build_rows(members, facts, harvest, read_pass1_places(args.runs), read_filter2(args.answers_4b),
-                      read_filter2(args.answers_35b), read_catalogue_names(), shape)
+                      read_filter2(args.answers_35b), read_catalogue_names(), shape, box_counts)
     table = pa.Table.from_pylist(rows, schema=SCHEMA)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     pq.write_table(table, args.out)

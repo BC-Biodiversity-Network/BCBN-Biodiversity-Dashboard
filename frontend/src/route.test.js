@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readView, shownSort } from './route'
+import {
+  NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
+  speciesDatasetsSearch, speciesMapSearch,
+} from './route'
 
 // The state of a plain Datasets page.
 const PLAIN = {
   q: '', sort: '', catalogues: [], yearFrom: null, yearTo: null, organism: '', access: [], mappable: false,
-  wider: false, page: 1, dataset: null,
+  species: '', wider: false, page: 1, dataset: null,
 }
 
 describe('the page state in the address', () => {
@@ -23,7 +26,7 @@ describe('the page state in the address', () => {
     const state = {
       q: 'bald eagle', sort: 'oldest', catalogues: ['catalogue.data.gov.bc.ca', 'datadryad.org'],
       yearFrom: 2010, yearTo: 2020, organism: 'Haliaeetus', access: ['open', 'restricted'], mappable: true,
-      wider: true, page: 3, dataset: 'oai:datadryad.org:doi:10.5061/dryad.x',
+      species: '49JFH', wider: true, page: 3, dataset: 'oai:datadryad.org:doi:10.5061/dryad.x',
     }
     const search = datasetsSearch(state)
     expect(search).toContain('catalogue=catalogue.data.gov.bc.ca&catalogue=datadryad.org')
@@ -46,8 +49,20 @@ describe('the page state in the address', () => {
     expect(shownSort({ ...PLAIN, q: 'eagle', sort: 'title' })).toBe('title')
   })
 
+  it('links a species to its datasets and to its card', () => {
+    expect(speciesDatasetsSearch('49JFH')).toBe('?view=datasets&species=49JFH')
+    expect(readDatasetsState(speciesDatasetsSearch('49JFH'))).toEqual({ ...PLAIN, species: '49JFH' })
+    expect(speciesMapSearch('49JFH')).toBe('?species=49JFH')
+    expect(readSpeciesKey(speciesMapSearch('49JFH'))).toBe('49JFH')
+    expect(readView(speciesMapSearch('49JFH'))).toBe('species')
+    expect(speciesMapSearch(null)).toBe('?')
+    expect(readSpeciesKey('')).toBeNull()
+  })
+
   it('counts each filter in use once, and clears them all', () => {
     expect(activeFilterCount(PLAIN)).toBe(0)
+    // The species filter is a chip, not part of the Filters panel.
+    expect(activeFilterCount({ ...PLAIN, species: '49JFH' })).toBe(0)
     const busy = { ...PLAIN, catalogues: ['a', 'b'], yearTo: 2020, organism: 'salmon', access: ['open'], mappable: true }
     expect(activeFilterCount(busy)).toBe(5)
     expect(activeFilterCount({ ...busy, ...NO_FILTERS })).toBe(0)

@@ -1,7 +1,7 @@
 """
 conftest.py
 
-Shared test set-up: writes a tiny copy of the API's five data files into a
+Shared test set-up: writes a tiny copy of the API's six data files into a
 temporary folder, so the tests never need the real (large, uncommitted)
 data.
 
@@ -34,6 +34,17 @@ The test data:
                     pending, global, "eagle" in the title, an id with a
                     slash, issued 2021, open access
     Only datasets with a location are mappable.
+    Links between datasets and species (LINKS_SQL)
+        AAAA (Turdus migratorius, "American Robin")
+                    eagle-nests ("Turdus migratorius" and "T.
+                    migratorius"), salmon ("american robins", from the
+                    hand-checked list), golden (pending): 2 bc_data
+                    datasets, 3 in all
+        BBBB (Salix scouleriana, no English name)
+                    forest-plots ("Scouler's willow"), golden (pending)
+        CCCC, DDDD  no datasets
+        Names that do not link: "bald eagle" (eagle-nests), "salmon"
+        (salmon), "golden eagle" (golden).
 
 BCSEE_WITH_NO_STATUS_SQL is the BCSEE file as it would be if it also
 listed species whose BCSEE entries have no shown status: it adds CCCC,
@@ -249,6 +260,30 @@ DATASETS_SQL = f"""
            final_class, frontend_group, location_type, location_source, organisms, organism_level)
 """
 
+# The links between datasets and species (see the top of this file), with
+# the types the export writes.
+LINKS_SQL = """
+    SELECT dataset_id, position::BIGINT AS position, name_as_written, match_status, specieskey,
+           matched_name, matched_field
+    FROM (VALUES
+        ('oai:catalogue.data.gov.bc.ca:eagle-nests', 0, 'bald eagle', 'unmatched', NULL, NULL, NULL),
+        ('oai:catalogue.data.gov.bc.ca:eagle-nests', 1, 'Turdus migratorius', 'scientific', 'AAAA',
+         'Turdus migratorius', 'col_name'),
+        ('oai:catalogue.data.gov.bc.ca:eagle-nests', 2, 'T. migratorius', 'expanded_abbreviation', 'AAAA',
+         'Turdus migratorius', 'col_name'),
+        ('oai:catalogue.hakai.org:salmon', 0, 'american robins', 'manual', 'AAAA', 'Turdus migratorius',
+         'manual'),
+        ('oai:catalogue.hakai.org:salmon', 1, 'salmon', 'group_word', NULL, NULL, NULL),
+        ('oai:catalogue.data.gov.bc.ca:forest-plots', 0, 'Scouler''s willow', 'common', 'BBBB',
+         'Scouler''s Willow', 'bcsee_entry_english_name'),
+        ('oai:datadryad.org:doi:10.5061/dryad.golden', 0, 'golden eagle', 'unmatched', NULL, NULL, NULL),
+        ('oai:datadryad.org:doi:10.5061/dryad.golden', 1, 'Turdus migratorius', 'scientific', 'AAAA',
+         'Turdus migratorius', 'col_name'),
+        ('oai:datadryad.org:doi:10.5061/dryad.golden', 2, 'Salix scouleriana', 'scientific', 'BBBB',
+         'Salix scouleriana', 'col_name')
+    ) AS t(dataset_id, position, name_as_written, match_status, specieskey, matched_name, matched_field)
+"""
+
 DOWNLOAD_INFO = {
     "download_key": "0000000-000000000000000",
     "doi": "10.15468/dl.test",
@@ -266,11 +301,12 @@ def write_parquet(query, path):
 
 
 def write_test_data(folder, card_sql=CARD_SQL, hex_sql=HEX_SQL, bcsee_sql=BCSEE_SQL,
-                    download_info=DOWNLOAD_INFO, datasets_sql=DATASETS_SQL):
-    """Write the five data files into folder and return folder. A test can
+                    download_info=DOWNLOAD_INFO, datasets_sql=DATASETS_SQL, links_sql=LINKS_SQL):
+    """Write the six data files into folder and return folder. A test can
     pass its own version of any one of them to try a broken file."""
     write_parquet(card_sql, folder / "species_card_gbif.parquet")
     write_parquet(datasets_sql, folder / "lunaris_datasets.parquet")
+    write_parquet(links_sql, folder / "dataset_species_links.parquet")
     write_parquet(hex_sql, folder / "species_hex.parquet")
     write_parquet(bcsee_sql, folder / "bcsee_status_by_gbif_species.parquet")
     with open(folder / "download_info.json", "w", encoding="utf-8") as handle:

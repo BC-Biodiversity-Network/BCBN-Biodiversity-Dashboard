@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // The two pages swapped for stand-ins, so only the top bar and the switching
 // between pages are tested here.
 vi.mock('./App', () => ({
-  // A stand-in for the species map page.
-  default: function App() {
-    return <p>The species map</p>
+  // A stand-in for the species map page that shows the address it was given.
+  default: function App({ search }) {
+    return <p>The species map{search && ` for ${search}`}</p>
   },
 }))
 vi.mock('./DatasetsPage', () => ({
@@ -22,6 +22,24 @@ import Site from './Site'
 afterEach(() => {
   cleanup()
   window.history.replaceState(null, '', '/')
+})
+
+describe('links between the pages', () => {
+  it('gives the species map the address, so a card can be opened from it and the back button returns to it', () => {
+    window.history.replaceState(null, '', '/?species=49JFH')
+    render(<Site />)
+    expect(screen.getByText('The species map for ?species=49JFH')).toBeTruthy()
+    act(() => {
+      window.history.pushState(null, '', '/?view=datasets&species=49JFH')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(screen.getByText('Datasets for ?view=datasets&species=49JFH')).toBeTruthy()
+    act(() => {
+      window.history.replaceState(null, '', '/?species=49JFH')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(screen.getByText('The species map for ?species=49JFH')).toBeTruthy()
+  })
 })
 
 describe('the top bar', () => {

@@ -399,7 +399,7 @@ describe('records and merged keys', () => {
   it('shows the records, years and datasets, and the no-date sentence on its own', async () => {
     const { panel } = await showCard(makeCard())
     const records = within(panel).getByRole('region', { name: 'Records' }).textContent
-    expect(records).toContain('964,801 records, 1861 to 2026, from 41 datasets. 18 of these records have no date.')
+    expect(records).toContain('964,801 records, 1861 to 2026, from 41 GBIF datasets. 18 of these records have no date.')
     expect(records).toContain('EOD – eBird Observation Dataset940,502')
     expect(screen.getByRole('link', { name: 'EOD – eBird Observation Dataset' }).href)
       .toBe('https://www.gbif.org/dataset/d-ebird')
@@ -485,6 +485,39 @@ describe('records and merged keys', () => {
       'Includes 670 records filed under key OLD1 and the name Accipiter cooperii, merged into this ' +
       'species: OLD1 because the species name is exactly the same, Accipiter cooperii because the ' +
       'Catalogue of Life lists that name as a synonym of this species.')
+  })
+})
+
+describe('the datasets that mention the species', () => {
+  it('links "N BC research datasets from Lunaris mention this species" to the Datasets page filtered to it, after the BCSEE part', async () => {
+    const { panel } = await showCard(makeCard({ mentioned_in_datasets: { count: 50, frontend_group: ['bc_data'] } }))
+    const link = screen.getByRole('link', { name: '50 BC research datasets from Lunaris mention this species' })
+    expect(link.getAttribute('href')).toBe('?view=datasets&species=59PMB')
+    const sections = [...panel.querySelectorAll('section, .card-datasets-line')].map((el) => el.className)
+    expect(sections.slice(0, 2)).toEqual(['card-section', 'card-datasets-line'])
+  })
+
+  it('opens the Datasets page in place when given a way to, and says "1 BC research dataset ... mentions"', async () => {
+    const card = makeCard({ mentioned_in_datasets: { count: 1, frontend_group: ['bc_data'] } })
+    stubCard(card)
+    const onOpenDatasets = vi.fn()
+    const onLoaded = vi.fn()
+    render(<SpeciesCard requestedKey="59PMB" meta={META} onClose={() => {}} onLoaded={onLoaded}
+      onOpenDatasets={onOpenDatasets} />)
+    fireEvent.click(await screen.findByRole('link', { name: '1 BC research dataset from Lunaris mentions this species' }))
+    expect(onOpenDatasets).toHaveBeenCalledWith('59PMB')
+    expect(onLoaded).toHaveBeenCalledWith(card)
+  })
+
+  it('says "No BC research datasets from Lunaris mention this species", with no link, when none do', async () => {
+    await showCard(makeCard({ mentioned_in_datasets: { count: 0, frontend_group: ['bc_data'] } }))
+    expect(screen.getByText('No BC research datasets from Lunaris mention this species')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /mention/ })).toBeNull()
+  })
+
+  it('shows nothing for an API from before the links', async () => {
+    await showCard(makeCard())
+    expect(screen.queryByText(/mention/)).toBeNull()
   })
 })
 

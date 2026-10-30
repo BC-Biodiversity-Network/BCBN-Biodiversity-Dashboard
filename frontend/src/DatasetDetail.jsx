@@ -1,6 +1,8 @@
 import { useState } from 'react'
 
 import { isWebLink, issuedLabel, looksLikeHtml, plainText, readLicences } from './datasetText'
+import { speciesMapSearch } from './route'
+import SpeciesName from './SpeciesName'
 import { MayIncludeBcTag } from './widerDatasets'
 
 // An abstract longer than this is shown cut, with "Show more".
@@ -81,6 +83,51 @@ function Location({ location }) {
   )
 }
 
+// The species the record names, each linked to its card on the species map
+// (onOpen(key) opens it in place of following the link), with the names as
+// written in the record that differ from the site's; then the organisms the
+// record names that are not linked, as plain text, so none is hidden.
+function Species({ species, others, onOpen }) {
+  return (
+    <section className="dataset-section">
+      <h3>Species</h3>
+      {species.length === 0 && others.length === 0 && <p>The record names no organisms.</p>}
+      {species.length > 0 && (
+        <ul className="dataset-species">
+          {species.map((item) => {
+            const written = item.names_as_written.filter((name) => !name.same_as_shown).map((name) => name.name)
+            return (
+              <li key={item.specieskey}>
+                <a
+                  href={speciesMapSearch(item.specieskey)}
+                  onClick={(event) => {
+                    if (!onOpen || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
+                      return
+                    }
+                    event.preventDefault()
+                    onOpen(item.specieskey)
+                  }}
+                >
+                  <SpeciesName species={item} />
+                </a>
+                {written.length > 0 && (
+                  <span className="dataset-muted">
+                    {' '}(written in the record as {written.map((name) => `“${name}”`).join(', ')})
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {others.length > 0 && <p>Other organisms named in the record: {others.join(', ')}</p>}
+      {(species.length > 0 || others.length > 0) && (
+        <p className="dataset-attribution">Species links are matched by BCBN from the names in the record.</p>
+      )}
+    </section>
+  )
+}
+
 // The other copies of this dataset in other catalogues, each linked.
 function OtherCopies({ copies }) {
   if (!copies?.length) {
@@ -104,9 +151,10 @@ function OtherCopies({ copies }) {
 
 // One dataset in full (from /api/datasets/{id}): what it is, the button to
 // view and download it on the original site, where its location comes from,
-// its licence and its other copies. location is describeLocation(dataset),
-// worked out once by the page and shared with the map.
-export default function DatasetDetail({ dataset, location, onBack }) {
+// the species it names, its licence and its other copies. location is
+// describeLocation(dataset), worked out once by the page and shared with the
+// map. onOpenSpecies(key) opens a species' card on the species map.
+export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies }) {
   const copyAsked = dataset.requested_copy
     ? dataset.other_copies?.find((copy) => copy.id === dataset.requested_copy)
     : null
@@ -149,9 +197,7 @@ export default function DatasetDetail({ dataset, location, onBack }) {
 
       <Location location={location} />
 
-      {/* Part 3 goes here: the species named in this dataset (organisms and
-          organism_level from the API), each linked to its species card, and
-          the species cards linking back to their datasets. Not built yet. */}
+      <Species species={dataset.species ?? []} others={dataset.other_organisms ?? []} onOpen={onOpenSpecies} />
 
       <Licences entries={dataset.licences} />
       <OtherCopies copies={dataset.other_copies} />

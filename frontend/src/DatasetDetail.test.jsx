@@ -36,8 +36,23 @@ function eagles(fields = {}) {
 }
 
 // Renders the detail of a dataset the way the page does.
-function show(dataset) {
-  return render(<DatasetDetail dataset={dataset} location={describeLocation(dataset)} onBack={vi.fn()} />)
+function show(dataset, onOpenSpecies = vi.fn()) {
+  return render(<DatasetDetail dataset={dataset} location={describeLocation(dataset)} onBack={vi.fn()}
+    onOpenSpecies={onOpenSpecies} />)
+}
+
+// The linked species and other organisms of a dataset, as the API gives them.
+const SPECIES = {
+  species: [
+    { specieskey: '5KDBR', col_name: 'Haliaeetus leucocephalus', english_name: 'Bald Eagle',
+      names_as_written: [{ name: 'bald eagles', same_as_shown: false },
+        { name: 'Haliaeetus leucocephalus', same_as_shown: true }] },
+    { specieskey: '49JFH', col_name: 'Oncorhynchus nerka', english_name: 'Sockeye Salmon',
+      names_as_written: [{ name: 'O. nerka', same_as_shown: false }, { name: 'sockeye', same_as_shown: false }] },
+    { specieskey: '4LVR5', col_name: 'Populus trichocarpa', english_name: null,
+      names_as_written: [{ name: 'Populus trichocarpa', same_as_shown: true }] },
+  ],
+  other_organisms: ['salmon', 'herring'],
 }
 
 describe('the dataset details', () => {
@@ -95,6 +110,41 @@ describe('the dataset details', () => {
     expect(screen.getByText(/Places named in the record: Haida Gwaii \(located by BCBN using GeoNames\)/))
       .toBeTruthy()
     expect(screen.getByRole('link', { name: 'CC BY 4.0' }).href).toBe('https://creativecommons.org/licenses/by/4.0/')
+  })
+
+  it('lists the linked species between Location and Licence, each linked to its card', () => {
+    const onOpenSpecies = vi.fn()
+    const { container } = show(eagles(SPECIES), onOpenSpecies)
+    const headings = [...container.querySelectorAll('h3')].map((h) => h.textContent)
+    expect(headings.slice(headings.indexOf('Location'), headings.indexOf('Licence') + 1)).toEqual(
+      ['Location', 'Species', 'Licence'])
+    const items = [...container.querySelectorAll('.dataset-species li')].map((li) => li.textContent)
+    expect(items).toEqual([
+      'Bald Eagle (Haliaeetus leucocephalus) (written in the record as “bald eagles”)',
+      'Sockeye Salmon (Oncorhynchus nerka) (written in the record as “O. nerka”, “sockeye”)',
+      'Populus trichocarpa',
+    ])
+    const link = screen.getByRole('link', { name: /^Sockeye Salmon/ })
+    expect(link.getAttribute('href')).toBe('?species=49JFH')
+    fireEvent.click(link)
+    expect(onOpenSpecies).toHaveBeenCalledWith('49JFH')
+  })
+
+  it('lists the organisms that are not linked as plain text, with the note on how links are made', () => {
+    show(eagles(SPECIES))
+    expect(screen.getByText('Other organisms named in the record: salmon, herring')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'salmon' })).toBeNull()
+    expect(screen.getByText('Species links are matched by BCBN from the names in the record.')).toBeTruthy()
+  })
+
+  it('says when the record names no organisms, and still lists names that do not link', () => {
+    show(eagles({ species: [], other_organisms: [] }))
+    expect(screen.getByText('The record names no organisms.')).toBeTruthy()
+    expect(screen.queryByText(/Species links are matched/)).toBeNull()
+    cleanup()
+    show(eagles({ species: [], other_organisms: ['fish'] }))
+    expect(screen.getByText('Other organisms named in the record: fish')).toBeTruthy()
+    expect(screen.queryByText('The record names no organisms.')).toBeNull()
   })
 
   it('lists the other copies with links, and says when a copy was asked for', () => {

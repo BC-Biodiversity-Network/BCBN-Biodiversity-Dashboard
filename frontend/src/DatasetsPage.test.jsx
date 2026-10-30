@@ -264,6 +264,38 @@ describe('the Datasets page', () => {
     delete LIST.results[0].organisms
   })
 
+  it('shows the species filter as a chip naming the species, which removes it', async () => {
+    const urls = stubList()
+    LIST.filters = { species: { specieskey: '49JFH', requested_key: '49JFH', merged_from: null,
+      col_name: 'Oncorhynchus nerka', english_name: 'Sockeye Salmon' } }
+    const navigate = await showPage('?view=datasets&species=49JFH&q=lake')
+    delete LIST.filters
+    expect(urls[0]).toContain('species=49JFH')
+    const chip = screen.getByText(/^Species:/)
+    expect(chip.textContent).toBe('Species: Sockeye Salmon (Oncorhynchus nerka)')
+    expect(chip.querySelector('i').textContent).toBe('Oncorhynchus nerka')
+    // The species is not one of the Filters panel's filters.
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the species filter (Sockeye Salmon (Oncorhynchus nerka))' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=lake')
+  })
+
+  it('shows the key until the answer names the species, and "Clear all" clears the species too', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&species=4LVR5')
+    expect(screen.getByText(/^Species:/).textContent).toBe('Species: 4LVR5')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets')
+  })
+
+  it('says the Organisms filter matches names as written, and where the linked species are', async () => {
+    stubList()
+    await showPage('?view=datasets')
+    openFilters()
+    expect(screen.getByText('Matches the names as written in each record. To see the datasets linked to a species, ' +
+      'open its card on the species map.')).toBeTruthy()
+  })
+
   it('does not send a search that is too short', async () => {
     stubList()
     const navigate = await showPage('?view=datasets')

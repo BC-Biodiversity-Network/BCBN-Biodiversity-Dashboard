@@ -40,6 +40,18 @@ Filters, each also in the counts:
             (info:eu-repo/semantics/openAccess or restrictedAccess).
   mappable  true for only the datasets the map can draw something for
             (the export's mappable column).
+  species   a species key: only the datasets with a name linked to that
+            species (dataset_species_links.parquet). A key merged into a
+            card stands for the card's key. The answer names the species
+            (filters.species), so the page can show which one it is.
+
+Links between datasets and species (dataset_species_links.parquet, written
+by pipeline/lunaris/export_dataset_species_links.py): one row per dataset
+and organism name, as written in the record, with the species only when
+the name links to one (matched exactly, or by a confirmed row of the
+hand-checked name list). The dataset endpoint lists the linked species,
+each with the names as written that link to it, and the other names the
+record gives (other_organisms), so no name is hidden.
 
 The counts for the filter options (options in the response) follow the
 search: each filter's counts use the query and the other filters, but not
@@ -48,8 +60,9 @@ its own, so ticking one catalogue still shows how many the others have.
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
-from api.db import DATASET_FINAL_CLASSES, DATASET_FRONTEND_GROUPS
+from api.db import DATASET_DEFAULT_FRONTEND_GROUPS, DATASET_FINAL_CLASSES, DATASET_FRONTEND_GROUPS
 from api.search import MIN_QUERY_LENGTH, QueryTooShort, normalise
+from api.species import resolve_key, species_labels, without_subgenus
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
@@ -58,7 +71,7 @@ MAX_PAGE_SIZE = 100
 # when the API starts), and the front end group shown when none is asked for.
 FRONTEND_GROUPS = DATASET_FRONTEND_GROUPS
 FINAL_CLASSES = DATASET_FINAL_CLASSES
-DEFAULT_FRONTEND_GROUPS = ["bc_data"]
+DEFAULT_FRONTEND_GROUPS = DATASET_DEFAULT_FRONTEND_GROUPS
 
 # The orders the list can be sorted in, and the access rights a record can
 # give, with the DataCite rights URI of each.
@@ -159,7 +172,7 @@ def build_conditions(words, organism, filters):
     Return the conditions of a list request, by name, each as (SQL,
     parameters): the search words ("query"), the organism phrase
     ("organism"), and each filter in filters (a dict from name to its
-    value; empty values are left out). The words and the phrase only hold
+    value; empty values are left out; species is a card key). The words and the phrase only hold
     letters, digits and single spaces once written the search way, so they
     are safe inside LIKE patterns.
     """
@@ -180,6 +193,9 @@ def build_conditions(words, organism, filters):
                                     year_to if year_to is not None else 99999])
     if filters.get("mappable"):
         conditions["mappable"] = ("d.mappable", [])
+    if filters.get("species"):
+        conditions["species"] = (
+            "d.id IN (SELECT dataset_id FROM dataset_species_links WHERE specieskey = ?)", [filters["species"]])
     return conditions
 
 
@@ -249,16 +265,30 @@ def normalised_words(cursor, text, what):
     return normalised
 
 
+def species_filter(data, cursor, key):
+    """Return the species a species filter asks for, as {specieskey,
+    requested_key, merged_from, col_name, english_name}, or None when key
+    is empty. A key merged into a card gives the card. Raises
+    DatasetsRequestError for a key with no card."""
+    if not key:
+        return None
+    card_key, merged_from = resolve_key(key, data.merged_keys)
+    label = species_labels(cursor, [card_key]).get(card_key)
+    if label is None:
+        raise DatasetsRequestError(f"Unknown species {key!r}; use the key of a species with a card on the site.")
+    return {"specieskey": card_key, "requested_key": key, "merged_from": merged_from, **label}
+
+
 def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_group=None,
                   page=1, page_size=DEFAULT_PAGE_SIZE, sort=None, year_from=None, year_to=None,
-                  organism=None, access=None, mappable=False):
+                  organism=None, access=None, mappable=False, species=None):
     """
     Return one page of datasets matching the query and filters, in the order
     sort asks for (see the top of this file), with the total, the sort and
     filters used and the counts for the filter options. Raises QueryTooShort
     for a query or organism with fewer than MIN_QUERY_LENGTH letters or
-    digits, and DatasetsRequestError for an unknown value, relevance without
-    a query, or year_from after year_to.
+    digits, and DatasetsRequestError for an unknown value or species,
+    relevance without a query, or year_from after year_to.
     """
     cursor = data.cursor()
     frontend_group = frontend_group or list(DEFAULT_FRONTEND_GROUPS)
@@ -267,6 +297,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
     check_values("catalogue", catalogue or [], data.dataset_catalogues,
                  hint="use a value from options.catalogue (a source id such as catalogue.data.gov.bc.ca).")
     check_values("access", access or [], ACCESS_VALUES)
+    species_asked = species_filter(data, cursor, species)
     if year_from is not None and year_to is not None and year_from > year_to:
         raise DatasetsRequestError(f"year_from ({year_from}) is after year_to ({year_to}).")
 
@@ -279,7 +310,8 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
         raise DatasetsRequestError("sort=relevance needs a search (q); use newest, oldest or title.")
 
     filters = {"catalogue": catalogue or [], "final_class": final_class or [], "frontend_group": frontend_group,
-               "access": access or [], "year_from": year_from, "year_to": year_to, "mappable": mappable}
+               "access": access or [], "year_from": year_from, "year_to": year_to, "mappable": mappable,
+               "species": species_asked["specieskey"] if species_asked else None}
     conditions = build_conditions(words, organism_phrase, filters)
     condition, params = where_clause(conditions)
     total = cursor.execute(f"SELECT count(*) FROM {FROM_DATASETS} WHERE {condition}", params).fetchone()[0]
@@ -308,7 +340,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
         "filters": {"catalogue": filters["catalogue"], "final_class": filters["final_class"],
                     "frontend_group": frontend_group, "year_from": year_from, "year_to": year_to,
                     "organism": organism if organism_phrase else None, "access": filters["access"],
-                    "mappable": bool(mappable)},
+                    "mappable": bool(mappable), "species": species_asked},
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -328,11 +360,44 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
     }
 
 
+def linked_species(cursor, dataset_id):
+    """
+    Return (species, other_organisms) for one dataset, from its organism
+    names in dataset_species_links, in the order the record gives them.
+    species lists each linked species once: {specieskey, col_name,
+    english_name, names_as_written}, names_as_written being each name in
+    the record that links to it, with same_as_shown true when, written the
+    search way, it is the card's name (also without a subgenus) or its
+    English name, so the page need not repeat it. other_organisms are the
+    names that do not link, as written.
+    """
+    rows = cursor.execute(
+        """SELECT name_as_written, specieskey FROM dataset_species_links
+           WHERE dataset_id = ? ORDER BY position""", [dataset_id]).fetchall()
+    labels = species_labels(cursor, {key for _, key in rows if key})
+    species, other = {}, []
+    for name, key in rows:
+        if key is None:
+            other.append(name)
+            continue
+        if key not in species:
+            label = labels[key]
+            shown = {label["col_name"], without_subgenus(label["col_name"]), label["english_name"]}
+            species[key] = {"specieskey": key, **label, "names_as_written": [],
+                            "shown_norms": {normalise(cursor, name) for name in shown if name}}
+        species[key]["names_as_written"].append(
+            {"name": name, "same_as_shown": normalise(cursor, name) in species[key]["shown_norms"]})
+    for entry in species.values():
+        del entry["shown_norms"]
+    return list(species.values()), other
+
+
 def get_dataset(data, dataset_id):
     """
     Return one dataset with every field, or None for an unknown id. The id
     of another copy of a dataset gives the copy that is shown, with
-    requested_copy set to the id asked for.
+    requested_copy set to the id asked for. species and other_organisms
+    are its organism names, linked to species or not (linked_species).
     """
     requested_copy = None
     shown_id = data.dataset_copies.get(dataset_id)
@@ -345,4 +410,5 @@ def get_dataset(data, dataset_id):
         return None
     dataset = dict(zip([column[0] for column in cursor.description], row))
     dataset["requested_copy"] = requested_copy
+    dataset["species"], dataset["other_organisms"] = linked_species(cursor, dataset_id)
     return dataset

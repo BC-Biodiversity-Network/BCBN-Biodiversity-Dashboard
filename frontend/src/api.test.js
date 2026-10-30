@@ -176,10 +176,11 @@ describe('the dataset requests', () => {
   it('sends the sort and every filter, and relevance only with a search', async () => {
     const urls = recordUrls()
     await fetchDatasets({ q: 'eagle', sort: 'title', catalogues: [], yearFrom: 2010, yearTo: null,
-      organism: ' Oncorhynchus ', access: ['open', 'restricted'], mappable: true, wider: false, page: 1 })
-    await fetchDatasets({ q: '', sort: 'relevance', catalogues: [], access: [], wider: false, page: 1 })
+      organism: ' Oncorhynchus ', access: ['open', 'restricted'], mappable: true, species: '49JFH', wider: false,
+      page: 1 })
+    await fetchDatasets({ q: '', sort: 'relevance', catalogues: [], access: [], species: '', wider: false, page: 1 })
     expect(urls[0]).toBe('/api/datasets?page=1&page_size=20&q=eagle&sort=title&year_from=2010' +
-      '&organism=Oncorhynchus&access=open&access=restricted&mappable=true&frontend_group=bc_data')
+      '&organism=Oncorhynchus&access=open&access=restricted&mappable=true&species=49JFH&frontend_group=bc_data')
     expect(urls[1]).toBe('/api/datasets?page=1&page_size=20&frontend_group=bc_data')
   })
 

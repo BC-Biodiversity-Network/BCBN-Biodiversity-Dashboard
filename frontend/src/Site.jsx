@@ -40,8 +40,8 @@ function TopBar({ view, onNavigate }) {
 }
 
 // The whole site: the top bar, then the page the address asks for. The
-// species map page is the App component exactly as it was; it opens fresh
-// each time it is chosen.
+// species map page is the App component; it opens fresh each time it is
+// chosen, with the species card the address names (if any) open.
 export default function Site() {
   const [search, navigate] = useLocationSearch()
   const view = readView(search)
@@ -49,7 +49,9 @@ export default function Site() {
   return (
     <div className="site">
       <TopBar view={view} onNavigate={navigate} />
-      {view === 'datasets' ? <DatasetsPage search={search} navigate={navigate} /> : <App />}
+      {view === 'datasets'
+        ? <DatasetsPage search={search} navigate={navigate} />
+        : <App search={search} navigate={navigate} />}
     </div>
   )
 }

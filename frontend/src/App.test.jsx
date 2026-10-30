@@ -20,9 +20,17 @@ vi.mock('./SearchBox', () => ({
   },
 }))
 vi.mock('./SpeciesCard', () => ({
-  // A stand-in card: one button that closes it.
-  default: function SpeciesCard({ onClose }) {
-    return <button type="button" onClick={onClose}>Close the card</button>
+  // A stand-in card: a button that closes it, one that loads it, and one
+  // that opens the datasets that mention it.
+  default: function SpeciesCard({ requestedKey, onClose, onLoaded, onOpenDatasets }) {
+    return (
+      <>
+        <button type="button" onClick={onClose}>Close the card</button>
+        <button type="button" onClick={() => onLoaded({ requested_key: requestedKey,
+          name: { col_name: 'Oncorhynchus nerka' } })}>Load the card</button>
+        <button type="button" onClick={() => onOpenDatasets(requestedKey)}>Open its datasets</button>
+      </>
+    )
   },
 }))
 vi.mock('./loadHexData', () => ({
@@ -56,5 +64,33 @@ describe('the page', () => {
     act(() => screen.getByRole('button', { name: 'Close the card' }).click())
     expect(seen.map.species).toBeNull()
     expect(seen.map.years).toEqual({ from: 2000, to: 2020 })
+  })
+
+  it('puts the open card in the address, in place of the current entry', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })))
+    const navigate = vi.fn()
+    render(<App search="" navigate={navigate} />)
+    await act(async () => {})
+    act(() => screen.getByRole('button', { name: 'Pick the robin' }).click())
+    expect(navigate).toHaveBeenLastCalledWith('?species=59PMB', { replace: true })
+    act(() => screen.getByRole('button', { name: 'Open its datasets' }).click())
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&species=59PMB')
+    act(() => screen.getByRole('button', { name: 'Close the card' }).click())
+    expect(navigate).toHaveBeenLastCalledWith('?', { replace: true })
+  })
+
+  it('opens the card the address names, with its name once the card arrives, and follows the back button', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })))
+    const { rerender } = render(<App search="?species=49JFH" navigate={vi.fn()} />)
+    await act(async () => {})
+    expect(seen.map.species).toMatchObject({ key: '49JFH', name: null })
+    act(() => screen.getByRole('button', { name: 'Load the card' }).click())
+    expect(seen.map.species).toMatchObject({ key: '49JFH', name: 'Oncorhynchus nerka' })
+    const first = seen.map.species.id
+    rerender(<App search="?species=4LVR5" navigate={vi.fn()} />)
+    expect(seen.map.species.key).toBe('4LVR5')
+    expect(seen.map.species.id).not.toBe(first)
+    rerender(<App search="" navigate={vi.fn()} />)
+    expect(seen.map.species).toBeNull()
   })
 })

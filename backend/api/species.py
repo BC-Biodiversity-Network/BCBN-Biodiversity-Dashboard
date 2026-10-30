@@ -9,6 +9,10 @@ Where each part comes from:
         merge (so every count is by specieskey after the merge)
     conservation status and English name
         bcsee_status_by_gbif_species.parquet, joined on gbif_species_key
+    the Lunaris datasets that mention the species
+        dataset_species_links.parquet (see datasets.py): how many datasets
+        of the default group (bc_data, as the Datasets page shows by
+        default) have a name linked to it
 
 A key that was merged into another (listed in a card's merged_keys) gets
 the kept key's card, with merged_from saying which key was asked for.
@@ -36,7 +40,7 @@ so "not in BCSEE" is always "not in BCSEE as of that export".
 
 import re
 
-from api.db import SHOWN_STATUSES
+from api.db import DATASET_DEFAULT_FRONTEND_GROUPS, SHOWN_STATUSES
 from api.images import card_image
 
 # The card columns the endpoint reads, in the order the query returns them.
@@ -161,11 +165,41 @@ def bcsee_block(row, includes_without_status, source):
     }
 
 
+def mentioning_datasets(cursor, card_key):
+    """Return how many Lunaris datasets of the default front end group
+    (DATASET_DEFAULT_FRONTEND_GROUPS) have a name linked to the species,
+    with that group: {"count": N, "frontend_group": [...]}. The Datasets
+    page filtered to the species shows the same datasets."""
+    groups = list(DATASET_DEFAULT_FRONTEND_GROUPS)
+    count = cursor.execute(
+        """SELECT count(DISTINCT l.dataset_id)
+           FROM dataset_species_links AS l JOIN lunaris_datasets AS d ON d.id = l.dataset_id
+           WHERE l.specieskey = ? AND list_contains(CAST(? AS VARCHAR[]), d.frontend_group)""",
+        [card_key, groups]).fetchone()[0]
+    return {"count": count, "frontend_group": groups}
+
+
+def species_labels(cursor, keys):
+    """Return {specieskey: {"col_name": ..., "english_name": ...}} for the
+    keys that have a card: the card's Catalogue of Life name and its
+    English name from BCSEE (None when it has none), as the card shows
+    them."""
+    if not keys:
+        return {}
+    rows = cursor.execute(
+        """SELECT c.specieskey, c.col_name, b.entries
+           FROM species_card AS c LEFT JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey
+           WHERE list_contains(CAST(? AS VARCHAR[]), c.specieskey)""", [list(keys)]).fetchall()
+    return {key: {"col_name": col_name, "english_name": english_name(entries)}
+            for key, col_name, entries in rows}
+
+
 def build_species_card(data, key):
     """Return the species card for a requested key, or None if the key is
     neither a card key nor a key merged into one. data is the ApiData."""
     card_key, merged_from = resolve_key(key, data.merged_keys)
-    row = read_species_row(data.cursor(), card_key)
+    cursor = data.cursor()
+    row = read_species_row(cursor, card_key)
     if row is None:
         return None
 
@@ -209,4 +243,7 @@ def build_species_card(data, key):
         "image": card_image(row),
         "top_datasets": row["top_datasets"] or [],
         "bcsee": bcsee_block(row, data.bcsee_includes_without_status, source),
+        # The Lunaris datasets that mention the species (not the GBIF
+        # datasets of its records, which are in records.n_datasets).
+        "mentioned_in_datasets": mentioning_datasets(cursor, card_key),
     }

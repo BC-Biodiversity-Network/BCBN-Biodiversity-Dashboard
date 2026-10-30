@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchMeta } from './api'
 import HexMap from './HexMap'
 import { loadHexData } from './loadHexData'
+import { readSpeciesKey, speciesDatasetsSearch, speciesMapSearch } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
 import SpeciesCard from './SpeciesCard'
@@ -22,17 +23,22 @@ const HEX_DATA_URLS = {
 }
 
 // The whole page: the map (the overview, or the species whose card is open),
-// the search box and species card on the right, and the footer.
-export default function App() {
+// the search box and species card on the right, and the footer. search is
+// the address's query string, which names the species whose card is open
+// (?species=<key>, see route.js), and navigate changes it, so a card can be
+// linked to and the back button returns to it.
+export default function App({ search = '', navigate = () => {} }) {
   const [overviewRows, setOverviewRows] = useState({})
   const [overviewError, setOverviewError] = useState(null)
   // The species whose card is open, or null for the plain overview:
   // { key, name, id }. key is the key the card and map are opened with; when
   // an old merged key was typed it is that old key, so the card can say it
-  // was merged. name is the scientific name for the map legend. id changes
+  // was merged. name is the scientific name for the map legend (null until
+  // the card arrives, for a species opened from the address). id changes
   // every time a species is picked, so the map moves to it again even when
   // the same species is picked twice.
-  const [species, setSpecies] = useState(null)
+  const addressKey = readSpeciesKey(search)
+  const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
   // What the data is and where it comes from (/api/meta), for the GBIF
   // download citation on the card; null until it arrives or if it fails.
@@ -68,14 +74,41 @@ export default function App() {
       })
   }, [])
 
-  // Opens the card and the map of a species picked in the search box.
+  // When the address names another species than the open one (the back or
+  // forward button), opens that one, or closes the card when it names none.
+  useEffect(() => {
+    const id = picks.current + 1
+    setSpecies((open) => {
+      if ((open?.key ?? null) === addressKey) {
+        return open
+      }
+      picks.current = id
+      return addressKey ? { key: addressKey, name: null, id } : null
+    })
+  }, [addressKey])
+
+  // Opens the card and the map of a species picked in the search box, and
+  // puts it in the address in place of the current entry, so picking species
+  // one after another does not fill the back button's history.
   function pickSpecies(result) {
     picks.current += 1
-    setSpecies({
-      key: result.merged_from ?? result.specieskey,
-      name: result.col_name,
-      id: picks.current,
-    })
+    const key = result.merged_from ?? result.specieskey
+    setSpecies({ key, name: result.col_name, id: picks.current })
+    navigate(speciesMapSearch(key), { replace: true })
+  }
+
+  // Closes the card, back to the plain overview.
+  function closeCard() {
+    setSpecies(null)
+    navigate(speciesMapSearch(null), { replace: true })
+  }
+
+  // Keeps the scientific name of a species opened from the address, for the
+  // map legend, once its card arrives.
+  function cardLoaded(card) {
+    setSpecies((open) => (open && !open.name && open.key === card.requested_key
+      ? { ...open, name: card.name.col_name }
+      : open))
   }
 
   const overview = {
@@ -106,7 +139,9 @@ export default function App() {
             <SpeciesCard
               requestedKey={species.key}
               meta={meta}
-              onClose={() => setSpecies(null)}
+              onClose={closeCard}
+              onLoaded={cardLoaded}
+              onOpenDatasets={(key) => navigate(speciesDatasetsSearch(key))}
             />
           )}
         </div>

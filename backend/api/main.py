@@ -18,7 +18,8 @@ Endpoints so far:
                     the year range, the map resolutions and the
                     sensitive-species setting.
     GET /api/species/{key}
-                    one species card (see species.py). An old key that
+                    one species card (see species.py), with how many
+                    BC data datasets mention the species. An old key that
                     was merged gives the kept key's card with
                     merged_from set; an unknown key gives 404.
     GET /api/search?q=&limit=
@@ -34,18 +35,21 @@ Endpoints so far:
                     hexagon at res (4 to 7), optionally for a year range
                     (see overview.py). A bad res or year range gives 400.
     GET /api/datasets?q=&sort=&catalogue=&final_class=&frontend_group=&year_from=
-                     &year_to=&organism=&access=&mappable=&page=&page_size=
+                     &year_to=&organism=&access=&mappable=&species=&page=&page_size=
                     Lunaris datasets matching the keyword q (title,
                     abstract, subjects) and the filters, a page at a time,
                     in the order sort asks for, with the total and the
                     counts for the filter options (see datasets.py).
-                    frontend_group defaults to bc_data. A query or
-                    organism with fewer than 2 letters or digits, an
-                    unknown value, sort=relevance with no q, or
-                    year_from after year_to gives 400.
+                    frontend_group defaults to bc_data. species keeps
+                    the datasets with a name linked to that species. A
+                    query or organism with fewer than 2 letters or
+                    digits, an unknown value or species,
+                    sort=relevance with no q, or year_from after
+                    year_to gives 400.
     GET /api/datasets/{id}
                     one Lunaris dataset with every field, including its
-                    location (see datasets.py). The id of another copy
+                    location, its linked species and the organisms it
+                    names that do not link (see datasets.py). The id of another copy
                     gives the copy shown, with requested_copy set; an
                     unknown id gives 404.
 
@@ -167,17 +171,18 @@ def create_app(settings=None):
                  organism: str | None = Query(None, max_length=200),
                  access: list[str] | None = Query(None),
                  mappable: bool = Query(False),
+                 species: str | None = Query(None, max_length=50),
                  page: int = Query(1, ge=1),
                  page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)):
         """Return one page of Lunaris datasets matching q and the filters, in
         the order sort asks for (relevance by default with q, else newest;
         see datasets.py). catalogue, final_class, frontend_group and access
         can each be given more than once; frontend_group defaults to
-        bc_data."""
+        bc_data. species is a species key."""
         try:
             return list_datasets(request.app.state.data, q, catalogue, final_class, frontend_group,
                                  page, page_size, sort=sort, year_from=year_from, year_to=year_to,
-                                 organism=organism, access=access, mappable=mappable)
+                                 organism=organism, access=access, mappable=mappable, species=species)
         except (QueryTooShort, DatasetsRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
 

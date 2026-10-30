@@ -177,7 +177,8 @@ function FilterPanel({ state, options, onApply, onClose }) {
           placeholder="For example salmon or Oncorhynchus" onChange={(event) => change({ organism: event.target.value })} />
         {problems.organism && <p className="datasets-error">{problems.organism}</p>}
         <p className="datasets-filter-note">
-          Names as written in the record; common and scientific names are not linked yet.
+          Matches the names as written in each record. To see the datasets linked to a species, open its card
+          on the species map.
         </p>
       </FilterSection>
 
@@ -255,11 +256,11 @@ export default function SortAndFilters({ state, options, onChange }) {
     close()
   }
 
-  // Clears every applied filter at once; an open panel closes, dropping
-  // its pending changes.
+  // Clears every applied filter at once, the species filter too; an open
+  // panel closes, dropping its pending changes.
   function clearAll() {
     setOpen(false)
-    onChange(NO_FILTERS)
+    onChange({ ...NO_FILTERS, species: '' })
   }
 
   return (
@@ -283,7 +284,7 @@ export default function SortAndFilters({ state, options, onChange }) {
         >
           Filters{active > 0 && ` (${active})`}
         </button>
-        {active > 0 && (
+        {(active > 0 || state.species) && (
           <button type="button" className="text-button" onClick={clearAll}>Clear all</button>
         )}
       </div>

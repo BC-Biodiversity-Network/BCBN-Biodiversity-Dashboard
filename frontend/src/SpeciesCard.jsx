@@ -4,6 +4,7 @@ import { fetchSpecies } from './api'
 import { BCSEE_LIST_HELP_URL, bcseeDefinition } from './bcseeDefinitions'
 import InfoTip from './InfoTip'
 import OglBcStatement from './OglBcStatement'
+import { speciesDatasetsSearch } from './route'
 import { BCSEE_URL, bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
 
 // The BCSEE values that are conservation statuses, each with its own chip
@@ -42,8 +43,10 @@ function AuthorshipHelp({ name }) {
 // The species card panel. requestedKey is the key to show: the one picked in
 // search, or the old merged key that was typed, so the API can say it was
 // merged. meta is /api/meta (or null while it loads), for the GBIF download
-// citation. onClose returns to the plain overview.
-export default function SpeciesCard({ requestedKey, meta, onClose }) {
+// citation. onClose returns to the plain overview. onLoaded(card), if
+// given, is called when the card arrives. onOpenDatasets(key), if given,
+// opens the Datasets page for the species, in place of following the link.
+export default function SpeciesCard({ requestedKey, meta, onClose, onLoaded, onOpenDatasets }) {
   // The card as { key, card } once it arrives, or { key, error } if it fails.
   // Keeping the key with it means a card is only ever shown for the species
   // that was asked for, never a previous one.
@@ -54,7 +57,10 @@ export default function SpeciesCard({ requestedKey, meta, onClose }) {
   useEffect(() => {
     const controller = new AbortController()
     fetchSpecies(requestedKey, { signal: controller.signal })
-      .then((card) => setLoaded({ key: requestedKey, card }))
+      .then((card) => {
+        setLoaded({ key: requestedKey, card })
+        onLoaded?.(card)
+      })
       .catch((error) => {
         if (error.name !== 'AbortError') {
           console.error(error)
@@ -74,7 +80,7 @@ export default function SpeciesCard({ requestedKey, meta, onClose }) {
       </button>
       {!current && <p className="card-message">Loading the species card...</p>}
       {current?.error && <CardError error={current.error} requestedKey={requestedKey} />}
-      {current?.card && <CardBody card={current.card} meta={meta} />}
+      {current?.card && <CardBody card={current.card} meta={meta} onOpenDatasets={onOpenDatasets} />}
     </aside>
   )
 }
@@ -92,16 +98,50 @@ function CardError({ error, requestedKey }) {
 }
 
 // Everything on a loaded card, top to bottom.
-function CardBody({ card, meta }) {
+function CardBody({ card, meta, onOpenDatasets }) {
   return (
     <>
       <CardTitle card={card} />
       {card.merged_from && <MergedKeyNote card={card} />}
       <SpeciesImage image={card.image} name={card.name.col_name} />
       <BcseeSection bcsee={card.bcsee} />
+      <DatasetsLine card={card} onOpen={onOpenDatasets} />
       <RecordsSection card={card} />
       <SourcesSection card={card} meta={meta} />
     </>
+  )
+}
+
+// How many Lunaris datasets of the Datasets page (BC data, as it shows by
+// default) mention this species, linked to that page filtered to it; or a
+// line saying none do. Nothing for an API from before the links. Named "BC
+// research datasets from Lunaris" so they are not taken for the GBIF
+// datasets of the Records section.
+export function DatasetsLine({ card, onOpen }) {
+  const count = card.mentioned_in_datasets?.count
+  if (count == null) {
+    return null
+  }
+  if (count === 0) {
+    return <p className="card-datasets-line">No BC research datasets from Lunaris mention this species</p>
+  }
+  const text = `${count.toLocaleString()} BC research ${count === 1 ? 'dataset' : 'datasets'} from Lunaris `
+    + `${count === 1 ? 'mentions' : 'mention'} this species`
+  return (
+    <p className="card-datasets-line">
+      <a
+        href={speciesDatasetsSearch(card.specieskey)}
+        onClick={(event) => {
+          if (!onOpen || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
+            return
+          }
+          event.preventDefault()
+          onOpen(card.specieskey)
+        }}
+      >
+        {text}
+      </a>
+    </p>
   )
 }
 
@@ -474,7 +514,7 @@ function RecordsSection({ card }) {
       <p>
         <strong>{records.record_count.toLocaleString()}</strong>{' '}
         {records.record_count === 1 ? 'record' : 'records'}{years}, from{' '}
-        {records.n_datasets.toLocaleString()} {records.n_datasets === 1 ? 'dataset' : 'datasets'}.
+        {records.n_datasets.toLocaleString()} GBIF {records.n_datasets === 1 ? 'dataset' : 'datasets'}.
         {noDate && ` ${noDate}`}
       </p>
       {records.merged_keys.length > 0 && <MergedRecordsNote card={card} />}

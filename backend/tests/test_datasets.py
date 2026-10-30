@@ -238,7 +238,7 @@ def test_filters_combine_and_are_echoed(client):
     assert ids_of(body) == [EAGLE_NESTS]
     assert body["filters"] == {"catalogue": [], "final_class": [], "frontend_group": ["bc_data", "pending"],
                                "year_from": 2015, "year_to": None, "organism": "eagle", "access": ["open"],
-                               "mappable": True}
+                               "mappable": True, "species": None}
 
 
 @pytest.mark.parametrize("params, message", [

@@ -4,18 +4,33 @@ import { useCallback, useEffect, useState } from 'react'
 // bar's query string so a link can be shared and the back button works.
 //
 //   (no query)                        the species map, as the site always was
+//   ?species=<key>                    the species map with that species'
+//                                     card open
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
-//       &wider=1&page=2&dataset=<id>  the Datasets page
+//       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
 //
 // catalogue and access can be given more than once; sort is left out for
-// the default order. The query string is used rather
+// the default order. On the Datasets page, species keeps the datasets that
+// mention that species (it is not part of the Filters panel). The query string is used rather
 // than paths such as /datasets so the built site works on any static host,
 // with no rewrite rules.
 
 // Which page a query string asks for: 'datasets' or 'species'.
 export function readView(search) {
   return new URLSearchParams(search).get('view') === 'datasets' ? 'datasets' : 'species'
+}
+
+// The species whose card is open on the species map, from a query string:
+// its key, or null for none.
+export function readSpeciesKey(search) {
+  return new URLSearchParams(search).get('species') || null
+}
+
+// The query string for the species map with a species' card open, or with
+// none (key null).
+export function speciesMapSearch(key) {
+  return key ? `?${new URLSearchParams({ species: key })}` : '?'
 }
 
 // The orders the list can be sorted in. Relevance only makes sense with a
@@ -29,7 +44,8 @@ function readYear(text) {
 }
 
 // The Datasets page's state from a query string: { q, sort, catalogues,
-// yearFrom, yearTo, organism, access, mappable, wider, page, dataset }.
+// yearFrom, yearTo, organism, access, mappable, species, wider, page,
+// dataset }. species is a species key, or '' for none.
 // Missing or odd values fall back to the defaults (sort '' is the default
 // order).
 export function readDatasetsState(search) {
@@ -45,6 +61,7 @@ export function readDatasetsState(search) {
     organism: params.get('organism') ?? '',
     access: params.getAll('access'),
     mappable: params.get('mappable') === '1',
+    species: params.get('species') ?? '',
     wider: params.get('wider') === '1',
     page: Number.isFinite(page) && page > 1 ? page : 1,
     dataset: params.get('dataset') || null,
@@ -79,6 +96,9 @@ export function datasetsSearch(state) {
   if (state.mappable) {
     params.set('mappable', '1')
   }
+  if (state.species) {
+    params.set('species', state.species)
+  }
   if (state.wider) {
     params.set('wider', '1')
   }
@@ -103,7 +123,7 @@ export function shownSort(state) {
 
 // How many filters of the Filters panel are in use: the catalogue, the
 // published years, the organism, the access and the location each count
-// once.
+// once. The species filter is not in the panel, so it is not counted.
 export function activeFilterCount(state) {
   return [state.catalogues?.length > 0, state.yearFrom != null || state.yearTo != null,
     Boolean(state.organism?.trim()), state.access?.length > 0, Boolean(state.mappable)].filter(Boolean).length
@@ -111,6 +131,12 @@ export function activeFilterCount(state) {
 
 // The changes that clear every filter of the Filters panel.
 export const NO_FILTERS = { catalogues: [], yearFrom: null, yearTo: null, organism: '', access: [], mappable: false }
+
+// The address of the Datasets page listing the datasets that mention one
+// species, with nothing else set.
+export function speciesDatasetsSearch(key) {
+  return datasetsSearch({ species: key, page: 1 })
+}
 
 // Keeps track of the address bar's query string. Returns [search, navigate]:
 // navigate(newSearch) puts a new entry in the browser history (so back

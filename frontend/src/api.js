@@ -125,7 +125,7 @@ export function fetchSpeciesHexes(key, resolution, { signal, years = null } = {}
 
 // Fetches one page of Lunaris datasets (/api/datasets). state is the
 // Datasets page's state (see route.js): q, sort, the filters (catalogues,
-// yearFrom, yearTo, organism, access, mappable), wider (also datasets that
+// yearFrom, yearTo, organism, access, mappable, species), wider (also datasets that
 // may include BC, the pending group) and page. Relevance is only sent with
 // a search. The page does not filter by the location classes, so
 // final_class is never sent. Returns the API's answer: { total, pages,
@@ -155,6 +155,9 @@ export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
   }
   if (state.mappable) {
     params.set('mappable', 'true')
+  }
+  if (state.species) {
+    params.set('species', state.species)
   }
   params.append('frontend_group', 'bc_data')
   if (state.wider) {

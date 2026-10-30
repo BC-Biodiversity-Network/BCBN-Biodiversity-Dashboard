@@ -1,14 +1,16 @@
 """
 db.py
 
-Opens the API's data: checks that the five files are there and have the
-columns the API reads, that every species key has one answer and that
-every Lunaris dataset id has one answer, opens one DuckDB connection over
+Opens the API's data: checks that the six files are there and have the
+columns the API reads, that every species key has one answer, that
+every Lunaris dataset id has one answer and that every link between a
+dataset and a species points at both, opens one DuckDB connection over
 them, and works out the figures /api/meta returns and the lookup from
 merged (old) keys to kept keys.
 
-The three small files (the species cards, the BCSEE statuses and the
-Lunaris datasets) are copied into memory when the API starts. species_hex is read in place (a DuckDB
+The four small files (the species cards, the BCSEE statuses, the
+Lunaris datasets and their links to species) are copied into memory when
+the API starts. species_hex is read in place (a DuckDB
 view over read_parquet): it is sorted by species key, so a request for one
 species only reads the few parquet row groups that hold it. Either way it
 stays fast without a database server.
@@ -55,6 +57,12 @@ REQUIRED_COLUMNS = {
         "organisms_4b", "organisms_35b", "organism_level_4b", "organism_level_35b",
         "organisms", "organism_level", "copy_count", "other_copies",
     ],
+    # Written by pipeline/lunaris/export_dataset_species_links.py: one row
+    # per dataset and organism name, with the species only when it links.
+    "dataset_species_links.parquet": [
+        "dataset_id", "position", "name_as_written", "match_status", "specieskey",
+        "matched_name", "matched_field",
+    ],
 }
 
 # The fields of download_info.json the API passes on, for citing the GBIF
@@ -71,7 +79,16 @@ SHOWN_STATUSES = ["Red", "Blue", "Yellow", "Exotic"]
 # only writes these (the "dropped" group and the elsewhere and unknown
 # classes are left out), and the dataset filters take only these.
 DATASET_FRONTEND_GROUPS = ["bc_data", "pending"]
+# The group shown when none is asked for: the Datasets page's default list,
+# and the datasets a species card counts.
+DATASET_DEFAULT_FRONTEND_GROUPS = ["bc_data"]
 DATASET_FINAL_CLASSES = ["bc_only", "canada_incl_bc", "bc_and_outside_canada", "all_canada", "global"]
+
+# How a name of a dataset links to a species (the match statuses of
+# match_dataset_species.py that link): exactly, by scientific or common
+# name or with its genus written out, or by a confirmed row of the
+# hand-checked list. Every other status is a name that does not link.
+LINKED_MATCH_STATUSES = ["scientific", "common", "expanded_abbreviation", "manual"]
 
 # The name each parquet file is given inside DuckDB.
 VIEW_NAMES = {
@@ -79,6 +96,7 @@ VIEW_NAMES = {
     "species_hex.parquet": "species_hex",
     "bcsee_status_by_gbif_species.parquet": "bcsee_status",
     "lunaris_datasets.parquet": "lunaris_datasets",
+    "dataset_species_links.parquet": "dataset_species_links",
 }
 
 # The files copied into memory when the API starts, rather than read from
@@ -88,9 +106,10 @@ VIEW_NAMES = {
 # and 0.5 MB). species_hex stays on disk: it is ten times larger and sorted
 # by key, so DuckDB only reads the part that holds the species asked for.
 # The Lunaris datasets (about 3 MB) are searched as a whole on every
-# request, so they are kept in memory too.
+# request, so they are kept in memory too, and so are their links to
+# species (about 0.3 MB).
 LOADED_INTO_MEMORY = {"species_card_gbif.parquet", "bcsee_status_by_gbif_species.parquet",
-                      "lunaris_datasets.parquet"}
+                      "lunaris_datasets.parquet", "dataset_species_links.parquet"}
 
 
 class DataFilesError(RuntimeError):
@@ -251,6 +270,37 @@ def check_datasets(con):
         if unknown:
             problems.append(f"lunaris_datasets.parquet has {column} value(s) the API does not "
                             f"know: {', '.join(str(v) for v in unknown)}")
+    return problems
+
+
+def check_species_links(con):
+    """Return a list of problems with the links between datasets and
+    species: every link must be from a dataset on the site to a species
+    card (a key merged into a card is not enough), a name must have a
+    species exactly when its match status is one that links
+    (LINKED_MATCH_STATUSES), and a dataset's names must not share a
+    position. Otherwise a species card would count, or a dataset list,
+    datasets or species the site does not have."""
+    problems = []
+    linked = ", ".join(sql_text(status) for status in LINKED_MATCH_STATUSES)
+    for query, what in (
+            ("""SELECT DISTINCT l.dataset_id FROM dataset_species_links AS l
+                ANTI JOIN lunaris_datasets AS d ON d.id = l.dataset_id ORDER BY 1""",
+             "these dataset ids have species links but are not datasets on the site"),
+            ("""SELECT DISTINCT l.specieskey FROM dataset_species_links AS l
+                ANTI JOIN species_card AS c ON c.specieskey = l.specieskey
+                WHERE l.specieskey IS NOT NULL ORDER BY 1""",
+             "these species keys have dataset links but no card"),
+            (f"""SELECT DISTINCT dataset_id || ' ' || name_as_written FROM dataset_species_links
+                 WHERE (specieskey IS NOT NULL) <> coalesce(match_status IN ({linked}), false) ORDER BY 1""",
+             "these names have a species without a linking match status, or the other way round"),
+            ("""SELECT dataset_id FROM dataset_species_links
+                GROUP BY dataset_id, position HAVING count(*) > 1 ORDER BY 1""",
+             "these datasets have two names at the same position")):
+        found = [str(row[0]) for row in con.execute(query).fetchall()]
+        if found:
+            problems.append(f"dataset_species_links.parquet: {what}: {', '.join(found[:10])}"
+                            + (f" and {len(found) - 10} more" if len(found) > 10 else ""))
     return problems
 
 
@@ -426,6 +476,7 @@ def open_data(settings):
             problems += check_single_values(con)
             problems += check_keys(con)
             problems += check_datasets(con)
+            problems += check_species_links(con)
 
         if problems:
             raise DataFilesError(

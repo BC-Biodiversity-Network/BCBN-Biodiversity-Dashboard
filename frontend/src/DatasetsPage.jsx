@@ -6,7 +6,8 @@ import SortAndFilters from './DatasetFilters'
 import DatasetMap from './DatasetMap'
 import DatasetsFooter from './DatasetsFooter'
 import { describeLocation, issuedLabel, licenceListLabel, plainText } from './datasetText'
-import { datasetsSearch, readDatasetsState } from './route'
+import { datasetsSearch, readDatasetsState, speciesMapSearch } from './route'
+import SpeciesName, { speciesLabel } from './SpeciesName'
 import { MayIncludeBcTag, SHOW_WIDER_SWITCH, WiderSwitch } from './widerDatasets'
 
 // What to say when a request to the API fails, by the kind of failure (see
@@ -90,6 +91,25 @@ function ResultItem({ result, href, onOpen, showOrganisms }) {
       )}
       {result.abstract_preview && <p className="dataset-preview">{plainText(result.abstract_preview)}</p>}
     </li>
+  )
+}
+
+// The species filter, as a chip that removes it: "Species: Sockeye Salmon
+// (Oncorhynchus nerka) ×". named is the species as the API's answer names
+// it (filters.species), or null while that answer is for another species
+// or has not come; the key is shown then.
+export function SpeciesChip({ speciesKey, named, onRemove }) {
+  const label = named ? speciesLabel(named) : speciesKey
+  return (
+    <div className="datasets-chips">
+      <span className="datasets-chip">
+        <span>Species: {named ? <SpeciesName species={named} /> : speciesKey}</span>
+        <button type="button" className="datasets-chip-remove" onClick={onRemove}
+          aria-label={`Remove the species filter (${label})`}>
+          ×
+        </button>
+      </span>
+    </div>
   )
 }
 
@@ -222,7 +242,8 @@ export default function DatasetsPage({ search, navigate }) {
                 </button>
               )}
               {detail.data && (
-                <DatasetDetail dataset={detail.data} location={location} onBack={() => go({ dataset: null })} />
+                <DatasetDetail dataset={detail.data} location={location} onBack={() => go({ dataset: null })}
+                  onOpenSpecies={(key) => navigate(speciesMapSearch(key))} />
               )}
             </>
           ) : (
@@ -235,6 +256,13 @@ export default function DatasetsPage({ search, navigate }) {
               <SearchForm key={state.q} initial={state.q} onSearch={(q) => filter({ q })} />
               <WiderSwitch checked={state.wider} onChange={(wider) => filter({ wider })} />
               <SortAndFilters state={state} options={options ?? null} onChange={filter} />
+              {state.species && (
+                <SpeciesChip
+                  speciesKey={state.species}
+                  named={data?.filters?.species?.requested_key === state.species ? data.filters.species : null}
+                  onRemove={() => filter({ species: '' })}
+                />
+              )}
 
               {list.error && <p className="datasets-error">{errorText(list.error)}</p>}
               {data && (

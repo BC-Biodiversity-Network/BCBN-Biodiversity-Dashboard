@@ -500,6 +500,11 @@ body {
   color: #666;
 }
 
+/* "N datasets mention this species", under the BCSEE part. */
+.card-datasets-line {
+  margin: 10px 0 0;
+}
+
 .card-section {
   margin-top: 14px;
   padding-top: 10px;
@@ -1009,6 +1014,44 @@ body {
   margin-bottom: 6px;
 }
 
+/* The species filter, shown as a chip that removes it. */
+.datasets-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+
+.datasets-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid #c9d6e6;
+  border-radius: 14px;
+  background: #eef3f9;
+  font-size: 13.5px;
+}
+
+.datasets-chip-remove {
+  border: 0;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: #333;
+  cursor: pointer;
+}
+
+.datasets-chip-remove:hover,
+.datasets-chip-remove:focus-visible {
+  background: #d7e2ef;
+}
+
 .datasets-total {
   margin: 10px 0 4px;
   font-weight: 600;
@@ -1116,6 +1159,16 @@ body {
 .dataset-copies {
   margin: 0 0 6px;
   padding-left: 18px;
+}
+
+/* The species a dataset names, each linked to its card. */
+.dataset-species {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.dataset-species li {
+  margin-bottom: 2px;
 }
 
 .dataset-licence-text {

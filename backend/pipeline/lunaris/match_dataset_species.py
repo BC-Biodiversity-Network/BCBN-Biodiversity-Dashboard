@@ -39,6 +39,15 @@ The steps for each dataset:
      "sp." or "spp." is dropped ("fish", "kelp", "salmon", "Mytilus spp."),
      else unmatched. Names that are a genus or family of our table are
      also marked (higher_taxon), for later.
+  4. A name the exact match does not link (ambiguous, a group word or
+     unmatched) is looked up in the hand-checked list,
+     dataset_species_names_manual.csv (next to this script), like
+     species_key_merge_manual.csv: a name as written (search_norm), the
+     species it is, why, and how the row was checked (status, evidence).
+     Only rows with status confirmed and checked_by and checked_date filled
+     are used; each must name a species key on the site, with that card's
+     name in species_name, or the run stops. A name linked this way has
+     status "manual". Deferred, rejected and unchecked rows change nothing.
 
 The match table has one row per dataset and name (see COLUMNS in
 match_rows), every name kept as written.
@@ -64,6 +73,18 @@ DEFAULT_DATASETS = "data/api/lunaris_datasets.parquet"
 DEFAULT_SPECIES = "data/api/species_card_gbif.parquet"
 DEFAULT_BCSEE = "data/api/bcsee_status_by_gbif_species.parquet"
 DEFAULT_OUT = "data/lunaris_species_match/dataset_species_matches.parquet"
+DEFAULT_MANUAL = os.path.join(HERE, "dataset_species_names_manual.csv")
+
+# The columns of the hand-checked list. datasets_affected is for the reader
+# only (how many datasets had the name when the row was written).
+MANUAL_COLUMNS = ["name_as_written", "specieskey", "species_name", "reason", "datasets_affected",
+                  "status", "evidence", "checked_by", "checked_date"]
+# The statuses a row of the hand-checked list can have (empty: not checked
+# yet). Only confirmed rows are used.
+MANUAL_STATUSES = {"", "confirmed", "deferred", "rejected"}
+
+# The statuses of a name that is linked to a species.
+LINKED = {"scientific", "common", "expanded_abbreviation", "manual"}
 
 # The fields of the site's name index, by the kind of name they are, each
 # in order of preference for saying how a name matched.
@@ -138,6 +159,72 @@ def normalise_all(con, names):
     return written
 
 
+def read_manual_names(path):
+    """
+    Read the hand-checked list, if the file exists, as a list of dicts with
+    every value stripped of spaces (empty rows dropped). Stops if a column
+    is missing.
+    """
+    if not os.path.exists(path):
+        return []
+    rows = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    missing = [column for column in MANUAL_COLUMNS if column not in rows.columns]
+    if missing:
+        raise SystemExit(f"ERROR: {path} has no column(s) {missing}")
+    rows = [{key: value.strip() for key, value in row.items()} for row in rows.to_dict("records")]
+    return [row for row in rows if any(row.values())]
+
+
+def is_confirmed(row):
+    """Return True if a hand-checked row is to be used: status confirmed, checked_by and checked_date filled."""
+    return row["status"] == "confirmed" and bool(row["checked_by"]) and bool(row["checked_date"])
+
+
+def check_manual_names(con, rows, path):
+    """
+    Check the confirmed rows of the hand-checked list and return them as
+    {name_as_written: row}. Stops, listing every problem, if any row has a
+    status other than MANUAL_STATUSES, a row has status confirmed but no
+    checked_by or checked_date, or a confirmed row's name is not written
+    the way the matcher writes names (search_norm), its name is given
+    twice, its specieskey has no card on the site, its species_name is not
+    that card's name, or its checked_date is not YYYY-MM-DD. Other rows are
+    not checked further or used.
+    """
+    problems = []
+    for row in rows:
+        if row["status"] not in MANUAL_STATUSES:
+            problems.append(f"{row['name_as_written']!r}: status {row['status']!r} is not one of "
+                            f"confirmed, deferred, rejected (or empty)")
+        elif row["status"] == "confirmed" and not is_confirmed(row):
+            problems.append(f"{row['name_as_written']!r}: status confirmed needs checked_by and checked_date")
+    if problems:
+        raise SystemExit(f"ERROR: {path}: rows refused:\n  " + "\n  ".join(problems))
+    confirmed = [row for row in rows if is_confirmed(row)]
+    if not confirmed:
+        return {}
+    cards = dict(con.execute("SELECT specieskey, col_name FROM species_card").fetchall())
+    written = normalise_all(con, [row["name_as_written"] for row in confirmed])
+    problems, seen = [], set()
+    for row in confirmed:
+        name, key = row["name_as_written"], row["specieskey"]
+        if written[name] != name:
+            problems.append(f"{name!r} is not written the way the matcher writes names ({written[name]!r})")
+        if name in seen:
+            problems.append(f"{name!r} is given more than once")
+        seen.add(name)
+        if key not in cards:
+            problems.append(f"{name!r}: specieskey {key!r} has no card on the site")
+        elif row["species_name"] != cards[key]:
+            problems.append(f"{name!r}: species_name {row['species_name']!r} is not the card's name "
+                            f"{cards[key]!r} for {key}")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["checked_date"]):
+            problems.append(f"{name!r}: checked_date {row['checked_date']!r} is not YYYY-MM-DD")
+    if problems:
+        raise SystemExit(f"ERROR: {path}: confirmed rows refused:\n  " + "\n  ".join(problems))
+    return {row["name_as_written"]: row for row in confirmed}
+
+
 # --- One dataset -----------------------------------------------------------
 
 def split_entry(entry):
@@ -198,13 +285,25 @@ def expand_abbreviation(name, norm, genera_here):
     return " ".join([candidates[0]] + words[1:])
 
 
-def classify(norm, lookup, genera, families, expanded=None):
+def classify(norm, lookup, genera, families, expanded=None, manual=None):
     """
     Return the match of one written name (norm, or expanded when its genus
     was written out) as a dict: status, specieskey, matched_name,
     matched_field, candidates, candidate_names, higher_taxon and
-    higher_taxon_rank (see the top of this file).
+    higher_taxon_rank (see the top of this file). manual holds the
+    confirmed hand-checked rows by name (check_manual_names); one is used
+    only when the exact match links nothing.
     """
+    result = exact_match(norm, lookup, genera, families, expanded)
+    row = (manual or {}).get(expanded or norm) or (manual or {}).get(norm)
+    if row and result["status"] not in LINKED:
+        result.update(status="manual", specieskey=row["specieskey"], matched_name=row["species_name"],
+                      matched_field="manual")
+    return result
+
+
+def exact_match(norm, lookup, genera, families, expanded=None):
+    """Return the exact match of one written name, as classify describes, without the hand-checked list."""
     target = expanded or norm
     hits = lookup.get(target, [])
     keys = sorted({key for key, _, _ in hits})
@@ -231,12 +330,12 @@ def classify(norm, lookup, genera, families, expanded=None):
     return result
 
 
-def match_rows(record, norms, lookup, genera, families):
+def match_rows(record, norms, lookup, genera, families, manual=None):
     """
     Return the match table rows of one dataset (a dict with id,
     frontend_group, organisms, organisms_4b and organisms_35b): one per
     name after splitting, in the order of COLUMNS. norms gives every name
-    written the search way.
+    written the search way; manual the confirmed hand-checked rows.
     """
     pairs = [(entry, name) for entry in record["organisms"] for name in split_entry(entry)]
     genera_here = dataset_genera([norms[name] for _, name in pairs], genera)
@@ -251,7 +350,7 @@ def match_rows(record, norms, lookup, genera, families):
             "dataset_id": record["id"], "frontend_group": record["frontend_group"], "entry": entry,
             "name": name, "runs": runs_of(entry, record["organisms_4b"], record["organisms_35b"]),
             "name_norm": norm, "expanded_name": expanded,
-            **classify(norm, lookup, genera, families, expanded),
+            **classify(norm, lookup, genera, families, expanded, manual),
         })
     return rows
 
@@ -293,7 +392,8 @@ def print_report(table, typos, names_by_key, out_dir, seed):
 
     print("\n2. Names (one per dataset and name after splitting)")
     counts = table["status"].value_counts()
-    for status in ["scientific", "common", "expanded_abbreviation", "ambiguous", "group_word", "unmatched"]:
+    for status in ["scientific", "common", "expanded_abbreviation", "manual", "ambiguous", "group_word",
+                   "unmatched"]:
         rows = table[table["status"] == status]
         print(f"   {status:22s} {counts.get(status, 0):6,} rows, {rows['name_norm'].nunique():5,} distinct names")
     print(f"   {'total':22s} {len(table):6,} rows, {table['name_norm'].nunique():5,} distinct names")
@@ -345,6 +445,7 @@ def main():
     parser.add_argument("--species", default=DEFAULT_SPECIES)
     parser.add_argument("--bcsee", default=DEFAULT_BCSEE)
     parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--manual", default=DEFAULT_MANUAL, help="the hand-checked name list")
     parser.add_argument("--report-dir", required=True, help="folder for sample30.csv (must not hold one yet)")
     parser.add_argument("--seed", type=int, default=20261029)
     args = parser.parse_args()
@@ -352,6 +453,10 @@ def main():
         raise SystemExit(f"ERROR: {args.out} already exists; move it away first")
 
     con = open_species(args.species, args.bcsee)
+    manual_rows = read_manual_names(args.manual)
+    manual = check_manual_names(con, manual_rows, args.manual)
+    statuses = pd.Series([row["status"] or "not checked" for row in manual_rows]).value_counts().to_dict()
+    print(f"{args.manual}: {len(manual_rows)} rows {statuses}; {len(manual)} confirmed and used")
     lookup = name_lookup(con)
     genera, families = higher_taxa(con)
     datasets = pd.read_parquet(args.datasets, columns=["id", "frontend_group", "organisms", "organisms_4b",
@@ -359,7 +464,7 @@ def main():
     records = datasets.to_dict("records")
     names = [name for record in records for entry in record["organisms"] for name in split_entry(entry)]
     norms = normalise_all(con, names)
-    rows = [row for record in records for row in match_rows(record, norms, lookup, genera, families)]
+    rows = [row for record in records for row in match_rows(record, norms, lookup, genera, families, manual)]
     table = pd.DataFrame(rows, columns=COLUMNS)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

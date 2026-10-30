@@ -2,8 +2,9 @@
 a tiny species table: splitting mixed entries, writing out an abbreviated
 genus only when the dataset names the genus, exact matches by scientific
 and common name through the site's own name index and search_norm macro,
-ambiguous names, group words, genera and families, the typo list, and the
-rows of one dataset."""
+ambiguous names, group words, genera and families, the typo list, the
+rows of one dataset, and the hand-checked name list (only confirmed rows
+are used, and a wrong one stops the run)."""
 
 import sys
 from pathlib import Path
@@ -144,3 +145,101 @@ def test_possible_typos_are_listed_not_linked(species):
     assert set(typos["name_norm"]) == {"oncorhynchus nerk", "american black bears"}
     nearest = typos[typos["name_norm"] == "american black bears"].iloc[0]
     assert (nearest["distance"], nearest["near_name"], nearest["specieskey"]) == (1, "American Black Bear", "K3")
+
+
+# --- The hand-checked name list --------------------------------------------
+
+def write_manual(folder, rows):
+    """Write a hand-checked list with the given rows (dicts with any of MANUAL_COLUMNS) and return its path."""
+    path = folder / "names_manual.csv"
+    pd.DataFrame([{column: row.get(column, "") for column in ms.MANUAL_COLUMNS} for row in rows],
+                 columns=ms.MANUAL_COLUMNS).to_csv(path, index=False)
+    return str(path)
+
+
+SOCKEYE_ROW = {"name_as_written": "kokanee", "specieskey": "K1", "species_name": "Oncorhynchus nerka",
+               "reason": "lake form of sockeye", "datasets_affected": "3"}
+CONFIRMED = {"status": "confirmed", "evidence": "test", "checked_by": "Lucia", "checked_date": "2026-10-29"}
+
+
+def manual_from(species, tmp_path, rows):
+    """Read and check a hand-checked list with these rows against the tiny tables."""
+    path = write_manual(tmp_path, rows)
+    return ms.check_manual_names(species["con"], ms.read_manual_names(path), path)
+
+
+def test_an_unconfirmed_row_is_ignored(species, tmp_path):
+    """A row not confirmed (no status, deferred or rejected, even when checked) is neither checked further nor used."""
+    for unconfirmed in [{}, {"status": "deferred"}, {**CONFIRMED, "status": "rejected"},
+                        {**CONFIRMED, "status": "deferred"}, {"checked_by": "Lucia", "checked_date": "2026-10-29"}]:
+        manual = manual_from(species, tmp_path, [{**SOCKEYE_ROW, **unconfirmed, "specieskey": "NOPE"}])
+        assert manual == {}
+        assert classify_with(species, "kokanee", manual)["status"] == "group_word"
+
+
+def classify_with(species, norm, manual):
+    """Classify one written name against the tiny tables with a hand-checked list."""
+    return ms.classify(norm, species["lookup"], species["genera"], species["families"], manual=manual)
+
+
+def test_a_confirmed_row_links_with_status_manual(species, tmp_path):
+    """A confirmed row links its name to its species when the exact match does not."""
+    manual = manual_from(species, tmp_path, [{**SOCKEYE_ROW, **CONFIRMED}])
+    result = classify_with(species, "kokanee", manual)
+    assert (result["status"], result["specieskey"], result["matched_name"], result["matched_field"]) == (
+        "manual", "K1", "Oncorhynchus nerka", "manual")
+
+
+def test_an_exact_match_comes_before_the_list(species, tmp_path):
+    """A confirmed row never changes a name the exact match already links, but can settle an ambiguous one."""
+    rows = [{**SOCKEYE_ROW, **CONFIRMED, "name_as_written": "oncorhynchus keta"},
+            {**SOCKEYE_ROW, **CONFIRMED, "name_as_written": "mesodinium rubrum", "specieskey": "K4",
+             "species_name": "Mesodinium rubrum"}]
+    manual = manual_from(species, tmp_path, rows)
+    assert classify_with(species, "oncorhynchus keta", manual)["specieskey"] == "K2"
+    settled = classify_with(species, "mesodinium rubrum", manual)
+    assert (settled["status"], settled["specieskey"]) == ("manual", "K4")
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"specieskey": "NOPE"}, "specieskey 'NOPE' has no card on the site"),
+    ({"species_name": "Oncorhynchus keta"}, "is not the card's name 'Oncorhynchus nerka' for K1"),
+    ({"name_as_written": "Kokanee"}, "is not written the way the matcher writes names"),
+    ({"checked_date": "29 Oct 2026"}, "is not YYYY-MM-DD"),
+    ({"status": "maybe"}, "status 'maybe' is not one of"),
+    ({"checked_by": ""}, "status confirmed needs checked_by and checked_date"),
+    ({"checked_date": ""}, "status confirmed needs checked_by and checked_date"),
+])
+def test_a_wrong_confirmed_row_stops_the_run(species, tmp_path, change, message):
+    """A confirmed row with an unknown key, the wrong card name, an unwritten name, a bad date, an unknown
+    status, or status confirmed without who and when stops the run."""
+    with pytest.raises(SystemExit, match=message):
+        manual_from(species, tmp_path, [{**SOCKEYE_ROW, **CONFIRMED, **change}])
+
+
+def test_a_name_given_twice_or_a_missing_column_stops_the_run(species, tmp_path):
+    """Two confirmed rows for one name, or a file without a column, stop the run."""
+    with pytest.raises(SystemExit, match="given more than once"):
+        manual_from(species, tmp_path, [{**SOCKEYE_ROW, **CONFIRMED}, {**SOCKEYE_ROW, **CONFIRMED}])
+    path = tmp_path / "broken.csv"
+    path.write_text("name_as_written,specieskey\nkokanee,K1\n")
+    with pytest.raises(SystemExit, match="has no column"):
+        ms.read_manual_names(str(path))
+
+
+def test_a_missing_list_changes_nothing(tmp_path):
+    """No file at all reads as an empty list."""
+    assert ms.read_manual_names(str(tmp_path / "none.csv")) == []
+
+
+def test_the_draft_list_has_the_columns_and_is_written_the_matcher_way():
+    """The real list next to the script reads, and every name is lower case without punctuation."""
+    rows = ms.read_manual_names(ms.DEFAULT_MANUAL)
+    assert rows and all(row["name_as_written"] == " ".join(row["name_as_written"].split()) for row in rows)
+    assert all(re_ok(row["name_as_written"]) for row in rows)
+    assert len({row["name_as_written"] for row in rows}) == len(rows)
+
+
+def re_ok(name):
+    """True if a name only holds lower-case letters, digits and single spaces, as search_norm writes it."""
+    return ms.re.fullmatch(r"[a-z0-9]+( [a-z0-9]+)*", name) is not None

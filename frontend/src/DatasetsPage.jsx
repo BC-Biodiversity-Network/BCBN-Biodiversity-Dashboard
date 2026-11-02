@@ -23,10 +23,29 @@ function errorText(error) {
 }
 
 // The keyword search box. It sends the search when Enter is pressed or the
-// button clicked, and says so when a search is too short to send.
+// button clicked, and says so when a search is too short to send. Emptying
+// the box (deleting the text, or the browser's clear button) removes the
+// applied search at once, without Enter. initial is the applied search: when
+// it changes from outside (the search chip, the back button), the box shows it.
 function SearchForm({ initial, onSearch }) {
   const [text, setText] = useState(initial)
   const [tooShort, setTooShort] = useState(false)
+
+  useEffect(() => {
+    setText(initial)
+    setTooShort(false)
+  }, [initial])
+
+  // Keeps what is typed; an empty box removes the applied search, if any.
+  function change(value) {
+    setText(value)
+    if (!value.trim()) {
+      setTooShort(false)
+      if (initial.trim()) {
+        onSearch('')
+      }
+    }
+  }
 
   // Sends the search, unless it has text that is too short.
   function submit(event) {
@@ -46,9 +65,9 @@ function SearchForm({ initial, onSearch }) {
         id="datasets-query"
         className="search-input"
         type="search"
-        placeholder="Search datasets, for example eagle"
+        placeholder="Search titles, abstracts and keywords, for example wetland or Fraser River"
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => change(event.target.value)}
       />
       <button type="submit" className="datasets-search-button">Search</button>
       {tooShort && (
@@ -94,22 +113,33 @@ function ResultItem({ result, href, onOpen, showOrganisms }) {
   )
 }
 
+// The applied search, as a chip that removes it: Search: "eagle" ×.
+function SearchChip({ query, onRemove }) {
+  return (
+    <span className="datasets-chip">
+      <span>Search: “{query}”</span>
+      <button type="button" className="datasets-chip-remove" onClick={onRemove}
+        aria-label={`Remove the search (${query})`}>
+        ×
+      </button>
+    </span>
+  )
+}
+
 // The species filter, as a chip that removes it: "Species: Sockeye Salmon
 // (Oncorhynchus nerka) ×". named is the species as the API's answer names
 // it (filters.species), or null while that answer is for another species
 // or has not come; the key is shown then.
-export function SpeciesChip({ speciesKey, named, onRemove }) {
+function SpeciesChip({ speciesKey, named, onRemove }) {
   const label = named ? speciesLabel(named) : speciesKey
   return (
-    <div className="datasets-chips">
-      <span className="datasets-chip">
-        <span>Species: {named ? <SpeciesName species={named} /> : speciesKey}</span>
-        <button type="button" className="datasets-chip-remove" onClick={onRemove}
-          aria-label={`Remove the species filter (${label})`}>
-          ×
-        </button>
-      </span>
-    </div>
+    <span className="datasets-chip">
+      <span>Species: {named ? <SpeciesName species={named} /> : speciesKey}</span>
+      <button type="button" className="datasets-chip-remove" onClick={onRemove}
+        aria-label={`Remove the species filter (${label})`}>
+        ×
+      </button>
+    </span>
   )
 }
 
@@ -202,6 +232,11 @@ export default function DatasetsPage({ search, navigate }) {
   function filter(changes) {
     go({ ...changes, page: 1, dataset: null })
   }
+  // Applies a search, or removes it when q is empty. Relevance needs a
+  // search, so removing it also drops a relevance sort (back to newest).
+  function applySearch(q) {
+    filter(!q.trim() && state.sort === 'relevance' ? { q, sort: '' } : { q })
+  }
 
   // Opens a dataset's details at the top of the panel.
   function openDataset(id) {
@@ -253,15 +288,20 @@ export default function DatasetsPage({ search, navigate }) {
                 Datasets from Canadian research and government catalogues, gathered by Lunaris. Find one
                 and follow its link to view and download it on the original site.
               </p>
-              <SearchForm key={state.q} initial={state.q} onSearch={(q) => filter({ q })} />
+              <SearchForm initial={state.q} onSearch={applySearch} />
               <WiderSwitch checked={state.wider} onChange={(wider) => filter({ wider })} />
               <SortAndFilters state={state} options={options ?? null} onChange={filter} />
-              {state.species && (
-                <SpeciesChip
-                  speciesKey={state.species}
-                  named={data?.filters?.species?.requested_key === state.species ? data.filters.species : null}
-                  onRemove={() => filter({ species: '' })}
-                />
+              {(state.q.trim() || state.species) && (
+                <div className="datasets-chips">
+                  {state.q.trim() && <SearchChip query={state.q.trim()} onRemove={() => applySearch('')} />}
+                  {state.species && (
+                    <SpeciesChip
+                      speciesKey={state.species}
+                      named={data?.filters?.species?.requested_key === state.species ? data.filters.species : null}
+                      onRemove={() => filter({ species: '' })}
+                    />
+                  )}
+                </div>
               )}
 
               {list.error && <p className="datasets-error">{errorText(list.error)}</p>}

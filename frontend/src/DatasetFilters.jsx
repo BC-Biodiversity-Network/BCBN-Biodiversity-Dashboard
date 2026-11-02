@@ -165,7 +165,8 @@ function FilterPanel({ state, options, onApply, onClose }) {
         {problems.published && <p className="datasets-error">{problems.published}</p>}
         <p className="datasets-filter-note">
           When the record was published, not when the data were collected (the records have no
-          collection dates).{first && ` These datasets were published from ${first} to ${last}.`}
+          collection dates).{first
+            && ` The datasets matching your search and filters were published from ${first} to ${last}.`}
           {options.published?.no_date > 0
             && ` ${options.published.no_date.toLocaleString()} have no date and are left out when a range is set.`}
         </p>
@@ -176,6 +177,12 @@ function FilterPanel({ state, options, onApply, onClose }) {
         <input id="datasets-organism" className="datasets-organism-input" type="text" value={draft.organism}
           placeholder="For example salmon or Oncorhynchus" onChange={(event) => change({ organism: event.target.value })} />
         {problems.organism && <p className="datasets-error">{problems.organism}</p>}
+        {/* Checked in the data (November 2026): the search box finds Salmon Arm and
+            Salmon River datasets for "salmon", this box does not. */}
+        <p className="datasets-filter-note">
+          Only matches names the record uses for living things, so salmon finds the fish but not Salmon Arm or
+          the Salmon River.
+        </p>
         <p className="datasets-filter-note">
           Matches the names as written in each record. To see the datasets linked to a species, open its card
           on the species map.

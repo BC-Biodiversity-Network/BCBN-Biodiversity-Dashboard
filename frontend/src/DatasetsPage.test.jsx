@@ -107,6 +107,17 @@ describe('the Datasets page', () => {
       '?view=datasets&page=2&dataset=oai%3Acatalogue.data.gov.bc.ca%3Aeagle-nests')
   })
 
+  it('tells the search box and the Organisms box apart', async () => {
+    stubList()
+    await showPage('?view=datasets')
+    expect(screen.getByRole('searchbox').placeholder).toBe(
+      'Search titles, abstracts and keywords, for example wetland or Fraser River')
+    openFilters()
+    expect(screen.getByRole('textbox', { name: 'Organism name' }).placeholder).toBe('For example salmon or Oncorhynchus')
+    expect(screen.getByText('Only matches names the record uses for living things, so salmon finds the fish but ' +
+      'not Salmon Arm or the Salmon River.')).toBeTruthy()
+  })
+
   it('tags only the datasets that may include BC', async () => {
     stubList()
     await showPage('?view=datasets&q=eagle&wider=1')
@@ -135,7 +146,8 @@ describe('the Datasets page', () => {
     expect(panel.querySelector('.datasets-count')).toBeNull()
     expect([...panel.querySelectorAll('label')].map((l) => l.textContent).join(' ')).not.toMatch(/\d/)
     expect(screen.getByText('2 datasets')).toBeTruthy()
-    expect(screen.getByText(/These datasets were published from 2020 to 2021/)).toBeTruthy()
+    expect(screen.getByText(/The datasets matching your search and filters were published from 2020 to 2021\./))
+      .toBeTruthy()
   })
 
   it('offers relevance only with a search, and keeps the default sort out of the address', async () => {
@@ -303,6 +315,79 @@ describe('the Datasets page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search' }))
     expect(navigate).not.toHaveBeenCalled()
     expect(screen.getByText('Type at least 2 letters or digits.')).toBeTruthy()
+  })
+
+  it('removes the search as soon as the box is emptied, but waits for Enter for new text', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&q=eagle&catalogue=a&sort=title&page=2')
+    const box = screen.getByRole('searchbox')
+    fireEvent.change(box, { target: { value: 'eagl' } })
+    expect(navigate).not.toHaveBeenCalled()
+    // Deleting the text, or the browser's clear button, which also leaves the box empty.
+    fireEvent.change(box, { target: { value: '' } })
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&sort=title&catalogue=a')
+    fireEvent.change(box, { target: { value: 'salmon' } })
+    expect(navigate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing when an empty box is emptied again, and says nothing about a too short search', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets')
+    const box = screen.getByRole('searchbox')
+    fireEvent.change(box, { target: { value: 'e' } })
+    fireEvent.submit(box)
+    expect(screen.getByText(/Type at least/)).toBeTruthy()
+    fireEvent.change(box, { target: { value: '' } })
+    expect(screen.queryByText(/Type at least/)).toBeNull()
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('keeps the box in use while the search is removed, and shows a search applied from outside', async () => {
+    stubList()
+    const navigate = vi.fn()
+    const { rerender } = render(<DatasetsPage search="?view=datasets&q=eagle" navigate={navigate} />)
+    await act(async () => {})
+    const box = screen.getByRole('searchbox')
+    box.focus()
+    fireEvent.change(box, { target: { value: '' } })
+    rerender(<DatasetsPage search="?view=datasets" navigate={navigate} />)
+    await act(async () => {})
+    expect(screen.getByRole('searchbox')).toBe(box)
+    expect(document.activeElement).toBe(box)
+    rerender(<DatasetsPage search="?view=datasets&q=salmon" navigate={navigate} />)
+    await act(async () => {})
+    expect(box.value).toBe('salmon')
+  })
+
+  it('falls back from relevance to newest when the search is removed', async () => {
+    stubList()
+    let navigate = await showPage('?view=datasets&q=eagle&sort=relevance')
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } })
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets')
+    cleanup()
+    navigate = await showPage('?view=datasets&q=eagle&sort=oldest')
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } })
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&sort=oldest')
+  })
+
+  it('shows the applied search as a chip that removes it, keeping the filters', async () => {
+    stubList()
+    let navigate = await showPage('?view=datasets')
+    expect(screen.queryByText(/^Search:/)).toBeNull()
+    cleanup()
+    navigate = await showPage('?view=datasets&q=bald%20eagle&sort=relevance&access=open&species=4LVR5')
+    const chips = document.querySelector('.datasets-chips')
+    expect([...chips.querySelectorAll('.datasets-chip')].map((chip) => chip.firstChild.textContent))
+      .toEqual(['Search: “bald eagle”', 'Species: 4LVR5'])
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the search (bald eagle)' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&access=open&species=4LVR5')
+  })
+
+  it('"Clear all" leaves the search and its chip alone', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&q=eagle&access=open')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle')
   })
 
   it('says so when the API does not answer', async () => {

@@ -51,8 +51,15 @@ function Licence({ licence }) {
   )
 }
 
-// The licences and access rights, all as plain text.
-function Licences({ entries }) {
+// The catalogues (source ids) whose records in Lunaris all give no licence
+// and say restricted access, while the source pages we checked give a
+// CC BY 4.0 licence and open access (October 2026). Their datasets get a
+// note under the access line; the lines themselves stay as harvested.
+const SOURCES_WITH_DOUBTFUL_RIGHTS = new Set(['https-zenodo.org', 'pangaea.de'])
+
+// The licences and access rights, all as plain text, with the note for the
+// catalogues above when source is one of them.
+function Licences({ entries, source }) {
   const { licences, accessRights } = readLicences(entries)
   return (
     <section className="dataset-section">
@@ -61,6 +68,12 @@ function Licences({ entries }) {
         ? <p>No licence in the record. Check the source page.</p>
         : <ul className="dataset-licences">{licences.map((licence, i) => <Licence key={i} licence={licence} />)}</ul>}
       {accessRights.length > 0 && <p>Access: {accessRights.join(', ')}.</p>}
+      {SOURCES_WITH_DOUBTFUL_RIGHTS.has(source) && (
+        <p className="dataset-attribution">
+          Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say restricted
+          access, which may not match the source. Check the source page.
+        </p>
+      )}
     </section>
   )
 }
@@ -199,7 +212,7 @@ export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies
 
       <Species species={dataset.species ?? []} others={dataset.other_organisms ?? []} onOpen={onOpenSpecies} />
 
-      <Licences entries={dataset.licences} />
+      <Licences entries={dataset.licences} source={dataset.source} />
       <OtherCopies copies={dataset.other_copies} />
     </article>
   )

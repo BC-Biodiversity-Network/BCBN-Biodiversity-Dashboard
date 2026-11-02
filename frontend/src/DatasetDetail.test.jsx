@@ -102,6 +102,25 @@ describe('the dataset details', () => {
     expect(screen.queryByText('None')).toBeNull()
   })
 
+  it('adds a note under the access line for Zenodo and PANGAEA datasets only', () => {
+    const note = "Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say " +
+      'restricted access, which may not match the source. Check the source page.'
+    const restricted = [{ name: null, uri: 'info:eu-repo/semantics/restrictedAccess' }]
+    for (const source of ['https-zenodo.org', 'pangaea.de']) {
+      const { container } = show(eagles({ source, licences: restricted }))
+      expect(screen.getByText('No licence in the record. Check the source page.')).toBeTruthy()
+      const access = screen.getByText('Access: Restricted access.')
+      expect(access.nextElementSibling.textContent).toBe(note)
+      expect(container.textContent).toContain(note)
+      cleanup()
+    }
+    for (const source of ['canwin-datahub.ad.umanitoba.ca', 'datadryad.org', undefined]) {
+      const { container } = show(eagles({ source, licences: restricted }))
+      expect(container.textContent).not.toContain('Note from BCBN')
+      cleanup()
+    }
+  })
+
   it('says, as facts only, that a box covers all of BC and how many records share it', () => {
     show(eagles())
     expect(screen.getByText('Extent: whole of BC. The box covers all of BC; Canadian Watershed Information ' +

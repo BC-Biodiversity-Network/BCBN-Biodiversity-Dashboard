@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchableLength } from './api'
+import { MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchWords, searchableLength } from './api'
 import DatasetDetail from './DatasetDetail'
 import SortAndFilters from './DatasetFilters'
 import DatasetMap from './DatasetMap'
@@ -113,13 +113,14 @@ function ResultItem({ result, href, onOpen, showOrganisms }) {
   )
 }
 
-// The applied search, as a chip that removes it: Search: "eagle" ×.
-function SearchChip({ query, onRemove }) {
+// One word of the applied search, as a chip that removes it: Search: "eagle" ×.
+// The search needs every word on its own, so each word has its own chip.
+function SearchChip({ word, onRemove }) {
   return (
     <span className="datasets-chip">
-      <span>Search: “{query}”</span>
+      <span>Search: “{word}”</span>
       <button type="button" className="datasets-chip-remove" onClick={onRemove}
-        aria-label={`Remove the search (${query})`}>
+        aria-label={`Remove ${word} from the search`}>
         ×
       </button>
     </span>
@@ -238,6 +239,16 @@ export default function DatasetsPage({ search, navigate }) {
     filter(!q.trim() && state.sort === 'relevance' ? { q, sort: '' } : { q })
   }
 
+  // The words of the applied search, one chip each (see searchWords).
+  const words = searchWords(state.q)
+  // Removes one word from the search and searches again with the others, as
+  // typed; what is left is no search when it is too short to send.
+  function removeWord(word) {
+    const left = words.filter((other) => other.word !== word)
+    const length = left.reduce((sum, other) => sum + other.word.length, 0)
+    applySearch(length >= MIN_SEARCH_CHARACTERS ? left.map((other) => other.typed).join(' ') : '')
+  }
+
   // Opens a dataset's details at the top of the panel.
   function openDataset(id) {
     go({ dataset: id })
@@ -291,9 +302,11 @@ export default function DatasetsPage({ search, navigate }) {
               <SearchForm initial={state.q} onSearch={applySearch} />
               <WiderSwitch checked={state.wider} onChange={(wider) => filter({ wider })} />
               <SortAndFilters state={state} options={options ?? null} onChange={filter} />
-              {(state.q.trim() || state.species) && (
+              {(words.length > 0 || state.species) && (
                 <div className="datasets-chips">
-                  {state.q.trim() && <SearchChip query={state.q.trim()} onRemove={() => applySearch('')} />}
+                  {words.map(({ word, typed }) => (
+                    <SearchChip key={word} word={typed} onRemove={() => removeWord(word)} />
+                  ))}
                   {state.species && (
                     <SpeciesChip
                       speciesKey={state.species}

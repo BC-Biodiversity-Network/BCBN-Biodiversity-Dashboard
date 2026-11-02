@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchSpecies, searchableLength } from './api'
+import { ApiError, MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchSpecies, searchWords, searchableLength }
+  from './api'
 
 // Each case is a search and the number of letters and digits the API counts
 // in it. The numbers were taken from the API itself (the search_norm macro in
@@ -30,6 +31,27 @@ const API_COUNTS = [
   ['Sp. 2', 3],
   ['  -- ab --  ', 2],
 ]
+
+describe('searchWords', () => {
+  // Each text with the words the API searches for it (search_norm in
+  // backend/api/search.py, checked in DuckDB) and the text as typed.
+  it.each([
+    ['salmon wetland', [['salmon', 'salmon'], ['wetland', 'wetland']]],
+    ['  Douglas-fir, O’Brien’s  ', [['douglas', 'Douglas'], ['fir', 'fir'], ['obriens', 'O’Brien’s']]],
+    ["salmon' 'eggs", [['salmon', 'salmon'], ['eggs', 'eggs']]],
+    ['École école ECOLE', [['ecole', 'École']]],
+    ['ﬁsh x² Æsop', [['sh', 'sh'], ['sop', 'sop']]],
+    ['a x x x b', [['a', 'a'], ['x', 'x'], ['b', 'b']]],
+    ['x salmon x', [['salmon', 'salmon']]],
+    [' - ', []],
+  ])('splits %j as the API does', (text, words) => {
+    expect(searchWords(text).map(({ word, typed }) => [word, typed])).toEqual(words)
+  })
+
+  it('keeps a combining accent with its letter', () => {
+    expect(searchWords('cafe\u0301 bar')).toEqual([{ word: 'cafe', typed: 'cafe\u0301' }, { word: 'bar', typed: 'bar' }])
+  })
+})
 
 describe('searchableLength', () => {
   it.each(API_COUNTS)('counts %j as %i, like the API', (text, count) => {

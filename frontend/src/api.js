@@ -42,6 +42,52 @@ export function searchableLength(text) {
   return words.join('').length
 }
 
+// The words of a search as the API splits them, each with the text as typed:
+// [{ word, typed }], in order, a word written twice kept once (the first time).
+// word is written the API's way (search_norm in backend/api/search.py, which
+// the list search splits on spaces): accents removed (not compatibility forms,
+// so "ﬁ" is dropped, as in DuckDB), lower case, apostrophes dropped inside a
+// word, everything else that is not a-z or 0-9 a gap. A lone "x" is dropped as
+// the API drops it: " x " is replaced along the text, so in "a x x x b" the
+// first and third go and the second stays. typed is the stretch of the text
+// the word came from, so "Douglas-fir" gives "Douglas" and "fir", and
+// "O'Brien" gives "O'Brien".
+export function searchWords(text) {
+  const found = []
+  let current = null
+  let index = 0
+  for (const character of text) {
+    const written = character.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/['’‘`]/g, '')
+    if (/^[a-z0-9]+$/.test(written)) {
+      current = current ?? { word: '', start: index }
+      current.word += written
+      current.end = index + character.length
+    } else if (written === '') {
+      // An apostrophe or an accent: part of the word it is in, never a gap.
+      if (current) {
+        current.end = index + character.length
+      }
+    } else if (current) {
+      found.push(current)
+      current = null
+    }
+    index += character.length
+  }
+  if (current) {
+    found.push(current)
+  }
+
+  const words = []
+  let droppedX = false
+  for (const { word, start, end } of found) {
+    droppedX = word === 'x' && !droppedX
+    if (!droppedX && !words.some((kept) => kept.word === word)) {
+      words.push({ word, typed: text.slice(start, end).replace(/['’‘`]+$/, '') })
+    }
+  }
+  return words
+}
+
 // Fetches one API path and returns its JSON. Turns every way it can fail into
 // an ApiError. signal lets the caller cancel the request (an AbortError is
 // passed through untouched, so the caller can ignore it).

@@ -263,11 +263,12 @@ export default function SortAndFilters({ state, options, onChange }) {
     close()
   }
 
-  // Clears every applied filter at once, the species filter too; an open
-  // panel closes, dropping its pending changes.
+  // Clears every filter of the Filters panel at once; the search and the
+  // species filter stay (each chip has its own x). An open panel closes,
+  // dropping its pending changes.
   function clearAll() {
     setOpen(false)
-    onChange({ ...NO_FILTERS, species: '' })
+    onChange(NO_FILTERS)
   }
 
   return (
@@ -291,7 +292,7 @@ export default function SortAndFilters({ state, options, onChange }) {
         >
           Filters{active > 0 && ` (${active})`}
         </button>
-        {(active > 0 || state.species) && (
+        {active > 0 && (
           <button type="button" className="text-button" onClick={clearAll}>Clear all</button>
         )}
       </div>

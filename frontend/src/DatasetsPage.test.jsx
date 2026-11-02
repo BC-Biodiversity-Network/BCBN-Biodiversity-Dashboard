@@ -292,12 +292,16 @@ describe('the Datasets page', () => {
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=lake')
   })
 
-  it('shows the key until the answer names the species, and "Clear all" clears the species too', async () => {
+  it('shows the key until the answer names the species, and "Clear all" keeps the species', async () => {
     stubList()
-    const navigate = await showPage('?view=datasets&species=4LVR5')
+    let navigate = await showPage('?view=datasets&species=4LVR5')
     expect(screen.getByText(/^Species:/).textContent).toBe('Species: 4LVR5')
+    // With no filter of the panel in use, there is nothing for "Clear all" to clear.
+    expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull()
+    cleanup()
+    navigate = await showPage('?view=datasets&species=4LVR5&access=open')
     fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
-    expect(navigate).toHaveBeenLastCalledWith('?view=datasets')
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&species=4LVR5')
   })
 
   it('says the Organisms filter matches names as written, and where the linked species are', async () => {
@@ -370,24 +374,52 @@ describe('the Datasets page', () => {
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&sort=oldest')
   })
 
-  it('shows the applied search as a chip that removes it, keeping the filters', async () => {
+  // The text of each chip above the results, in order.
+  function chipTexts() {
+    return [...document.querySelectorAll('.datasets-chip')].map((chip) => chip.firstChild.textContent)
+  }
+
+  it('shows each word of the applied search as its own chip, as typed, each once', async () => {
     stubList()
-    let navigate = await showPage('?view=datasets')
-    expect(screen.queryByText(/^Search:/)).toBeNull()
+    await showPage('?view=datasets')
+    expect(document.querySelector('.datasets-chips')).toBeNull()
     cleanup()
-    navigate = await showPage('?view=datasets&q=bald%20eagle&sort=relevance&access=open&species=4LVR5')
-    const chips = document.querySelector('.datasets-chips')
-    expect([...chips.querySelectorAll('.datasets-chip')].map((chip) => chip.firstChild.textContent))
-      .toEqual(['Search: “bald eagle”', 'Species: 4LVR5'])
-    fireEvent.click(screen.getByRole('button', { name: 'Remove the search (bald eagle)' }))
-    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&access=open&species=4LVR5')
+    await showPage(`?view=datasets&q=${encodeURIComponent('Salmon  wetland salmon, Douglas-fir')}&species=4LVR5`)
+    expect(chipTexts()).toEqual(['Search: “Salmon”', 'Search: “wetland”', 'Search: “Douglas”', 'Search: “fir”',
+      'Species: 4LVR5'])
   })
 
-  it('"Clear all" leaves the search and its chip alone', async () => {
+  it('removes one word with its chip, searching again with the others and showing them in the box', async () => {
     stubList()
-    const navigate = await showPage('?view=datasets&q=eagle&access=open')
+    const navigate = vi.fn()
+    const { rerender } = render(<DatasetsPage search="?view=datasets&q=salmon%20Wetland%20salmon&access=open&page=2"
+      navigate={navigate} />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Remove salmon from the search' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=Wetland&access=open')
+    rerender(<DatasetsPage search="?view=datasets&q=Wetland&access=open" navigate={navigate} />)
+    await act(async () => {})
+    expect(screen.getByRole('searchbox').value).toBe('Wetland')
+    expect(chipTexts()).toEqual(['Search: “Wetland”'])
+  })
+
+  it('treats what is left as no search when it is too short, and the last chip clears the search', async () => {
+    stubList()
+    let navigate = await showPage('?view=datasets&q=salmon%20b&sort=relevance')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove salmon from the search' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets')
+    cleanup()
+    navigate = await showPage('?view=datasets&q=eagle&sort=relevance&species=4LVR5')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove eagle from the search' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&species=4LVR5')
+  })
+
+  it('"Clear all" clears only the Filters panel, keeping the search, sort and species chips', async () => {
+    stubList()
+    const navigate = await showPage('?view=datasets&q=bald%20eagle&sort=oldest&access=open&organism=haliaeetus' +
+      '&species=4LVR5')
     fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
-    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle')
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=bald+eagle&sort=oldest&species=4LVR5')
   })
 
   it('says so when the API does not answer', async () => {

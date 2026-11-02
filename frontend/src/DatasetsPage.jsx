@@ -6,6 +6,7 @@ import SortAndFilters from './DatasetFilters'
 import DatasetMap from './DatasetMap'
 import DatasetsFooter from './DatasetsFooter'
 import { describeLocation, issuedLabel, licenceListLabel, plainText } from './datasetText'
+import { pageItems } from './paging'
 import { datasetsSearch, readDatasetsState, speciesMapSearch } from './route'
 import SpeciesName, { speciesLabel } from './SpeciesName'
 import { MayIncludeBcTag, SHOW_WIDER_SWITCH, WiderSwitch } from './widerDatasets'
@@ -144,18 +145,65 @@ function SpeciesChip({ speciesKey, named, onRemove }) {
   )
 }
 
-// Previous and next page buttons, with where we are.
-function Paging({ page, pages, onPage }) {
-  if (pages <= 1) {
-    return null
-  }
+// Below this width (in pixels) the page buttons show no pages on either side
+// of the current one, so the row fits on one line: a phone, or a narrow
+// window, where the list is narrow too.
+const WIDE_PAGING_WIDTH = 420
+
+// The width of an element, in pixels, kept up to date as it changes; null
+// until it is known (and always in a browser without ResizeObserver).
+function useWidth(ref) {
+  const [width, setWidth] = useState(null)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || typeof ResizeObserver === 'undefined') {
+      return undefined
+    }
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref])
+  return width
+}
+
+// The page buttons: « Previous, the page numbers with "..." for the pages
+// left out (see pageItems), Next ». The current page is highlighted and
+// marked as the current one for screen readers. onPage(page) goes to a page.
+function PageButtons({ page, pages, onPage }) {
+  const ref = useRef(null)
+  const width = useWidth(ref)
+  const around = width !== null && width < WIDE_PAGING_WIDTH ? 0 : 1
   return (
-    <nav className="datasets-paging" aria-label="Pages of results">
-      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
-      <span>Page {page} of {pages}</span>
-      <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+    <nav className="datasets-paging" aria-label="Pages of results" ref={ref}>
+      <button type="button" className="datasets-page-step" disabled={page <= 1} onClick={() => onPage(page - 1)}
+        aria-label="Previous page">
+        « Previous
+      </button>
+      {pageItems(page, pages, around).map((item, i) => (item === 'gap'
+        ? <span key={`gap-${i}`} className="datasets-page-gap" aria-hidden="true">...</span>
+        : (
+          <button
+            key={item}
+            type="button"
+            className={item === page ? 'datasets-page-number current' : 'datasets-page-number'}
+            aria-current={item === page ? 'page' : undefined}
+            aria-label={`Page ${item}`}
+            onClick={() => item !== page && onPage(item)}
+          >
+            {item}
+          </button>
+        )))}
+      <button type="button" className="datasets-page-step" disabled={page >= pages} onClick={() => onPage(page + 1)}
+        aria-label="Next page">
+        Next »
+      </button>
     </nav>
   )
+}
+
+// The page buttons, or nothing when there is only one page.
+function Paging({ page, pages, onPage }) {
+  return pages > 1 ? <PageButtons page={page} pages={pages} onPage={onPage} /> : null
 }
 
 // Fetches one page of datasets for a state, again whenever the search, the
@@ -222,6 +270,7 @@ export default function DatasetsPage({ search, navigate }) {
   const list = useDatasets(state)
   const detail = useDataset(state.dataset)
   const panelRef = useRef(null)
+  const listTopRef = useRef(null)
   const location = useMemo(() => (detail.data ? describeLocation(detail.data) : null), [detail.data])
 
   // Goes to a new state of the page, as a new history entry. Changing the
@@ -247,6 +296,13 @@ export default function DatasetsPage({ search, navigate }) {
     const left = words.filter((other) => other.word !== word)
     const length = left.reduce((sum, other) => sum + other.word.length, 0)
     applySearch(length >= MIN_SEARCH_CHARACTERS ? left.map((other) => other.typed).join(' ') : '')
+  }
+
+  // Goes to another page of the list, and back to the top of the list (the
+  // result count), wherever the page or the panel was scrolled to.
+  function goToPage(page) {
+    go({ page })
+    listTopRef.current?.scrollIntoView?.({ block: 'start' })
   }
 
   // Opens a dataset's details at the top of the panel.
@@ -320,7 +376,7 @@ export default function DatasetsPage({ search, navigate }) {
               {list.error && <p className="datasets-error">{errorText(list.error)}</p>}
               {data && (
                 <>
-                  <p className="datasets-total" aria-live="polite">
+                  <p className="datasets-total" aria-live="polite" ref={listTopRef}>
                     {data.total === 0
                       ? 'No datasets match.'
                       : `${data.total.toLocaleString()} ${data.total === 1 ? 'dataset' : 'datasets'}`}
@@ -337,7 +393,7 @@ export default function DatasetsPage({ search, navigate }) {
                       />
                     ))}
                   </ol>
-                  <Paging page={state.page} pages={data.pages} onPage={(page) => go({ page })} />
+                  <Paging page={state.page} pages={data.pages} onPage={goToPage} />
 
                 </>
               )}

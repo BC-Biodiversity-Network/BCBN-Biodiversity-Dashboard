@@ -21,7 +21,12 @@ Sort (sort): relevance (datasets with every word in the title first, then
 the most recently issued; only with a search, and the default then),
 newest (the default without a search), oldest, or title (A to Z, ignoring
 case and accents). Datasets with no issued date go last; ties are broken
-by id, so paging is stable.
+by id, so paging is stable. The title sort puts the titles whose first
+character is a letter first, A to Z; then those starting with a digit, by
+that number (2 before 10), then A to Z; then the rest (a title in Chinese),
+A to Z. Any opening bracket or quote mark at the start is skipped first, so
+"[City of Surrey]. ..." sorts under C. A to Z is by the title written the
+search way, so punctuation inside a title counts as a gap.
 
 Filters, each also in the counts:
   catalogue, final_class, frontend_group
@@ -88,16 +93,29 @@ PREVIEW_LENGTH = 300
 # What each dataset is searched and filtered on, worked out once when the
 # API starts: the title alone (for ranking and the title sort) and the
 # title, abstract and subjects together (for finding), written the search
-# way; the year of the issued date; and the access right.
+# way; the year of the issued date; and the access right. For the title
+# sort, also what the title starts with, once any "[", "(" or quote marks
+# (and spaces) at its start are skipped (title_group: 0 a letter, after
+# removing any accent; 1 a digit; 2 anything else) and, for a digit, the
+# number it starts with, without leading zeros (title_number; '' for
+# none), compared by length and then as text, so any length of number
+# sorts in number order.
 DATASET_INDEX_SQL = f"""
     CREATE TABLE dataset_search AS
     SELECT d.id,
            ' ' || search_norm(d.title) AS title_norm,
+           CASE WHEN regexp_matches(lower(strip_accents(left(d.title_start, 1))), '^[a-z]') THEN 0
+                WHEN regexp_matches(d.title_start, '^[0-9]') THEN 1
+                ELSE 2 END AS title_group,
+           ltrim(regexp_extract(d.title_start, '^[0-9]+'), '0') AS title_number,
            ' ' || search_norm(concat_ws(' ', d.title, d.abstract,
                                         list_aggregate(d.subjects, 'string_agg', ' '))) AS text_norm,
            TRY_CAST(substr(NULLIF(d.issued, ''), 1, 4) AS INTEGER) AS year,
            coalesce(a.access, '') AS access
-    FROM lunaris_datasets AS d
+    FROM (
+        SELECT *, regexp_replace(trim(coalesce(title, '')), '^[[("''“”‘’«»„ ]+', '') AS title_start
+        FROM lunaris_datasets
+    ) AS d
     LEFT JOIN (
         SELECT id,
                CASE WHEN bool_or(rights.uri = '{ACCESS_URIS["open"]}') THEN 'open'
@@ -128,7 +146,7 @@ ORDER_BY = {
     "relevance": "CASE WHEN {in_title} THEN 0 ELSE 1 END, NULLIF(d.issued, '') DESC NULLS LAST, d.id",
     "newest": "NULLIF(d.issued, '') DESC NULLS LAST, d.id",
     "oldest": "NULLIF(d.issued, '') ASC NULLS LAST, d.id",
-    "title": "s.title_norm ASC NULLS LAST, d.id",
+    "title": "s.title_group, length(s.title_number), s.title_number, s.title_norm, d.id",
 }
 
 # The tables every list query reads.

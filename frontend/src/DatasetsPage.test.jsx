@@ -422,6 +422,84 @@ describe('the Datasets page', () => {
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=bald+eagle&sort=oldest&species=4LVR5')
   })
 
+  // Answers every request with LIST as one page of `pages`.
+  function stubPages(pages) {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200,
+      json: async () => ({ ...LIST, total: pages * 20, pages }) })))
+  }
+
+  // What the page buttons show, in order: the text of each button and gap.
+  function pageRow() {
+    const nav = screen.getByRole('navigation', { name: 'Pages of results' })
+    return [...nav.children].map((item) => item.textContent)
+  }
+
+  it('shows numbered page buttons, the current one marked and highlighted', async () => {
+    stubPages(64)
+    await showPage('?view=datasets&page=10')
+    expect(pageRow()).toEqual(['« Previous', '1', '...', '9', '10', '11', '...', '64', 'Next »'])
+    const current = screen.getByRole('button', { name: 'Page 10' })
+    expect(current.getAttribute('aria-current')).toBe('page')
+    expect(current.className).toBe('datasets-page-number current')
+    expect(screen.getByRole('button', { name: 'Page 9' }).getAttribute('aria-current')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Previous page' }).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Next page' }).disabled).toBe(false)
+  })
+
+  it('disables Previous on the first page and Next on the last', async () => {
+    stubPages(64)
+    await showPage('?view=datasets')
+    expect(pageRow()).toEqual(['« Previous', '1', '2', '3', '4', '5', '...', '64', 'Next »'])
+    expect(screen.getByRole('button', { name: 'Previous page' }).disabled).toBe(true)
+    cleanup()
+    await showPage('?view=datasets&page=64')
+    expect(pageRow()).toEqual(['« Previous', '1', '...', '60', '61', '62', '63', '64', 'Next »'])
+    expect(screen.getByRole('button', { name: 'Next page' }).disabled).toBe(true)
+  })
+
+  it('goes to a page, keeping the search and filters, and back to the top of the list', async () => {
+    stubPages(64)
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    const navigate = await showPage('?view=datasets&q=eagle&access=open&page=10')
+    fireEvent.click(screen.getByRole('button', { name: 'Page 64' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle&access=open&page=64')
+    expect(scrolled).toHaveBeenCalledWith({ block: 'start' })
+    expect(scrolled.mock.contexts[0].textContent).toMatch(/^1,280 datasets/)
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle&access=open&page=11')
+    fireEvent.click(screen.getByRole('button', { name: 'Page 1' }))
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle&access=open')
+    // The current page goes nowhere.
+    fireEvent.click(screen.getByRole('button', { name: 'Page 10' }))
+    expect(navigate).toHaveBeenCalledTimes(3)
+    delete Element.prototype.scrollIntoView
+  })
+
+  it('shows fewer numbers when the list is narrow, as on a phone', async () => {
+    stubPages(64)
+    // A stand-in ResizeObserver that reports a narrow list at once.
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) {
+        this.callback = callback
+      }
+
+      observe() {
+        this.callback([{ contentRect: { width: 343 } }])
+      }
+
+      disconnect() {}
+    })
+    await showPage('?view=datasets&page=10')
+    expect(pageRow()).toEqual(['« Previous', '1', '...', '10', '...', '64', 'Next »'])
+  })
+
+  it('shows no page buttons for a single page', async () => {
+    stubPages(1)
+    await showPage('?view=datasets')
+    expect(screen.queryByRole('navigation', { name: 'Pages of results' })).toBeNull()
+  })
+
   it('says so when the API does not answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
     await showPage('?view=datasets')

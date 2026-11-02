@@ -1096,12 +1096,55 @@ body {
   color: #333;
 }
 
+/* The page buttons: « Previous, the page numbers, Next », on one line. The
+   current page is in the site's blue, like the Search button. */
 .datasets-paging {
   display: flex;
-  gap: 10px;
+  gap: 3px;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
+  justify-content: center;
+  margin-top: 12px;
+  white-space: nowrap;
+}
+
+.datasets-page-number,
+.datasets-page-step {
+  min-width: 30px;
+  padding: 4px 6px;
+  border: 1px solid #c9d6e6;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: #184f95;
+  cursor: pointer;
+}
+
+.datasets-page-step {
+  padding: 4px 8px;
+}
+
+.datasets-page-number:hover,
+.datasets-page-step:hover:not(:disabled) {
+  background: #eef3f9;
+}
+
+.datasets-page-number.current {
+  border-color: #184f95;
+  background: #184f95;
+  color: #fff;
+  cursor: default;
+}
+
+.datasets-page-step:disabled {
+  border-color: #ddd;
+  color: #999;
+  cursor: default;
+}
+
+.datasets-page-gap {
+  min-width: 18px;
+  text-align: center;
+  color: #555;
 }
 
 /* One dataset's details. */

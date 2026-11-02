@@ -182,6 +182,27 @@ def test_a_search_can_be_sorted_another_way(client):
     assert ids(client.get("/api/datasets", params={"q": "eagle", "sort": "newest"})) == [SALMON, EAGLE_NESTS, FOREST]
 
 
+@pytest.mark.parametrize("titles, expected", [
+    ({"eagle-nests": "10 Lakes", "salmon": "2 Lakes", "forest-plots": "[Draft] Alpha", "beagle": "école",
+      "golden": "Zebra"},
+     [FOREST, BEAGLE, GOLDEN, SALMON, EAGLE_NESTS]),
+    ({"eagle-nests": "007 Bond", "salmon": "7 Alpha", "forest-plots": "(Old) beta", "beagle": "Ångström",
+      "golden": "12345678901234567890 big"},
+     [BEAGLE, FOREST, EAGLE_NESTS, SALMON, GOLDEN]),
+    ({"eagle-nests": '"Quoted" title', "salmon": "* Star list", "forest-plots": "( 2019 ) Survey",
+      "beagle": "关于 lakes", "golden": "‘Alpha’"},
+     [GOLDEN, EAGLE_NESTS, FOREST, BEAGLE, SALMON]),
+])
+def test_the_title_sort_puts_letters_then_numbers_then_the_rest(tmp_path, titles, expected):
+    """A letter first (accents and case ignored), then a digit in number order (leading zeros and any
+    length of number too, then A to Z), then anything else. An opening "[", "(" or quote mark is
+    skipped first, so "[Draft] Alpha" sorts under D and "( 2019 ) Survey" with the numbers."""
+    cases = " ".join(f"WHEN id LIKE '%{end}' THEN '{title}'" for end, title in titles.items())
+    write_test_data(tmp_path, datasets_sql=f"SELECT * REPLACE (CASE {cases} END AS title) FROM ({DATASETS_SQL})")
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as titled:
+        assert ids(titled.get("/api/datasets", params={**BOTH, "sort": "title"})) == expected
+
+
 def test_ties_are_broken_by_id(tmp_path):
     """Datasets with the same issued date and title come in id order, so paging is stable."""
     write_test_data(tmp_path, datasets_sql=f"SELECT * REPLACE ('2020-01-01' AS issued, 'Same' AS title) "

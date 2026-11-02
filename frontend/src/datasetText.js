@@ -107,8 +107,14 @@ function repairSplitLink(name, uri) {
   return { name: text, uri: isWebLink(text) ? text : '' }
 }
 
+// The text a few catalogues put in place of a licence when there is none
+// (2 records in October 2026: <rights>None</rights>). With no link, it is
+// read as no licence; the export keeps it as harvested.
+const NO_LICENCE_PLACEHOLDER = 'None'
+
 // Reads one rights entry from the API ({ name, uri }, exactly as harvested)
 // into what the page shows. An access right gives { kind: 'access', label }.
+// The placeholder "None" with no link gives { kind: 'none' }: no licence.
 // A licence gives { kind: 'licence', name, fullText, uri }: name is short
 // (a heading in the HTML if it has one, else the text, shortened), fullText
 // is the whole text when it is longer than name (else null), and uri is a
@@ -120,6 +126,9 @@ export function readLicence(entry) {
   if (!name.trim() && uri.startsWith(ACCESS_RIGHTS_PREFIX)) {
     const right = uri.slice(ACCESS_RIGHTS_PREFIX.length)
     return { kind: 'access', label: ACCESS_RIGHTS[right] ?? `Access: ${right}` }
+  }
+  if (name === NO_LICENCE_PLACEHOLDER && !uri) {
+    return { kind: 'none' }
   }
 
   const repaired = repairSplitLink(name, uri)
@@ -150,7 +159,8 @@ export function readLicence(entry) {
 }
 
 // Splits a dataset's rights entries into its licences and its access
-// rights, each read with readLicence.
+// rights, each read with readLicence. An entry that is no licence (the
+// "None" placeholder) is in neither.
 export function readLicences(entries) {
   const read = (entries ?? []).map(readLicence)
   return {
@@ -164,11 +174,11 @@ const LIST_LICENCE_LENGTH = 60
 
 // The short licence label for a list item: the first licence's name, cut to
 // LIST_LICENCE_LENGTH characters, with how many more there are; or "No
-// licence given".
+// licence in the record".
 export function licenceListLabel(entries) {
   const { licences } = readLicences(entries)
   if (licences.length === 0) {
-    return 'No licence given'
+    return 'No licence in the record'
   }
   const more = licences.length > 1 ? ` and ${licences.length - 1} more` : ''
   return shorten(licences[0].name, LIST_LICENCE_LENGTH) + more

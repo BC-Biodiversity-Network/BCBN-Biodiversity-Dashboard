@@ -58,7 +58,7 @@ function Licences({ entries }) {
     <section className="dataset-section">
       <h3>Licence</h3>
       {licences.length === 0
-        ? <p>No licence given in the record.</p>
+        ? <p>No licence in the record. Check the source page.</p>
         : <ul className="dataset-licences">{licences.map((licence, i) => <Licence key={i} licence={licence} />)}</ul>}
       {accessRights.length > 0 && <p>Access: {accessRights.join(', ')}.</p>}
     </section>

@@ -88,11 +88,21 @@ describe('licences', () => {
       { kind: 'licence', name: 'CC0 1.0', fullText: null, uri: null })
   })
 
+  it('reads the placeholder "None" with no link as no licence, but not a link or other text', () => {
+    expect(readLicence({ name: 'None', uri: null })).toEqual({ kind: 'none' })
+    expect(readLicence({ name: 'None', uri: '' })).toEqual({ kind: 'none' })
+    expect(readLicences([{ name: 'None', uri: null }, OPEN_ACCESS])).toEqual(
+      { licences: [], accessRights: ['Open access'] })
+    expect(licenceListLabel([{ name: 'None', uri: null }, OPEN_ACCESS])).toBe('No licence in the record')
+    expect(readLicence({ name: 'None', uri: 'https://example.org/licence' }).kind).toBe('licence')
+    expect(readLicence({ name: 'None of the above', uri: null }).kind).toBe('licence')
+  })
+
   it('splits licences from access rights, and labels the list item', () => {
     const { licences, accessRights } = readLicences([STATCAN, OPEN_ACCESS])
     expect(licences.map((l) => l.name)).toEqual(['Statistics Canada Open Licence'])
     expect(accessRights).toEqual(['Open access'])
-    expect(licenceListLabel([OPEN_ACCESS])).toBe('No licence given')
+    expect(licenceListLabel([OPEN_ACCESS])).toBe('No licence in the record')
     expect(licenceListLabel([PRINCE_GEORGE, { name: 'CC0 1.0', uri: null }])).toBe(
       'Open Government License – City of Prince George and 1 more')
     expect(licenceListLabel([STATCAN])).toBe('Statistics Canada Open Licence')

@@ -92,8 +92,14 @@ describe('the dataset details', () => {
 
   it('says when there is no licence', () => {
     show(eagles({ licences: [{ name: null, uri: 'info:eu-repo/semantics/restrictedAccess' }] }))
-    expect(screen.getByText('No licence given in the record.')).toBeTruthy()
+    expect(screen.getByText('No licence in the record. Check the source page.')).toBeTruthy()
     expect(screen.getByText('Access: Restricted access.')).toBeTruthy()
+  })
+
+  it('treats the placeholder "None" as no licence', () => {
+    show(eagles({ licences: [{ name: 'None', uri: null }, { name: null, uri: 'info:eu-repo/semantics/openAccess' }] }))
+    expect(screen.getByText('No licence in the record. Check the source page.')).toBeTruthy()
+    expect(screen.queryByText('None')).toBeNull()
   })
 
   it('says, as facts only, that a box covers all of BC and how many records share it', () => {

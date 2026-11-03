@@ -1041,7 +1041,9 @@ start of the abstract (`abstract_preview`).
   (with its readable name), class, front end group and access right, the
   datasets per issued year (`published`, with `no_date`), and how many are
   mappable (`location`). Each filter's counts use the query and the other
-  filters but not its own.
+  filters but not its own. `published.all_years` is the first and last
+  issued year of every dataset in the front end groups asked for, whatever
+  the query and the other filters (the year boxes' placeholders).
 - **Errors:** a query or organism with fewer than 2 letters or digits, an
   unknown value, `sort=relevance` with no `q`, or `year_from` after
   `year_to` gives 400.

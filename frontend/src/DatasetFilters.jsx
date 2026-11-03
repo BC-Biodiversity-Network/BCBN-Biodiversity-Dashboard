@@ -108,13 +108,16 @@ function sameFilters(a, b) {
 // mounted while open, so it always starts from the applied filters (state).
 // options are the API's answer for the applied filters: only the
 // catalogues that have datasets for them are offered (plus any ticked), and
-// the Published note gives their years.
+// the Published note gives their years. The year boxes' placeholders give
+// the years of every dataset the page can show (all_years: only the "may
+// include BC" switch changes them), so they never look like a limit set.
 function FilterPanel({ state, options, onApply, onClose }) {
   const [draft, setDraft] = useState(() => draftFrom(state))
   const [problems, setProblems] = useState({})
   const years = options.published?.years ?? []
   const first = years[0]?.year
   const last = years[years.length - 1]?.year
+  const allYears = options.published?.all_years
   const listedCatalogues = options.catalogue
     .filter((option) => option.count > 0 || draft.catalogues.includes(option.value))
     .sort(byName)
@@ -155,12 +158,12 @@ function FilterPanel({ state, options, onApply, onClose }) {
         <div className="datasets-year-form">
           <label>
             From
-            <input type="text" inputMode="numeric" value={draft.yearFrom} placeholder={first ? String(first) : ''}
+            <input type="text" inputMode="numeric" value={draft.yearFrom} placeholder={allYears?.first ? String(allYears.first) : ''}
               onChange={(event) => change({ yearFrom: event.target.value })} size={5} />
           </label>
           <label>
             to
-            <input type="text" inputMode="numeric" value={draft.yearTo} placeholder={last ? String(last) : ''}
+            <input type="text" inputMode="numeric" value={draft.yearTo} placeholder={allYears?.last ? String(allYears.last) : ''}
               onChange={(event) => change({ yearTo: event.target.value })} size={5} />
           </label>
         </div>
@@ -201,7 +204,7 @@ function FilterPanel({ state, options, onApply, onClose }) {
           />
         ))}
         <p className="datasets-filter-note">
-          Where BCBN checked the original catalogue (2 November 2026), the filter uses what that catalogue says.
+          Where BCBN checked the original catalogue (as of 3 November 2026), the filter uses what that catalogue says.
         </p>
       </FilterSection>
 

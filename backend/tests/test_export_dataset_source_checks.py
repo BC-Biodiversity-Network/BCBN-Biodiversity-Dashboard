@@ -4,9 +4,11 @@ Catalogue's download_audience among them), dates go with the dated values
 only, licences are read from the check's text (Zenodo's id replaced by the
 licence of its own DataCite record when that names the same one), removed
 and the agreement with the record are worked out, Lucia's hand checks are
-added (an FRDR one replacing the DataCite-only row), a field is left empty
-when it was not checked, and the file is refused when a dataset is checked
-twice by hand or is not on the site."""
+added (an FRDR one replacing the DataCite-only row; the Water Hub and
+PANGAEA ones matched by record id; these three dated 3 November), a field
+is left empty when it was not checked, and the file is refused when a dataset is
+checked twice by hand, is not on the site or comes from a catalogue the
+script does not know."""
 
 import sys
 from pathlib import Path
@@ -39,10 +41,11 @@ def shown_table(rows):
     return pd.DataFrame(rows, columns=["id", "link", "source_name", "licences"]).set_index("id")
 
 
-def hand_row(catalogue, link, access, licence="Statistics Canada Open Licence (termsOfUse in Dataverse JSON)"):
+def hand_row(catalogue, link, access, licence="Statistics Canada Open Licence (termsOfUse in Dataverse JSON)",
+             record_id=""):
     """Return one made-up row of Lucia's hand check file."""
-    return {"catalogue": catalogue, "link_checked": link, "source_access": access, "source_licence": licence,
-            "still_exists": "yes (RELEASED)"}
+    return {"catalogue": catalogue, "record_id": record_id, "link_checked": link, "source_access": access,
+            "source_licence": licence, "still_exists": "yes (RELEASED)"}
 
 
 def test_the_access_values_are_the_apis():
@@ -145,6 +148,9 @@ def test_the_hand_checks_polar_abacus_circle_and_frdr():
     rows = {row["dataset_id"]: row for row in sc.hand_rows(frdr, shown)}
     assert (rows["frdr"]["access"], rows["frdr"]["checked_how"], rows["frdr"]["access_matches_record"]) == (
         "open", "by hand", False)
+    # FRDR was checked on 3 November, the Polar, Abacus and cIRcle pages on 2 November.
+    assert rows["frdr"]["checked_on"] == rows["frdr2"]["checked_on"] == "2026-11-03"
+    assert by_id["circle"]["checked_on"] == "2026-11-02"
     assert "publicly available on 2024-03-10" in rows["frdr"]["access_note"]
     # A licence's short name in brackets is part of its name.
     assert rows["frdr"]["licences"] == [
@@ -171,3 +177,51 @@ def test_a_hand_check_replaces_the_tables_row_and_twice_by_hand_or_not_on_the_si
         sc.build(pd.concat([table, pd.DataFrame([table_row("x")])]), none, hand.iloc[0:0], shown)
     # Not checked rows are left out, so the hand check is then the only one.
     assert len(sc.build(table, pd.DataFrame({"id": ["a"]}), hand, shown)) == 3
+
+
+def test_the_water_hub_and_pangaea_hand_checks_are_matched_by_record_id():
+    """
+    A Water Hub copy agrees with its CanWIN record, so nothing differs; a
+    PANGAEA dataset is open with a CC-BY-4.0 licence where its record says
+    restricted with none. Both were checked on 3 November.
+    """
+    hub = "oai:canwin-datahub.ad.umanitoba.ca:kinbasket-reservoir-at-bush-harbour"
+    pangaea = "oai:pangaea.de:10.1594/pangaea.962186"
+    shown = shown_table([
+        (hub, "https://canwin-datahub.ad.umanitoba.ca/data/dataset/kinbasket-reservoir-at-bush-harbour",
+         "Canadian Watershed Information Network (CanWIN)", OPEN + [{"name": "CC-BY-SA-4.0", "uri": None}]),
+        (pangaea, "https://doi.org/10.1594/pangaea.962186", "PANGAEA", RESTRICTED),
+    ])
+    hand = pd.DataFrame([
+        hand_row("CanWIN (own datasets)", "https://data.cbwaterhub.ca/dataset/kinbasket-reservoir-at-bush-harbour",
+                 "Open: page opened without logging in", "CC-BY-SA-4.0 (shown on the page)",
+                 record_id="kinbasket-reservoir-at-bush-harbour"),
+        hand_row("PANGAEA", "https://doi.org/10.1594/pangaea.962186",
+                 "Open: page opened without logging in; Download Data link visible; no embargo notice.",
+                 "Creative Commons Attribution 4.0 International (CC-BY-4.0)",
+                 record_id="doi:10.1594/pangaea.962186"),
+    ])
+    by_id = {row["dataset_id"]: row for row in sc.hand_rows(hand, shown)}
+    assert by_id[hub]["catalogue_checked"] == "Columbia Basin Water Hub"
+    assert (by_id[hub]["access"], by_id[hub]["access_matches_record"], by_id[hub]["checked_on"]) == (
+        "open", True, "2026-11-03")
+    assert by_id[hub]["licences"] == [{"name": "CC-BY-SA-4.0", "uri": None}]
+    assert by_id[pangaea]["catalogue_checked"] == "PANGAEA"
+    assert (by_id[pangaea]["access"], by_id[pangaea]["access_matches_record"], by_id[pangaea]["checked_on"]) == (
+        "open", False, "2026-11-03")
+    assert by_id[pangaea]["licences"] == [
+        {"name": "Creative Commons Attribution 4.0 International (CC-BY-4.0)", "uri": None}]
+    assert by_id[pangaea]["removed"] is False
+
+    with pytest.raises(SystemExit, match="does not say Open"):
+        sc.hand_rows(hand.assign(source_access="Restricted: login"), shown)
+    with pytest.raises(SystemExit, match="no shown dataset has the id"):
+        sc.hand_rows(hand.assign(record_id="not-shown"), shown)
+
+
+def test_a_hand_check_from_an_unknown_catalogue_stops_the_export():
+    """A catalogue label the script has no rule for is refused, not guessed."""
+    shown = shown_table([("a", "https://example.org/a", "Somewhere", OPEN)])
+    hand = pd.DataFrame([hand_row("Somewhere new", "https://example.org/a", "Open")])
+    with pytest.raises(SystemExit, match="does not know: Somewhere new"):
+        sc.build(pd.DataFrame([table_row("a")]), pd.DataFrame({"id": []}), hand, shown)

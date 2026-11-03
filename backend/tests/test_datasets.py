@@ -221,7 +221,18 @@ def test_published_years_leave_out_datasets_with_no_date_only_when_set(client):
     assert ids(client.get("/api/datasets", params={"year_to": 2020})) == [EAGLE_NESTS]
     assert ids(client.get("/api/datasets", params={"year_from": 2020, "year_to": 2020})) == [EAGLE_NESTS]
     published = client.get("/api/datasets", params={"year_from": 2021}).json()["options"]["published"]
-    assert published == {"years": [{"year": 2020, "count": 1}, {"year": 2022, "count": 1}], "no_date": 1}
+    assert published == {"years": [{"year": 2020, "count": 1}, {"year": 2022, "count": 1}], "no_date": 1,
+                         "all_years": {"first": 2020, "last": 2022}}
+
+
+def test_all_years_ignore_the_query_and_filters_but_follow_the_front_end_groups(client):
+    """The placeholders' range is every dataset the page can show: bc_data only, or with pending too."""
+    narrowed = {"q": "eagle", "catalogue": ["catalogue.data.gov.bc.ca"], "year_from": 2020, "year_to": 2020}
+    for params, expected in [({}, {"first": 2020, "last": 2022}), (narrowed, {"first": 2020, "last": 2022}),
+                             (BOTH, {"first": 2019, "last": 2022}), ({**BOTH, **narrowed}, {"first": 2019, "last": 2022})]:
+        answer = client.get("/api/datasets", params=params).json()
+        assert answer["options"]["published"]["all_years"] == expected
+    assert ids(client.get("/api/datasets", params=narrowed)) == [EAGLE_NESTS]
 
 
 @pytest.mark.parametrize("organism, expected", [

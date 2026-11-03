@@ -77,10 +77,15 @@ function CheckedByBcbn({ ariaLabel, children }) {
 // checked by hand.
 const SOURCES_WITH_UNCHECKED_ACCESS = new Set(['pangaea.de'])
 
+// The one date the site gives for BCBN's checks: they were done on 2 and 3
+// November 2026 and finished on 3 November. Each row's own date stays in the
+// data (checked_on) but is not shown.
+const SOURCE_CHECK_AS_OF = '3 November 2026'
+
 // Where a checked value comes from, the start of each tip.
 function checkedFrom(check) {
-  return `From ${check.catalogue_checked}, where this dataset is published (checked by BCBN on `
-    + `${issuedLabel(check.checked_on)}).`
+  return `From ${check.catalogue_checked}, where this dataset is published (checked by BCBN, as of `
+    + `${SOURCE_CHECK_AS_OF}).`
 }
 
 // One row of the Details table: the label (with an optional note under it)
@@ -343,7 +348,7 @@ export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies
       <MayIncludeBcTag frontendGroup={dataset.frontend_group} />
       {dataset.source_check?.removed && (
         <p className="dataset-removed-note">
-          Note from BCBN: on {issuedLabel(dataset.source_check.checked_on)} this dataset was no longer
+          Note from BCBN: as of {SOURCE_CHECK_AS_OF} this dataset was no longer
           on {dataset.source_check.catalogue_checked}, where it was published, so the link may not work.
         </p>
       )}

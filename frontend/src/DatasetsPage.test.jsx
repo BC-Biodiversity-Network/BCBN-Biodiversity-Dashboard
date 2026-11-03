@@ -41,7 +41,8 @@ const LIST = {
     final_class: [{ value: 'bc_only', count: 1 }, { value: 'global', count: 0 }],
     frontend_group: [{ value: 'bc_data', count: 1 }, { value: 'pending', count: 2 }],
     access: [{ value: 'open', count: 2 }, { value: 'restricted', count: 0 }],
-    published: { years: [{ year: 2020, count: 1 }, { year: 2021, count: 1 }], no_date: 0 },
+    published: { years: [{ year: 2020, count: 1 }, { year: 2021, count: 1 }], no_date: 0,
+      all_years: { first: 1998, last: 2026 } },
     location: [{ value: 'mappable', count: 1 }],
   },
 }
@@ -123,7 +124,7 @@ describe('the Datasets page', () => {
     stubList()
     await showPage('?view=datasets')
     openFilters()
-    const note = screen.getByText('Where BCBN checked the original catalogue (2 November 2026), the filter uses what '
+    const note = screen.getByText('Where BCBN checked the original catalogue (as of 3 November 2026), the filter uses what '
       + 'that catalogue says.')
     const section = note.closest('fieldset, section, div')
     expect([...section.querySelectorAll('input[type="checkbox"]')].map((box) => box.labels[0].textContent))
@@ -194,6 +195,19 @@ describe('the Datasets page', () => {
     expect(screen.getByRole('button', { name: 'Filters (3)' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     expect(navigate).toHaveBeenLastCalledWith('?view=datasets&q=eagle&sort=title')
+  })
+
+  it('gives the full year range as the placeholders after a narrowing filter, and the results\' years under', async () => {
+    const narrowed = { ...LIST, options: { ...LIST.options,
+      published: { years: [{ year: 2021, count: 1 }], no_date: 0, all_years: { first: 1998, last: 2026 } } } }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => narrowed })))
+    await showPage('?view=datasets&catalogue=datadryad.org')
+    openFilters()
+    expect(screen.getByRole('textbox', { name: 'From' }).placeholder).toBe('1998')
+    expect(screen.getByRole('textbox', { name: 'to' }).placeholder).toBe('2026')
+    expect(screen.getByRole('textbox', { name: 'From' }).value).toBe('')
+    expect(screen.getByText(/The datasets matching your search and filters were published from 2021 to 2021\./))
+      .toBeTruthy()
   })
 
   it('keeps every change in the panel pending, then applies them all at once and closes', async () => {

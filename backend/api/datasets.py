@@ -285,10 +285,19 @@ def option_counts(cursor, conditions, leave_out, column, selected=(), allowed=No
 
 
 def published_counts(cursor, conditions):
-    """Return the counts for the Published filter: each issued year with its datasets, and how many have no issued date."""
+    """
+    Return the counts for the Published filter: each issued year with its
+    datasets, how many have no issued date, and all_years, the first and
+    last issued year of every dataset the page can show (only the front end
+    groups asked for count, not the query or the other filters), for the
+    year boxes' placeholders.
+    """
     counts = grouped_counts(cursor, conditions, "published", "s.year")
+    condition, params = where_clause({"frontend_group": conditions["frontend_group"]})
+    first, last = cursor.execute(
+        f"SELECT min(s.year), max(s.year) FROM {FROM_DATASETS} WHERE {condition}", params).fetchone()
     return {"years": [{"year": year, "count": counts[year]} for year in sorted(y for y in counts if y is not None)],
-            "no_date": counts.get(None, 0)}
+            "no_date": counts.get(None, 0), "all_years": {"first": first, "last": last}}
 
 
 def normalised_words(cursor, text, what):

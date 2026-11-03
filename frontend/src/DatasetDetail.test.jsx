@@ -142,7 +142,7 @@ describe('the dataset details', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Where does this access come from?' }))
     expect(screen.getByRole('tooltip').textContent).toBe('From BC Data Catalogue, where this dataset is published '
-      + '(checked by BCBN on 2 November 2026). Lunaris, which collects records from many catalogues, lists it as '
+      + '(checked by BCBN, as of 3 November 2026). Lunaris, which collects records from many catalogues, lists it as '
       + 'open access, so we follow the original catalogue.')
   })
 
@@ -188,7 +188,7 @@ describe('the dataset details', () => {
       .toBe('https://creativecommons.org/licenses/by/4.0/legalcode')
     fireEvent.click(screen.getByRole('button', { name: 'Where does this licence come from?' }))
     expect(screen.getByRole('tooltip').textContent).toBe('From Zenodo, where this dataset is published (checked by '
-      + 'BCBN on 2 November 2026). The record Lunaris collected from Zenodo did not include a licence.')
+      + 'BCBN, as of 3 November 2026). The record Lunaris collected from Zenodo did not include a licence.')
     expect(detailValue(container, 'Access').textContent).toBe('Restricted access')
   })
 
@@ -224,8 +224,30 @@ describe('the dataset details', () => {
     expect(container.textContent).not.toContain('Lunaris marks every PANGAEA record')
   })
 
+  it("shows Lucia's PANGAEA hand check with its tip, and nothing for an agreeing Water Hub copy", () => {
+    const { container } = show(eagles({
+      source: 'pangaea.de', source_name: 'PANGAEA', licences: [RESTRICTED],
+      source_check: checked({ catalogue_checked: 'PANGAEA', checked_on: '2026-11-03', checked_how: 'by hand',
+        access_matches_record: false,
+        licences: [{ name: 'Creative Commons Attribution 4.0 International (CC-BY-4.0)', uri: null }] }),
+    }))
+    expect(detailValue(container, 'Access').textContent).toBe('Open access (checked by BCBN)?')
+    expect(detailValue(container, 'Licence').textContent)
+      .toBe('Creative Commons Attribution 4.0 International (CC-BY-4.0) (checked by BCBN)?')
+    expect(container.textContent).not.toContain('Lunaris marks every PANGAEA record')
+    fireEvent.click(screen.getByRole('button', { name: 'Where does this access come from?' }))
+    expect(screen.getByRole('tooltip').textContent).toBe('From PANGAEA, where this dataset is published (checked by '
+      + 'BCBN, as of 3 November 2026). Lunaris, which collects records from many catalogues, lists it as restricted '
+      + 'access, so we follow the original catalogue.')
+    cleanup()
+    const hub = show(eagles({ source_check: checked({ catalogue_checked: 'Columbia Basin Water Hub',
+      checked_on: '2026-11-03', checked_how: 'by hand', licences: [{ name: 'CC-BY-SA-4.0', uri: null }] }) }))
+    expect(detailValue(hub.container, 'Access').textContent).toBe('Open access')
+    expect(hub.container.textContent).not.toContain('checked by BCBN')
+  })
+
   it('says when the original catalogue no longer has the dataset, on the page, and no Zenodo note any more', () => {
-    const note = 'Note from BCBN: on 2 November 2026 this dataset was no longer on Zenodo, where it was '
+    const note = 'Note from BCBN: as of 3 November 2026 this dataset was no longer on Zenodo, where it was '
       + 'published, so the link may not work.'
     const { container } = show(eagles({ source: 'https-zenodo.org', licences: [RESTRICTED],
       source_check: checked({ catalogue_checked: 'Zenodo', access: null, removed: true }) }))

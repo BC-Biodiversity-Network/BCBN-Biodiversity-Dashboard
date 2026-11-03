@@ -12,9 +12,12 @@ What it reads (read only):
   --not-checked  its list of the datasets it could not check (not_checked.csv)
   --hand      Lucia's hand checks (hand_check_2026-11-02.csv): the 24
               datasets the API check could not reach (Polar Data Catalogue,
-              Abacus, cIRcle) and the 28 FRDR datasets, which the API check
-              could only read through DataCite. A hand check replaces the
-              API check's row for the same dataset.
+              Abacus, cIRcle), the 28 FRDR datasets, which the API check
+              could only read through DataCite, and (checked on 3 November)
+              the 87 CanWIN copies of Columbia Basin Water Hub records, whose
+              terms prohibit crawling, and the 8 PANGAEA datasets, whose API
+              does not give access. A hand check replaces the API check's row
+              for the same dataset.
   --datasets  lunaris_datasets.parquet, for the shown ids, links and catalogue
               names
 
@@ -22,8 +25,12 @@ The columns:
   dataset_id         the shown dataset's id
   catalogue_checked  the readable name of the catalogue checked: the
                      dataset's own catalogue, or, for a CanWIN copy of an
-                     Open Government Portal record, the Open Government Portal
-  checked_on         the day of the check (2026-11-02)
+                     Open Government Portal or Columbia Basin Water Hub
+                     record, that original catalogue
+  checked_on         the day of the check (2026-11-02, or 2026-11-03 for the
+                     FRDR, Water Hub and PANGAEA hand checks). The site shows
+                     one date for all ("as of 3 November 2026"); this is
+                     each row's real one
   checked_how        "source API", "DataCite" (FRDR and DataStream, whose
                      own sites were not asked) or "by hand"
   access             the source's access in one of ACCESS_VALUES, or null
@@ -91,12 +98,30 @@ BC_AUDIENCE = {"Government": "government_only", "Government and Business BCeID":
 # Catalogue records say "Access Constraints: Public" or "Limited"; FRDR
 # pages (every FRDR collection's name ends in "(FRDR)") start "Open:" when
 # they open without logging in, as all 28 did (2 of them had come out of an
-# embargo, which their notes date).
+# embargo, which their notes date). The Water Hub and PANGAEA pages start
+# "Open:" the same way, as all 87 and all 8 did. A catalogue not named here
+# stops the export.
 HAND_ACCESS = {"Abacus (Statistics Canada public files)": "ubc_only", "Abacus Open Data": "ubc_only",
                "cIRcle (UBC Library)": "open"}
 POLAR = "Polar Data Catalogue"
 POLAR_ACCESS = {"Public": "open", "Limited": "limited"}
 FRDR_SUFFIX = "(FRDR)"
+WATER_HUB = "CanWIN (own datasets)"
+PANGAEA = "PANGAEA"
+OPEN_ONLY = {WATER_HUB, PANGAEA}
+
+# The hand checks matched by record id instead of by link (the Water Hub
+# page is not the CanWIN link the site shows): the dataset id is this prefix
+# and the record id, without "doi:" (doi:10.1594/pangaea.962186 is
+# oai:pangaea.de:10.1594/pangaea.962186).
+BY_RECORD_ID = {WATER_HUB: "oai:canwin-datahub.ad.umanitoba.ca:", PANGAEA: "oai:pangaea.de:"}
+# The catalogue a hand check names, when it is not the dataset's own: the
+# CanWIN rows are copies, checked on the Columbia Basin Water Hub.
+HAND_CATALOGUE = {WATER_HUB: "Columbia Basin Water Hub"}
+# The hand checks done on 3 November, FRDR among them (Lucia's notes say
+# 2026-11-03); every other one is CHECKED_ON.
+HAND_CHECKED_ON = {WATER_HUB: "2026-11-03", PANGAEA: "2026-11-03"}
+FRDR_CHECKED_ON = "2026-11-03"
 
 LICENCE = pa.struct([("name", pa.string()), ("uri", pa.string())])
 SCHEMA = pa.schema([
@@ -205,14 +230,21 @@ def api_rows(table, shown):
 
 
 def hand_access(row):
-    """Return the access a hand check found: by catalogue, from Polar's access constraint, or open for FRDR."""
-    if row["catalogue"] == POLAR:
+    """
+    Return the access a hand check found: by catalogue, from Polar's access
+    constraint, or open for FRDR, the Water Hub and PANGAEA (stopping when
+    one of those does not say Open, or the catalogue is not known).
+    """
+    catalogue = row["catalogue"]
+    if catalogue == POLAR:
         return POLAR_ACCESS[re.match(r"^(\w+)", row["source_access"]).group(1)]
-    if row["catalogue"].endswith(FRDR_SUFFIX):
+    if catalogue.endswith(FRDR_SUFFIX) or catalogue in OPEN_ONLY:
         if not row["source_access"].startswith("Open"):
-            raise SystemExit(f"ERROR: an FRDR hand check that does not say Open: {row['link_checked']}")
+            raise SystemExit(f"ERROR: a {catalogue} hand check that does not say Open: {row['link_checked']}")
         return "open"
-    return HAND_ACCESS[row["catalogue"]]
+    if catalogue not in HAND_ACCESS:
+        raise SystemExit(f"ERROR: a hand check from a catalogue this script does not know: {catalogue}")
+    return HAND_ACCESS[catalogue]
 
 
 def hand_licence(text):
@@ -228,17 +260,36 @@ def hand_licence(text):
     return {"name": name.strip(), "uri": links[0] if links else None}
 
 
+def hand_dataset(row, by_link, shown):
+    """
+    Return the shown dataset id a hand check is about: by record id for the
+    Water Hub and PANGAEA, by link for the rest. Stops when no shown dataset
+    has it.
+    """
+    prefix = BY_RECORD_ID.get(row["catalogue"])
+    if prefix is not None:
+        rid = prefix + row["record_id"].removeprefix("doi:")
+        if rid not in shown.index:
+            raise SystemExit(f"ERROR: no shown dataset has the id {rid}")
+        return rid
+    rid = by_link.get(row["link_checked"].replace("http://", "https://"))
+    if rid is None:
+        raise SystemExit(f"ERROR: no shown dataset has the link {row['link_checked']}")
+    return rid
+
+
 def hand_rows(hand, shown):
-    """Return the rows of Lucia's hand checks, matched to the shown datasets by their link."""
+    """Return the rows of Lucia's hand checks, matched to the shown datasets by record id or link."""
     by_link = {link.replace("http://", "https://"): rid for rid, link in shown["link"].items()}
     rows = []
     for _, row in hand.iterrows():
-        rid = by_link.get(row["link_checked"].replace("http://", "https://"))
-        if rid is None:
-            raise SystemExit(f"ERROR: no shown dataset has the link {row['link_checked']}")
+        rid = hand_dataset(row, by_link, shown)
         access = hand_access(row)
         rows.append({
-            "dataset_id": rid, "catalogue_checked": shown.at[rid, "source_name"], "checked_on": CHECKED_ON,
+            "dataset_id": rid,
+            "catalogue_checked": HAND_CATALOGUE.get(row["catalogue"], shown.at[rid, "source_name"]),
+            "checked_on": (FRDR_CHECKED_ON if row["catalogue"].endswith(FRDR_SUFFIX)
+                           else HAND_CHECKED_ON.get(row["catalogue"], CHECKED_ON)),
             "checked_how": "by hand", "access": access, "access_until": None, "access_note": row["source_access"],
             "access_matches_record": matches_record(record_access(shown.at[rid, "licences"]), access),
             "licences": [hand_licence(row["source_licence"])],

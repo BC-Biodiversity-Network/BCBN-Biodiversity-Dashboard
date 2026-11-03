@@ -79,8 +79,9 @@ function SearchForm({ initial, onSearch }) {
 }
 
 // One dataset in the list: its title (a link that opens its details), its
-// catalogue, issued date and licence, the start of its abstract, and the
-// "May include BC" tag for a dataset that is not BC data. With
+// catalogue, published date (the record's issued date) and licence, the
+// start of its abstract, and the "May include BC" tag for a dataset that is
+// not BC data. With
 // showOrganisms (while the Organisms filter is in use), also the organism
 // names stored for it, so it is clear why it matched.
 function ResultItem({ result, href, onOpen, showOrganisms }) {
@@ -102,7 +103,7 @@ function ResultItem({ result, href, onOpen, showOrganisms }) {
       </a>
       <p className="dataset-meta">
         {result.source_name}
-        {issued && <> · Issued {issued}</>}
+        {issued && <> · Published {issued}</>}
         {' · '}{licenceListLabel(result.licences)}
       </p>
       <MayIncludeBcTag frontendGroup={result.frontend_group} />

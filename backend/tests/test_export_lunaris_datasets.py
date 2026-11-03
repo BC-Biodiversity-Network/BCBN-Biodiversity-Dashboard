@@ -33,9 +33,10 @@ def union_rows(rows):
 
 
 def facts_for(rows):
-    """Return made-up DataCite facts by id from (id, issued, datestamp, identifier, identifier_type) tuples, with no licences."""
+    """Return made-up DataCite facts by id from (id, issued, datestamp, identifier, identifier_type) tuples, with no licences or creators."""
     facts = pd.DataFrame(rows, columns=["id", "issued", "datestamp", "identifier", "identifier_type"]).set_index("id")
     facts["licences"] = [[] for _ in range(len(facts))]
+    facts["creators"] = [[] for _ in range(len(facts))]
     return facts
 
 
@@ -223,8 +224,8 @@ def test_datacite_facts_read_the_issued_date_and_identifier():
            '<resource xmlns="http://datacite.org/schema/kernel-4">'
            '<identifier identifierType="DOI">10.5061/dryad.x</identifier>'
            '<dates><date dateType="Issued">2024-09-16</date></dates></resource></metadata></record>')
-    assert ex.datacite_facts(xml) == ("2024-09-16", "10.5061/dryad.x", "DOI", [])
-    assert ex.datacite_facts('<record xmlns="http://www.openarchives.org/OAI/2.0/"/>') == ("", "", "", [])
+    assert ex.datacite_facts(xml) == ("2024-09-16", "10.5061/dryad.x", "DOI", [], [])
+    assert ex.datacite_facts('<record xmlns="http://www.openarchives.org/OAI/2.0/"/>') == ("", "", "", [], [])
 
 
 def test_datacite_facts_keep_every_rights_entry_as_harvested():
@@ -241,6 +242,19 @@ def test_datacite_facts_keep_every_rights_entry_as_harvested():
         {"name": "CC0 1.0", "uri": None},
         {"name": None, "uri": None},
     ]
+
+
+def test_datacite_facts_keep_every_creator_name_as_harvested():
+    """Every creatorName in record order: spaces, repeats and mailbox names kept; an empty name is ""."""
+    xml = ('<record xmlns="http://www.openarchives.org/OAI/2.0/"><metadata>'
+           '<resource xmlns="http://datacite.org/schema/kernel-4"><creators>'
+           '<creator><creatorName nameType="Organizational">SBOT Requests</creatorName></creator>'
+           '<creator><creatorName> Blackburn, Ian </creatorName><givenName>Ian</givenName></creator>'
+           '<creator><creatorName>SBOT Requests</creatorName></creator>'
+           '<creator><creatorName/></creator>'
+           '</creators><contributors><contributor><contributorName>Not a creator</contributorName>'
+           '</contributor></contributors></resource></metadata></record>')
+    assert ex.datacite_facts(xml)[4] == ["SBOT Requests", " Blackburn, Ian ", "SBOT Requests", ""]
 
 
 def test_access_rights_are_not_counted_as_licences():
@@ -305,16 +319,18 @@ def test_build_rows_handles_missing_fields_and_answers():
     assert row["other_copies"] == [] and row["copy_count"] == 1
 
 
-def test_build_rows_carries_the_licences_box_flags_and_shared_counts():
-    """The shown copy's own licences and box flags; the box is kept as harvested."""
+def test_build_rows_carries_the_licences_creators_box_flags_and_shared_counts():
+    """The shown copy's own licences, creators and box flags; the box is kept as harvested."""
     members, facts, harvest, a4, a35 = made_up_export()
     licences = [{"name": "CC0 1.0", "uri": None}, {"name": None, "uri": "info:eu-repo/semantics/openAccess"}]
     facts.at["oai:datadryad.org:doi:10.1/d", "licences"] = licences
+    facts.at["oai:datadryad.org:doi:10.1/d", "creators"] = ["Smith, Ana", "SBOT Requests", "Smith, Ana"]
     canada = {"w": -141.003, "e": -52.6174, "s": 41.6755, "n": 83.1139}
     harvest.at["oai:datadryad.org:doi:10.1/d", "boxes"] = [canada]
     row = {r["id"]: r for r in ex.build_rows(members, facts, harvest, {}, a4, a35, NAMES, BC)}[
         "oai:datadryad.org:doi:10.1/d"]
     assert row["licences"] == licences and row["boxes"] == [canada]
+    assert row["creators"] == ["Smith, Ana", "SBOT Requests", "Smith, Ana"]
     assert (row["box_matches_canada_extent"], row["box_matches_bc_rectangle"], row["location_type"]) == (
         True, False, "box")
     assert row["box_shared_by"] == [1]

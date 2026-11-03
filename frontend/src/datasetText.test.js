@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  LICENCE_NAME_LENGTH, boxKind, describeLocation, issuedLabel, licenceListLabel, placeLabel,
-  plainText, readLicence, readLicences, shorten,
+  LICENCE_NAME_LENGTH, boxKind, creatorsLabel, describeLocation, harvestedDegrees, identifierLabel, issuedLabel,
+  licenceListLabel, noteText, placeLabel, plainText, readLicence, readLicences, shorten, shownCoordinates,
+  shownDegrees,
 } from './datasetText'
 
 // Real rights entries from the 2026-10-20 harvest (long ones cut).
@@ -33,6 +34,23 @@ describe('labels', () => {
   it('shortens at a space', () => {
     expect(shorten('one two three', 9)).toBe('one two...')
     expect(shorten('short', 9)).toBe('short')
+  })
+
+  it('names up to three creators exactly as harvested, then counts the rest', () => {
+    expect(creatorsLabel([])).toBeNull()
+    expect(creatorsLabel(undefined)).toBeNull()
+    expect(creatorsLabel(['SBOT Requests'])).toBe('SBOT Requests')
+    expect(creatorsLabel(['Smith, Ana', ' Blackburn, Ian ', 'Smith, Ana'])).toBe('Smith, Ana;  Blackburn, Ian ; Smith, Ana')
+    expect(creatorsLabel(['A', 'B', 'C', 'D'])).toBe('A; B; C; and 1 other')
+    expect(creatorsLabel(['A', 'B', 'C', 'D', 'E', 'F'])).toBe('A; B; C; and 3 others')
+  })
+
+  it('writes the identifier as a DOI or as the landing page address', () => {
+    expect(identifierLabel('https://doi.org/10.5683/SP3/GZQXVC', 'doi')).toBe('doi:10.5683/SP3/GZQXVC')
+    expect(identifierLabel('https://catalogue.data.gov.bc.ca/dataset/crims', 'url'))
+      .toBe('https://catalogue.data.gov.bc.ca/dataset/crims')
+    expect(identifierLabel('', 'url')).toBeNull()
+    expect(identifierLabel('javascript:alert(1)', 'url')).toBeNull()
   })
 
   it('reads HTML as plain text', () => {
@@ -139,26 +157,63 @@ function place(name, kind, { role = 'study_location', large = false } = {}) {
   return { name, kind, role, latitude: 50, longitude: -120, large_area: large }
 }
 
+// The notes of a location as the page shows them, folded.
+function texts(location) {
+  return location.notes.map((note) => noteText(note))
+}
+
 describe('where the location comes from', () => {
   it('draws a real box and says it is from the record', () => {
     const location = describeLocation(dataset({ boxes: [{ w: -124, e: -123, s: 49, n: 50 }] }))
     expect(location.boxes).toHaveLength(1)
-    expect(location.notes).toEqual(['Extent: from the CanWIN record.'])
+    expect(texts(location)).toEqual(['Extent: from the CanWIN record (west -124, east -123, south 49, north 50).'])
+  })
+
+  it('shows at most 4 decimals, keeping the number as harvested for the tooltip, and lists several boxes', () => {
+    const location = describeLocation(dataset({ boxes: [
+      { w: -128.61694335937497, e: -127.61718749999997, s: 51.3854950692232, n: 52.0322181041453 },
+      { w: -150.0, e: -110.0, s: 35.0, n: 65.0 }, { w: -124, e: -123.5, s: 49.25, n: 50 }] }))
+    expect(texts(location)).toEqual(['Extent: 3 boxes from the CanWIN record: (west -128.6169, ' +
+      'east -127.6172, south 51.3855, north 52.0322), ' +
+      '(west -150, east -110, south 35, north 65) and (west -124, east -123.5, south 49.25, north 50).'])
+    expect(location.notes[0].items[0].w).toBe(-128.61694335937497)
+    expect([shownDegrees(-128.61694335937497), harvestedDegrees(-128.61694335937497)])
+      .toEqual(['-128.6169', '-128.61694335937497'])
+    expect([shownDegrees(35.0), shownDegrees(-0.00001), shownDegrees(49.12346)]).toEqual(['35', '0', '49.1235'])
+  })
+
+  it('folds more than three boxes or points: the first three, then how many more', () => {
+    const points = Array.from({ length: 27 }, (_, i) => ({ lat: 50 + i / 10, lon: -125 }))
+    const location = describeLocation(dataset({ points }))
+    expect(texts(location)).toEqual(['Location: 27 points from the record: (latitude 50, longitude -125), ' +
+      '(latitude 50.1, longitude -125), (latitude 50.2, longitude -125) and 24 more points.'])
+    expect(noteText(location.notes[0], true)).toMatch(/\(latitude 52\.5, longitude -125\) and \(latitude 52\.6, longitude -125\)\.$/)
+    expect(shownCoordinates(location.notes[0]).foldable).toBe(true)
+    const boxes = Array.from({ length: 4 }, (_, i) => ({ w: -124 + i, e: -123 + i, s: 49, n: 50 }))
+    expect(texts(describeLocation(dataset({ boxes })))).toEqual(['Extent: 4 boxes from the CanWIN record: ' +
+      '(west -124, east -123, south 49, north 50), (west -123, east -122, south 49, north 50), ' +
+      '(west -122, east -121, south 49, north 50) and 1 more box.'])
+    const three = describeLocation(dataset({ points: points.slice(0, 3) }))
+    expect(shownCoordinates(three.notes[0]).foldable).toBe(false)
   })
 
   it('draws a box matching all of BC or all of Canada dashed, with how many records share it', () => {
     const bc = describeLocation(dataset({ boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }], box_shared_by: [620] }))
     expect([bc.boxes, bc.matchingBoxes]).toEqual([[], [{ w: -139.5, e: -113.5, s: 48, n: 60 }]])
-    expect(bc.notes).toEqual(['Extent: whole of BC. The box covers all of BC; CanWIN uses this same box for ' +
+    expect(texts(bc)).toEqual(['Extent: whole of BC (west -139.5, east -113.5, south 48, north 60). The box ' +
+      'covers all of BC; CanWIN uses this same box for ' +
       "620 of its records in Lunaris, so it may not show where this dataset's data actually are."])
     const canada = describeLocation(dataset({ boxes: [{ w: -141, e: -52.6, s: 41.7, n: 83.1 }], box_shared_by: [951] }))
-    expect(canada.notes).toEqual(['Extent: all of Canada. The box covers all of Canada; CanWIN uses this same ' +
+    expect(texts(canada)).toEqual(['Extent: all of Canada (west -141, east -52.6, south 41.7, north 83.1). The box ' +
+      'covers all of Canada; CanWIN uses this same ' +
       "box for 951 of its records in Lunaris, so it may not show where this dataset's data actually are."])
   })
 
   it('states only what the box covers when no other record shares it, and puts swapped edges back', () => {
     const location = describeLocation(dataset({ boxes: [{ w: -139.06, e: -114.03, s: 60, n: 48.3 }], box_shared_by: [1] }))
-    expect(location.notes).toEqual(['Extent: whole of BC. The box covers all of BC.'])
+    // The numbers are the record's own, edges the wrong way round included.
+    expect(texts(location)).toEqual(['Extent: whole of BC (west -139.06, east -114.03, south 60, north 48.3). ' +
+      'The box covers all of BC.'])
     expect(location.matchingBoxes).toEqual([{ w: -139.06, e: -114.03, s: 48.3, n: 60 }])
   })
 
@@ -166,20 +221,23 @@ describe('where the location comes from', () => {
     const location = describeLocation(dataset({
       boxes: [{ w: -124, e: -123, s: 49, n: 50 }, { w: -139.5, e: -113.5, s: 48, n: 60 }], box_shared_by: [1, 620] }))
     expect([location.boxes.length, location.matchingBoxes.length]).toEqual([1, 1])
-    expect(location.notes[0]).toBe('Extent: from the CanWIN record.')
+    expect(texts(location)[0]).toBe('Extent: from the CanWIN record (west -124, east -123, south 49, north 50).')
   })
 
   it('writes an odd box as harvested and says why it is not drawn', () => {
     const location = describeLocation(dataset({ boxes: [{ w: -124, e: -123, s: 50, n: 49 }] }))
     expect(location.boxes).toEqual([])
-    expect(location.notes[0]).toBe('Box in the record: west -124, east -123, south 50, north 49. Not drawn, ' +
+    expect(texts(location)[0]).toBe('Box in the record: west -124, east -123, south 50, north 49. Not drawn, ' +
       'because its edges are the wrong way round (south above north, or west beyond east).')
   })
 
   it('draws points from the record', () => {
     const location = describeLocation(dataset({ points: [{ lat: 49, lon: -123 }, { lat: 50, lon: -124 }] }))
     expect(location.points).toHaveLength(2)
-    expect(location.notes).toEqual(['Location: 2 points from the record.'])
+    expect(texts(location)).toEqual(['Location: 2 points from the record: (latitude 49, longitude -123) and ' +
+      '(latitude 50, longitude -124).'])
+    const one = describeLocation(dataset({ points: [{ lat: 51.65, lon: -128.1 }] }))
+    expect(texts(one)).toEqual(['Location: a point from the record (latitude 51.65, longitude -128.1).'])
   })
 
   it('draws looked-up places, says BCBN located them and which are not in BC', () => {
@@ -188,7 +246,7 @@ describe('where the location comes from', () => {
         { name: 'Nowhere Creek', kind: null, role: 'study_location', latitude: null, longitude: null }],
     }))
     expect(location.places.map((p) => p.name)).toEqual(['Kamloops', 'Goose Island'])
-    expect(location.notes).toEqual(['Places named in the record: Kamloops, Goose Island (not in BC), ' +
+    expect(texts(location)).toEqual(['Places named in the record: Kamloops, Goose Island (not in BC), ' +
       'Nowhere Creek (could not be placed on the map) (located by BCBN using GeoNames).'])
     expect(location.geonames).toBe(true)
   })
@@ -201,7 +259,7 @@ describe('where the location comes from', () => {
         place('University of Manitoba', 'outside_bc', { role: 'affiliation' })],
     }))
     expect(location.places.map((p) => p.name)).toEqual(['Vancouver Island'])
-    expect(location.notes).toEqual([
+    expect(texts(location)).toEqual([
       'Places named in the record: Vancouver Island (located by BCBN using GeoNames).',
       'Other places named: British Columbia, North America, Canada (large areas, not drawn on the map).'])
   })
@@ -210,7 +268,7 @@ describe('where the location comes from', () => {
     const location = describeLocation(dataset({
       looked_up_places: [place('British Columbia', 'in_bc', { large: true })] }))
     expect([location.places, location.geonames]).toEqual([[], true])
-    expect(location.notes).toEqual(
+    expect(texts(location)).toEqual(
       ['Places named in the record: British Columbia (large areas, not drawn on the map).'])
   })
 

@@ -20,6 +20,36 @@ export function issuedLabel(issued) {
   return `${Number(match[3])} ${MONTHS[Number(match[2]) - 1]} ${match[1]}`
 }
 
+// How many creators are named before the rest are counted ("and 4 others").
+const CREATORS_SHOWN = 3
+
+// The creators line of the Details table: the names exactly as harvested,
+// joined with "; ", up to CREATORS_SHOWN of them, then "and N others" ("and
+// 1 other") for the rest. null when the record has none.
+export function creatorsLabel(creators) {
+  const names = creators ?? []
+  if (names.length === 0) {
+    return null
+  }
+  const shown = names.slice(0, CREATORS_SHOWN)
+  const rest = names.length - shown.length
+  return rest > 0 ? [...shown, `and ${rest} ${rest === 1 ? 'other' : 'others'}`].join('; ') : shown.join('; ')
+}
+
+// The start of a DOI written as a web address (the export's link for a
+// record whose identifier is a DOI).
+const DOI_LINK = 'https://doi.org/'
+
+// The identifier of the Details table, as text: "doi:10.5683/SP3/GZQXVC" for
+// a DOI, the landing page's address otherwise. null when there is no link
+// that can be followed.
+export function identifierLabel(link, linkType) {
+  if (!isWebLink(link)) {
+    return null
+  }
+  return linkType === 'doi' && link.startsWith(DOI_LINK) ? `doi:${link.slice(DOI_LINK.length)}` : link
+}
+
 // Shortens text to at most length characters, cut at a space, with "..."
 // when cut.
 export function shorten(text, length) {
@@ -252,14 +282,80 @@ export function boxKind(box) {
   return null
 }
 
-// A number of degrees as written in the record, without trailing zeros.
-function degrees(value) {
-  return String(Number(value.toFixed(5)))
+// The most decimals a box or point number is shown with; the number as
+// harvested is in the tooltip.
+const DEGREE_DECIMALS = 4
+
+// A number of degrees as shown: at most DEGREE_DECIMALS decimals, trailing
+// zeros dropped (-128.61694335937497 is -128.6169; 35.0 is 35).
+export function shownDegrees(value) {
+  return String(Number(value.toFixed(DEGREE_DECIMALS)))
 }
 
-// A box written out as harvested, for the note about a box that is not drawn.
-export function boxAsWritten(box) {
-  return `west ${degrees(box.w)}, east ${degrees(box.e)}, south ${degrees(box.s)}, north ${degrees(box.n)}`
+// A number of degrees exactly as harvested, for the tooltip: no rounding,
+// only trailing zeros gone.
+export function harvestedDegrees(value) {
+  return String(value)
+}
+
+// The numbers of a box or a point, each with its name, in the order they are
+// written: [['west', -150], ['east', -110], ['south', 35], ['north', 65]] or
+// [['latitude', 51.6], ['longitude', -128.1]].
+export function coordinateFields(item, kind) {
+  return kind === 'box'
+    ? [['west', item.w], ['east', item.e], ['south', item.s], ['north', item.n]]
+    : [['latitude', item.lat], ['longitude', item.lon]]
+}
+
+// How many boxes or points a note lists before "and N more points".
+export const SHOWN_COORDINATES = 3
+
+// A note that lists boxes or points: { lead, kind ('box' or 'point'),
+// items, brackets, tail }. It reads: lead, a space, the items (each in
+// brackets when brackets is true), then tail. Notes like this are objects,
+// not text, so the page can put the full number in a tooltip on each
+// number and fold a long list.
+function coordinatesNote(lead, kind, items, tail, brackets = true) {
+  return { lead, kind, items, brackets, tail }
+}
+
+// What a coordinates note shows, folded (all false) or not: { items, before,
+// more, foldable }. items are the boxes or points shown: the first
+// SHOWN_COORDINATES when folded. before[i] is the text before items[i]:
+// nothing, then ", ", and " and " before the last unless more follow. more is
+// " and 24 more points" when folded, else "". foldable is true when there
+// are more than SHOWN_COORDINATES items.
+export function shownCoordinates(note, all = false) {
+  const extra = note.items.length - SHOWN_COORDINATES
+  const folded = !all && extra > 0
+  const items = folded ? note.items.slice(0, SHOWN_COORDINATES) : note.items
+  const before = items.map((_, i) => {
+    if (i === 0) {
+      return ''
+    }
+    return !folded && i === items.length - 1 ? ' and ' : ', '
+  })
+  const noun = note.kind === 'box' ? ['box', 'boxes'] : ['point', 'points']
+  const more = folded ? ` and ${extra} more ${extra === 1 ? noun[0] : noun[1]}` : ''
+  return { items, before, more, foldable: extra > 0 }
+}
+
+// One box or point written out as shown: "west -150, east -110, south 35,
+// north 65", in brackets when the note asks for them.
+function coordinatesText(item, kind, brackets) {
+  const text = coordinateFields(item, kind).map(([name, value]) => `${name} ${shownDegrees(value)}`).join(', ')
+  return brackets ? `(${text})` : text
+}
+
+// A note as plain text, as the page shows it (numbers rounded), folded
+// unless all is true. Text notes are returned as they are.
+export function noteText(note, all = false) {
+  if (typeof note === 'string') {
+    return note
+  }
+  const { items, before, more } = shownCoordinates(note, all)
+  const list = items.map((item, i) => before[i] + coordinatesText(item, note.kind, note.brackets)).join('')
+  return `${note.lead} ${list}${more}${note.tail}`
 }
 
 // Why a box with an issue is not drawn, in words.
@@ -293,17 +389,18 @@ function once(items) {
   return [...new Set(items)]
 }
 
-// The note for a box that matches BC's rectangle or the Canada-wide extent:
-// what it covers, and, when other records of the same catalogue have exactly
-// the same box (sharedBy, the export's box_shared_by), how many. Facts only:
-// some datasets really do cover all of BC or Canada.
-function matchingBoxNote(kind, source, sharedBy) {
+// The note for the boxes (as harvested) that match BC's rectangle or the
+// Canada-wide extent: what they cover, with their numbers, and, when other
+// records of the same catalogue have exactly the same box (sharedBy, the
+// export's box_shared_by), how many. Facts only: some datasets really do
+// cover all of BC or Canada.
+function matchingBoxNote(kind, boxes, source, sharedBy) {
   const [extent, area] = kind === 'matches_bc_rectangle' ? ['whole of BC', 'BC'] : ['all of Canada', 'Canada']
   const shared = sharedBy > 1
     ? `; ${source} uses this same box for ${sharedBy.toLocaleString()} of its records in Lunaris, so it may ` +
       "not show where this dataset's data actually are"
     : ''
-  return `Extent: ${extent}. The box covers all of ${area}${shared}.`
+  return coordinatesNote(`Extent: ${extent}`, 'box', boxes, `. The box covers all of ${area}${shared}.`)
 }
 
 // Works out what the map draws for a dataset and what the page says about
@@ -319,7 +416,9 @@ function matchingBoxNote(kind, source, sharedBy) {
 //           solid box and no point: each has coordinates and is not a large
 //           area (large_area, worked out by the export from the GeoNames
 //           feature class and code)
-//   notes   the sentences to show, in order
+//   notes   the sentences to show, in order: text, or for a sentence that
+//           lists boxes or points, a coordinates note (see coordinatesNote
+//           and noteText)
 //   geonames  true when looked-up places are shown, so the GeoNames
 //           attribution must be shown with them
 // Places pass 1 marked as an author's institution are never drawn or named.
@@ -332,9 +431,9 @@ export function describeLocation(dataset) {
   const kinds = boxes.map(boxKind)
   const drawn = boxes.filter((box, index) => kinds[index] === null)
   if (drawn.length === 1) {
-    notes.push(`Extent: from the ${source} record.`)
+    notes.push(coordinatesNote(`Extent: from the ${source} record`, 'box', drawn, '.'))
   } else if (drawn.length > 1) {
-    notes.push(`Extent: ${drawn.length} boxes from the ${source} record.`)
+    notes.push(coordinatesNote(`Extent: ${drawn.length} boxes from the ${source} record:`, 'box', drawn, '.'))
   }
   const matchingBoxes = []
   for (const kind of ['matches_bc_rectangle', 'matches_canada_extent']) {
@@ -342,20 +441,20 @@ export function describeLocation(dataset) {
     if (indexes.length > 0) {
       matchingBoxes.push(...indexes.map((index) => straightened(boxes[index])))
       const sharedBy = Math.max(...indexes.map((index) => dataset.box_shared_by?.[index] ?? 1))
-      notes.push(matchingBoxNote(kind, source, sharedBy))
+      notes.push(matchingBoxNote(kind, indexes.map((index) => boxes[index]), source, sharedBy))
     }
   }
   boxes.forEach((box, index) => {
     const because = NOT_DRAWN_BECAUSE[kinds[index]]
     if (because) {
-      notes.push(`Box in the record: ${boxAsWritten(box)}. Not drawn, because ${because}.`)
+      notes.push(coordinatesNote('Box in the record:', 'box', [box], `. Not drawn, because ${because}.`, false))
     }
   })
 
   if (points.length === 1) {
-    notes.push('Location: a point from the record.')
+    notes.push(coordinatesNote('Location: a point from the record', 'point', points, '.'))
   } else if (points.length > 1) {
-    notes.push(`Location: ${points.length} points from the record.`)
+    notes.push(coordinatesNote(`Location: ${points.length} points from the record:`, 'point', points, '.'))
   }
 
   // Places our lookup found are only used when the record itself gives

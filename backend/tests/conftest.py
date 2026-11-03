@@ -188,7 +188,11 @@ LICENCE_TYPE = "STRUCT(name VARCHAR, uri VARCHAR)"
 # The Lunaris datasets (see the top of this file). Every column the API
 # reads is here, with the types the export writes.
 DATASETS_SQL = f"""
-    SELECT id, title, abstract, subjects, 'A publisher' AS publisher, []::VARCHAR[] AS places,
+    SELECT id, title, abstract, subjects,
+           CASE WHEN id LIKE '%eagle-nests' THEN ['SBOT Requests', ' Blackburn, Ian ', 'SBOT Requests']
+                WHEN id LIKE '%forest-plots' THEN []::VARCHAR[]
+                ELSE ['A. Researcher'] END AS creators,
+           'A publisher' AS publisher, []::VARCHAR[] AS places,
            issued, source, source_name, link, link_type,
            CASE WHEN id LIKE '%eagle-nests'
                 THEN [{{'name': 'Open Government Licence - British Columbia',

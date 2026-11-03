@@ -20,6 +20,10 @@ number and no modified date, so these are the only dates there are.
 The columns:
   id, title, abstract, subjects, publisher, places
                        as harvested (places: DataCite geoLocationPlace)
+  creators             every DataCite creatorName, in the record's order,
+                       exactly as harvested: not cleaned, reordered or
+                       de-duplicated (a name can be a mailbox, such as
+                       "SBOT Requests")
   issued               the DataCite Issued date (YYYY-MM-DD)
   source, source_name  the catalogue id and its readable name
                        (lunaris_catalogue_names.csv)
@@ -146,7 +150,8 @@ COPY = pa.struct([("id", pa.string()), ("source", pa.string()), ("source_name", 
                   ("link", pa.string())])
 SCHEMA = pa.schema([
     ("id", pa.string()), ("title", pa.string()), ("abstract", pa.string()),
-    ("subjects", pa.list_(pa.string())), ("publisher", pa.string()), ("places", pa.list_(pa.string())),
+    ("subjects", pa.list_(pa.string())), ("creators", pa.list_(pa.string())), ("publisher", pa.string()),
+    ("places", pa.list_(pa.string())),
     ("issued", pa.string()), ("source", pa.string()), ("source_name", pa.string()),
     ("link", pa.string()), ("link_type", pa.string()), ("licences", pa.list_(LICENCE)),
     ("final_class", pa.string()), ("frontend_group", pa.string()),
@@ -183,30 +188,33 @@ def read_catalogue_names(path=NAMES_CSV):
 
 def datacite_facts(xml):
     """
-    Return (Issued date, identifier, identifier type, licences) from one
-    record's raw OAI XML; empty text and no licences when missing. The
-    licences are the rightsList entries in order, each {"name", "uri"}
-    exactly as harvested, None for a part that is missing or empty.
+    Return (Issued date, identifier, identifier type, licences, creators)
+    from one record's raw OAI XML; empty text and empty lists when missing.
+    The licences are the rightsList entries in order, each {"name", "uri"}
+    exactly as harvested, None for a part that is missing or empty. The
+    creators are the text of every creators/creator/creatorName, in order,
+    exactly as harvested ("" for an empty name).
     """
     resource = ET.fromstring(xml).find(".//d:resource", DATACITE)
     if resource is None:
-        return "", "", "", []
+        return "", "", "", [], []
     issued = resource.find("d:dates/d:date[@dateType='Issued']", DATACITE)
     identifier = resource.find("d:identifier", DATACITE)
     licences = [{"name": rights.text or None, "uri": rights.get("rightsURI") or None}
                 for rights in resource.findall("d:rightsList/d:rights", DATACITE)]
+    creators = [name.text or "" for name in resource.findall("d:creators/d:creator/d:creatorName", DATACITE)]
     return ((issued.text or "").strip() if issued is not None else "",
             (identifier.text or "").strip() if identifier is not None else "",
             identifier.get("identifierType", "") if identifier is not None else "",
-            licences)
+            licences, creators)
 
 
 def read_datacite(path, ids):
-    """Return a table by record id of issued, identifier, identifier_type, licences and datestamp, for the ids given."""
+    """Return a table by record id of issued, identifier, identifier_type, licences, creators and datestamp, for the ids given."""
     raw = pd.read_parquet(path, columns=["id", "datestamp", "raw_xml"], filters=[("id", "in", sorted(ids))])
     raw = raw.drop_duplicates("id").set_index("id")
     facts = pd.DataFrame([datacite_facts(xml) for xml in raw["raw_xml"]], index=raw.index,
-                         columns=["issued", "identifier", "identifier_type", "licences"])
+                         columns=["issued", "identifier", "identifier_type", "licences", "creators"])
     facts["datestamp"] = raw["datestamp"].fillna("")
     missing = set(ids) - set(facts.index)
     if missing:
@@ -512,7 +520,8 @@ def build_rows(members, facts, harvest, places, answers_4b, answers_35b, names, 
         link, link_type = links[shown_id]
         rows.append({
             "id": shown_id, "title": as_text(record["title"]), "abstract": as_text(record["abstract"]),
-            "subjects": as_list(record["subjects"]), "publisher": as_text(record["publisher"]),
+            "subjects": as_list(record["subjects"]), "creators": facts.at[shown_id, "creators"],
+            "publisher": as_text(record["publisher"]),
             "places": as_list(record["places"]), "issued": facts.at[shown_id, "issued"],
             "source": row["source"], "source_name": names[row["source"]],
             "link": link, "link_type": link_type, "licences": facts.at[shown_id, "licences"],

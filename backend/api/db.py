@@ -49,7 +49,7 @@ REQUIRED_COLUMNS = {
     ],
     # Every column: the dataset endpoint returns them all.
     "lunaris_datasets.parquet": [
-        "id", "title", "abstract", "subjects", "publisher", "places", "issued",
+        "id", "title", "abstract", "subjects", "creators", "publisher", "places", "issued",
         "source", "source_name", "link", "link_type", "licences", "final_class", "frontend_group",
         "location_type", "location_source", "boxes", "points", "looked_up_places",
         "box_swapped", "box_zero_width", "box_most_of_world", "box_matches_bc_rectangle",

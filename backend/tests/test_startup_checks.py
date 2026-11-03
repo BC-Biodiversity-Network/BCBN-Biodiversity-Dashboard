@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from api.db import DataFilesError, open_data
 from api.main import create_app
 from api.settings import Settings, SettingsError
-from conftest import BCSEE_SQL, CARD_SQL, DOWNLOAD_INFO, write_test_data
+from conftest import BCSEE_SQL, CARD_SQL, DATASETS_SQL, DOWNLOAD_INFO, write_test_data
 
 
 def test_good_data_opens(settings):
@@ -38,6 +38,13 @@ def test_missing_column(tmp_path):
     """A card file without a column the API reads is refused."""
     write_test_data(tmp_path, card_sql=f"SELECT * EXCLUDE (merged_keys) FROM ({CARD_SQL})")
     with pytest.raises(DataFilesError, match="species_card_gbif.parquet has no column.*merged_keys"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+def test_a_datasets_file_without_creators_is_refused(tmp_path):
+    """A datasets file written before the creators column was added is refused, by name."""
+    write_test_data(tmp_path, datasets_sql=f"SELECT * EXCLUDE (creators) FROM ({DATASETS_SQL})")
+    with pytest.raises(DataFilesError, match="lunaris_datasets.parquet has no column.*creators"):
         open_data(Settings(data_dir=tmp_path))
 
 

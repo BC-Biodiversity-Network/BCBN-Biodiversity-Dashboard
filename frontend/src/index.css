@@ -1204,6 +1204,78 @@ body {
   padding-left: 18px;
 }
 
+/* The Details table: the label on the left, the value on the right, a line
+   between rows, like the "Citation Metadata" table on Borealis. */
+.dataset-details {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.dataset-details th,
+.dataset-details td {
+  padding: 6px 0;
+  border-bottom: 1px solid #e6e6e6;
+  vertical-align: top;
+  text-align: left;
+}
+
+.dataset-details th {
+  width: 32%;
+  padding-right: 12px;
+  font-weight: 600;
+}
+
+.dataset-details td {
+  overflow-wrap: anywhere;
+}
+
+.dataset-details-note {
+  display: block;
+  font-size: 12px;
+  font-weight: normal;
+  color: #555;
+}
+
+.dataset-details td p {
+  margin: 0;
+}
+
+.dataset-details td p + p {
+  margin-top: 4px;
+}
+
+/* A box or point number in the Location text: its tooltip holds the number
+   as harvested, which the dotted line hints at. */
+.dataset-degrees {
+  text-decoration: underline dotted #999;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.dataset-details .dataset-licences {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* On a phone the label goes above its value. */
+@media (max-width: 760px) {
+  .dataset-details th,
+  .dataset-details td {
+    display: block;
+    width: auto;
+  }
+
+  .dataset-details th {
+    padding-bottom: 2px;
+    border-bottom: 0;
+  }
+
+  .dataset-details td {
+    padding-top: 0;
+  }
+}
+
 /* The species a dataset names, each linked to its card. */
 .dataset-species {
   margin: 0 0 6px;

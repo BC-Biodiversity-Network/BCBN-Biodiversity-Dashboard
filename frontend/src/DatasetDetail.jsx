@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 
-import { isWebLink, issuedLabel, looksLikeHtml, plainText, readLicences } from './datasetText'
+import {
+  coordinateFields, creatorsLabel, harvestedDegrees, identifierLabel, isWebLink, issuedLabel, looksLikeHtml,
+  plainText, readLicences, shownCoordinates, shownDegrees,
+} from './datasetText'
 import { speciesMapSearch } from './route'
 import SpeciesName from './SpeciesName'
 import { MayIncludeBcTag } from './widerDatasets'
@@ -57,24 +60,129 @@ function Licence({ licence }) {
 // note under the access line; the lines themselves stay as harvested.
 const SOURCES_WITH_DOUBTFUL_RIGHTS = new Set(['https-zenodo.org', 'pangaea.de'])
 
-// The licences and access rights, all as plain text, with the note for the
-// catalogues above when source is one of them.
-function Licences({ entries, source }) {
-  const { licences, accessRights } = readLicences(entries)
+// One row of the Details table: the label (with an optional note under it)
+// on the left, the value on the right; stacked on a phone.
+function DetailRow({ label, note, children }) {
+  return (
+    <tr>
+      <th scope="row">
+        {label}
+        {note && <span className="dataset-details-note"> ({note})</span>}
+      </th>
+      <td>{children}</td>
+    </tr>
+  )
+}
+
+// The Details table, like the "Citation Metadata" table on Borealis: what the
+// record itself says, from the export only (nothing from the source sites),
+// all as plain text. Each row is left out when the record has nothing for
+// it, except Licence, which says so when there is none. The publisher is
+// left out when it is the catalogue's own name (ignoring case), which the
+// line under the title already gives.
+function Details({ dataset }) {
+  const creators = creatorsLabel(dataset.creators)
+  const publisher = dataset.publisher?.trim()
+  const showPublisher = Boolean(publisher)
+    && publisher.toLowerCase() !== (dataset.source_name ?? '').trim().toLowerCase()
+  const published = issuedLabel(dataset.issued)
+  const identifier = identifierLabel(dataset.link, dataset.link_type)
+  const subjects = dataset.subjects ?? []
+  const { licences, accessRights } = readLicences(dataset.licences)
+  const doubtfulRights = SOURCES_WITH_DOUBTFUL_RIGHTS.has(dataset.source)
+
   return (
     <section className="dataset-section">
-      <h3>Licence</h3>
-      {licences.length === 0
-        ? <p>No licence in the record. Check the source page.</p>
-        : <ul className="dataset-licences">{licences.map((licence, i) => <Licence key={i} licence={licence} />)}</ul>}
-      {accessRights.length > 0 && <p>Access: {accessRights.join(', ')}.</p>}
-      {SOURCES_WITH_DOUBTFUL_RIGHTS.has(source) && (
-        <p className="dataset-attribution">
-          Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say restricted
-          access, which may not match the source. Check the source page.
-        </p>
-      )}
+      <h3>Details</h3>
+      <table className="dataset-details">
+        <tbody>
+          {creators && <DetailRow label="Creators" note="as listed in the record">{creators}</DetailRow>}
+          {showPublisher && <DetailRow label="Publisher">{plainText(dataset.publisher)}</DetailRow>}
+          {published && <DetailRow label="Published">{published}</DetailRow>}
+          {identifier && (
+            <DetailRow label="Identifier">
+              <a href={dataset.link} target="_blank" rel="noopener noreferrer">{identifier}</a>
+            </DetailRow>
+          )}
+          {subjects.length > 0 && (
+            <DetailRow label="Subjects">
+              <ul className="dataset-subjects">
+                {subjects.map((subject) => <li key={subject}>{plainText(subject)}</li>)}
+              </ul>
+            </DetailRow>
+          )}
+          <DetailRow label="Licence">
+            {licences.length === 0
+              ? 'No licence in the record. Check the source page.'
+              : (
+                <ul className="dataset-licences">
+                  {licences.map((licence, i) => <Licence key={i} licence={licence} />)}
+                </ul>
+              )}
+          </DetailRow>
+          {(accessRights.length > 0 || doubtfulRights) && (
+            <DetailRow label="Access">
+              {accessRights.length > 0 && <p>{accessRights.join(', ')}</p>}
+              {doubtfulRights && (
+                <p className="dataset-attribution">
+                  Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say restricted
+                  access, which may not match the source. Check the source page.
+                </p>
+              )}
+            </DetailRow>
+          )}
+        </tbody>
+      </table>
     </section>
+  )
+}
+
+// One box or point written out: "west -150, east -110, south 35, north 65",
+// each number rounded to at most 4 decimals, with the number as harvested
+// in its tooltip so it can still be checked.
+function Coordinates({ item, kind, brackets }) {
+  const fields = coordinateFields(item, kind)
+  return (
+    <>
+      {brackets && '('}
+      {fields.map(([name, value], i) => (
+        <Fragment key={name}>
+          {i > 0 && ', '}
+          {name} <span className="dataset-degrees" title={harvestedDegrees(value)}>{shownDegrees(value)}</span>
+        </Fragment>
+      ))}
+      {brackets && ')'}
+    </>
+  )
+}
+
+// A sentence that lists boxes or points (a coordinates note of
+// describeLocation). More than SHOWN_COORDINATES are folded: the first ones,
+// then "and N more points", with a button that shows them all and folds
+// them again.
+function CoordinatesNote({ note }) {
+  const [all, setAll] = useState(false)
+  const { items, before, more, foldable } = shownCoordinates(note, all)
+  return (
+    <p>
+      {note.lead}{' '}
+      {items.map((item, i) => (
+        <Fragment key={i}>
+          {before[i]}
+          <Coordinates item={item} kind={note.kind} brackets={note.brackets} />
+        </Fragment>
+      ))}
+      {more}
+      {note.tail}
+      {foldable && (
+        <>
+          {' '}
+          <button type="button" className="text-button" onClick={() => setAll(!all)} aria-expanded={all}>
+            {all ? 'Show less' : 'Show all'}
+          </button>
+        </>
+      )}
+    </p>
   )
 }
 
@@ -84,7 +192,9 @@ function Location({ location }) {
   return (
     <section className="dataset-section">
       <h3>Location</h3>
-      {location.notes.map((note) => <p key={note}>{note}</p>)}
+      {location.notes.map((note, i) => (typeof note === 'string'
+        ? <p key={i}>{note}</p>
+        : <CoordinatesNote key={i} note={note} />))}
       {location.geonames && (
         <p className="dataset-attribution">
           Place names from <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">GeoNames</a>,
@@ -162,27 +272,24 @@ function OtherCopies({ copies }) {
   )
 }
 
-// One dataset in full (from /api/datasets/{id}): what it is, the button to
-// view and download it on the original site, where its location comes from,
-// the species it names, its licence and its other copies. location is
+// One dataset in full (from /api/datasets/{id}), in this order: its title,
+// catalogue, the button to view and download it on the original site, the
+// abstract, the Details table (creators, publisher, published date,
+// identifier, subjects, licence, access), where its location comes from,
+// the species it names and its other copies. location is
 // describeLocation(dataset), worked out once by the page and shared with the
 // map. onOpenSpecies(key) opens a species' card on the species map.
 export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies }) {
   const copyAsked = dataset.requested_copy
     ? dataset.other_copies?.find((copy) => copy.id === dataset.requested_copy)
     : null
-  const issued = issuedLabel(dataset.issued)
-
   return (
     <article className="dataset-detail">
       <button type="button" className="text-button dataset-back" onClick={onBack}>
         Back to the list
       </button>
       <h2>{plainText(dataset.title) || 'Untitled dataset'}</h2>
-      <p className="dataset-meta">
-        {dataset.source_name}
-        {issued && <> · Issued {issued}</>}
-      </p>
+      <p className="dataset-meta">{dataset.source_name}</p>
       <MayIncludeBcTag frontendGroup={dataset.frontend_group} />
       {copyAsked && (
         <p className="dataset-muted">
@@ -198,21 +305,9 @@ export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies
       )}
 
       <Abstract text={dataset.abstract} />
-
-      {dataset.subjects?.length > 0 && (
-        <section className="dataset-section">
-          <h3>Subjects</h3>
-          <ul className="dataset-subjects">
-            {dataset.subjects.map((subject) => <li key={subject}>{plainText(subject)}</li>)}
-          </ul>
-        </section>
-      )}
-
+      <Details dataset={dataset} />
       <Location location={location} />
-
       <Species species={dataset.species ?? []} others={dataset.other_organisms ?? []} onOpen={onOpenSpecies} />
-
-      <Licences entries={dataset.licences} source={dataset.source} />
       <OtherCopies copies={dataset.other_copies} />
     </article>
   )

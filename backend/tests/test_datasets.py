@@ -285,6 +285,9 @@ def test_the_detail_has_every_field(client):
         True, False, [191])
     assert body["licences"][1] == {"name": None, "uri": "info:eu-repo/semantics/openAccess"}
     assert body["organisms"] == ["bald eagle", "Haliaeetus leucocephalus"]
+    # The creators as harvested: order, spaces and repeats kept.
+    assert body["creators"] == ["SBOT Requests", " Blackburn, Ian ", "SBOT Requests"]
+    assert body["publisher"] == "A publisher"
     assert body["other_copies"][0]["id"] == COPY and body["requested_copy"] is None
     assert {"abstract", "looked_up_places", "box_swapped", "organism_level_35b", "location_source"} <= set(body)
 

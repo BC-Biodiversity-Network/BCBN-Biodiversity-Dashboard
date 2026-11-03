@@ -73,7 +73,7 @@ describe('the Datasets page', () => {
     stubList()
     await showPage('?view=datasets&q=eagle')
     expect(screen.getByText('2 datasets')).toBeTruthy()
-    expect(screen.getByText('BC Data Catalogue · Issued 1 May 2020 · ' +
+    expect(screen.getByText('BC Data Catalogue · Published 1 May 2020 · ' +
       'Open Government Licence - British Columbia')).toBeTruthy()
     expect(screen.queryByText(/BC only|Global/)).toBeNull()
     expect(screen.queryByText('Class')).toBeNull()

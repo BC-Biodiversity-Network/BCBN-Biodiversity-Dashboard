@@ -3,7 +3,9 @@ Fir run check stops with a clear message for each way a run can be missing
 or wrong, the keep sources are named and the hand no is left out, reused rows
 are checked against final_of, the self-check gives the old table back, and
 the union works copy groups and hand checks out again over old and new
-records together."""
+records together, a hand "no" leaves out reused and new rows alike (listed
+by removed_by_hand), and the later filter 3 hand decisions are applied in the
+union only (listed by hand_applied)."""
 
 import json
 import sys
@@ -152,3 +154,38 @@ def test_the_union_must_be_exactly_the_keep_set(tmp_path, monkeypatch):
     old, new, sources, harvest = old_and_new(tmp_path, monkeypatch)
     with pytest.raises(SystemExit, match="not exactly the union keep set"):
         un.build_union(old, new, sources.drop(NEW_IDS[0]), harvest, CATALOGUES)
+
+
+def test_a_hand_no_leaves_out_a_reused_row_and_a_new_one(tmp_path, monkeypatch):
+    old, new, sources, harvest = old_and_new(tmp_path, monkeypatch)
+    hand = hand_table([("oai:x:nb1", "no"), (NEW_IDS[1], "no")])
+    hand["recorded_in"] = "review"
+    no = frozenset(hand.index[hand["kept"] == "no"])
+    kept = sources.drop(list(no))
+    table = un.build_union(old, new, kept, harvest, CATALOGUES, no).set_index("record_id")
+    assert not no & set(table.index) and len(table) == 4
+    removed = un.removed_by_hand(old, new, hand).set_index("record_id")
+    assert removed.loc["oai:x:nb1", ["in_filter3_final", "final_class", "frontend_group", "reason"]].tolist() == [
+        "yes", "elsewhere", "dropped", "why"]
+    assert removed.loc[NEW_IDS[1], ["in_filter3_final", "frontend_group", "recorded_in"]].tolist() == [
+        "no", "", "review"]
+    # A reused row the keep set leaves out without a hand "no" still stops.
+    with pytest.raises(SystemExit, match="not exactly the union keep set"):
+        un.build_union(old, new, kept, harvest, CATALOGUES)
+    assert un.changes_vs_old(table.reset_index(), old)["record_id"].tolist() == [f"oai:canwin:{UUID_A}"]
+
+
+def test_later_filter3_hand_decisions_apply_in_the_union_only(tmp_path, monkeypatch):
+    old, new, sources, harvest = old_and_new(tmp_path, monkeypatch)
+    checked = f"oai:canwin:{UUID_A}"
+    extra = {checked: ("elsewhere", "checked by hand: L (filter3_hand_decisions.csv)")}
+    table = un.build_union(old, new, sources, harvest, CATALOGUES, extra_checks=extra)
+    by_id = table.set_index("record_id")
+    assert by_id.loc[[checked, NEW_IDS[0]], "final_class"].tolist() == ["elsewhere", "elsewhere"]
+    assert set(by_id.loc[[checked, NEW_IDS[0]], "frontend_group"]) == {"dropped"}
+    applied = un.hand_applied(table, extra)
+    assert sorted(applied["record_id"]) == sorted([checked, NEW_IDS[0]])
+    assert applied.set_index("record_id").at[checked, "before_hand"] == "all_canada (llm)"
+    # The self-check never sees the later decisions, so filter3_final is still given back.
+    assert un.self_check(old, harvest, CATALOGUES) == []
+

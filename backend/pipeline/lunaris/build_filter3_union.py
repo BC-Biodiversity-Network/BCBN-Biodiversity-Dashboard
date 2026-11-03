@@ -2,9 +2,11 @@
 build_filter3_union.py
 
 Filter 3 for the union keep set: a record is kept by filter 2 if the 4b run
-or the 35b run keeps it, plus the hand decisions (the 3 yes, the Manitoba
-search strategy no). That is the 18,440 records filter 3 already holds plus
-the 1,928 only the 35b run keeps.
+or the 35b run keeps it, plus the hand decisions in filter2_hand_decisions.csv
+(yes or no, whatever either run said). That is the 18,440 records filter 3
+already holds plus the 1,928 only the 35b run keeps, less the records a hand
+"no" leaves out (the Manitoba search strategy, and the 43 records of the 21
+CanWIN copy groups found not to be biodiversity data on 2026-11-02).
 
 How the table is made:
   1. The 18,440: their rows in filter3_final/filter3_merged.csv are reused
@@ -20,8 +22,14 @@ How the table is made:
      groups, the hand checks passed on to whole copy groups (DFO, Hakai),
      the front end groups (with the national-plus-outside rule) and the
      shown copy of each group.
+     The later filter 3 hand decisions (filter3_hand_decisions.csv) are
+     applied here too, with the DFO and Hakai checks and in the same way
+     (each passed on to its whole copy group), but not in the self-check
+     below, which rebuilds filter3_final as it was built.
   4. filter2_keep_source says which run kept the record: both, 4b_only or
      35b_only.
+A record a hand "no" leaves out is dropped whether it is one of the 18,440
+or one of the new records, and listed in removed_by_hand_no.csv.
 
 Before anything is written, a self-check: steps 1 and 3 on the 18,440
 alone must give filter3_merged.csv again, value for value. If they do not,
@@ -41,6 +49,10 @@ Outputs (--out, ignored by git):
   duplicate_conflicts.csv     copy groups whose members differ in class or group
   changes_vs_filter3_final.csv  the 18,440 whose class, group, decided_by,
                               note or shown copy is not what filter3_final says
+  removed_by_hand_no.csv      the records a filter 2 hand "no" leaves out,
+                              with their filter 3 class before and the reason
+  filter3_hand_applied.csv    every record a filter3_hand_decisions.csv row
+                              set, directly or through a copy
   filter3_union_report.md     counts, split by filter2_keep_source
 
 Run, from backend/, once the Fir run folder is copied back:
@@ -169,9 +181,13 @@ def reused_rows(old, catalogues):
     return rows
 
 
-def finish(table, harvest):
-    """Apply the whole-set steps and mark the shown copies, exactly as build_filter3_final.py's main does."""
-    f3.whole_set_steps(table, harvest)
+def finish(table, harvest, extra_checks=None):
+    """
+    Apply the whole-set steps and mark the shown copies, exactly as
+    build_filter3_final.py's main does; extra_checks are the later filter 3
+    hand decisions (none by default, as in filter3_final).
+    """
+    f3.whole_set_steps(table, harvest, extra_checks)
     f3.add_duplicates(table, harvest)
     return table
 
@@ -197,27 +213,58 @@ def self_check(old, harvest, catalogues):
     return list(a.loc[(a != b).any(axis=1), "record_id"])
 
 
-def build_union(old, new_rows, sources, harvest, catalogues):
+def build_union(old, new_rows, sources, harvest, catalogues, hand_no=frozenset(), extra_checks=None):
     """
-    Return the union table: the reused rows and the new rows together, the
-    whole-set steps over all of them, and filter2_keep_source last. Stops
-    if the rows are not exactly the union keep set.
+    Return the union table: the reused rows and the new rows together, less
+    the records in hand_no (a filter 2 hand "no"), the whole-set steps over
+    all of them (with extra_checks, the later filter 3 hand decisions), and
+    filter2_keep_source last. Stops if the rows are not exactly the union
+    keep set.
     """
-    table = pd.concat([reused_rows(old, catalogues), new_rows], ignore_index=True)
+    rows = [reused_rows(old, catalogues), new_rows]
+    table = pd.concat([r[~r["record_id"].isin(hand_no)] for r in rows], ignore_index=True)
     if table["record_id"].duplicated().any() or set(table["record_id"]) != set(sources.index):
         raise SystemExit("ERROR: the rows are not exactly the union keep set")
-    finish(table, harvest)
+    finish(table, harvest, extra_checks)
     table = table[list(old.columns)].copy()
     table["filter2_keep_source"] = table["record_id"].map(sources)
     return table
+
+
+def removed_by_hand(old, new_rows, hand):
+    """
+    Return the records a filter 2 hand "no" leaves out of the union, one
+    row each: whether it was one of the reused filter3_final rows, its class
+    and front end group there (empty for a new record), and the hand
+    decision's reason, who decided and where it is recorded.
+    """
+    no = hand[hand["kept"] == "no"]
+    reused = old[old["record_id"].isin(no.index)].assign(in_filter3_final="yes")
+    new = new_rows[new_rows["record_id"].isin(no.index)].assign(in_filter3_final="no", frontend_group="")
+    rows = pd.concat([reused, new], ignore_index=True)
+    out = rows[["record_id", "source", "title", "in_filter3_final", "final_class", "frontend_group"]].copy()
+    for column in ["reason", "decided_by", "decided_on", "recorded_in"]:
+        out[column] = out["record_id"].map(no[column]) if column in no.columns else ""
+    return out.sort_values("record_id").reset_index(drop=True)
+
+
+def hand_applied(table, extra_checks):
+    """Return every record a later filter 3 hand decision set, directly or through a copy, with its class before."""
+    checked = set(extra_checks or {})
+    via = table["note"].fillna("").str.extract(r"hand check applied via copy (\S+)$", expand=False)
+    rows = table[table["record_id"].isin(checked) | via.isin(checked)]
+    return rows[["record_id", "source", "title", "dup_group_id", "before_hand", "final_class", "frontend_group",
+                 "note"]].reset_index(drop=True)
 
 
 def changes_vs_old(table, old):
     """
     Return the reused records whose compared columns (COMPARED) differ from
     filter3_final, one row per record, with the old and new values of the
-    columns that changed.
+    columns that changed. Records no longer in the union (a hand "no") are
+    in removed_by_hand_no.csv instead.
     """
+    old = old[old["record_id"].isin(table["record_id"])]
     a = as_text(old).set_index("record_id")
     b = as_text(table[table["record_id"].isin(old["record_id"])][list(old.columns)]).set_index("record_id").loc[a.index]
     rows = []
@@ -243,14 +290,15 @@ def split_table(table, column, order):
     return cmp.markdown([column] + SOURCES + ["all"], rows)
 
 
-def report(table, changes, rules_new, about, inputs, n_conflict):
+def report(table, changes, rules_new, about, inputs, n_conflict, removed=None, applied=None):
     """Return the union report as Markdown."""
     shown = table[table["dup_show"]]
     lines = ["# Filter 3 for the union keep set (4b or 35b)", "",
              "Built by build_filter3_union.py: the 18,440 filter 3 rows reused, the 1,928 records only the 35b run "
-             "keeps added (step 1 rules, and the Fir run for their needs_llm records), then copy groups, hand "
-             "checks, front end groups and shown copies worked out again over the whole union, exactly as in "
-             "build_filter3_final.py. Self-check passed: the same steps on the 18,440 alone give "
+             "keeps added (step 1 rules, and the Fir run for their needs_llm records), less the records a filter 2 "
+             "hand \"no\" leaves out, then copy groups, hand checks (with the later filter 3 hand decisions), front "
+             "end groups and shown copies worked out again over the whole union, as in build_filter3_final.py. "
+             "Self-check passed: the same steps on the 18,440 alone, without the later hand decisions, give "
              "filter3_final/filter3_merged.csv again, value for value.", "", "## Inputs", ""]
     lines += [f"- {name}: `{value}`" for name, value in inputs.items()]
     lines += [f"- Fir run: model {about.get('model')} ({about.get('model_digest', '')[:12]}), Ollama "
@@ -274,6 +322,13 @@ def report(table, changes, rules_new, about, inputs, n_conflict):
     if len(changes):
         counted = changes["changed"].str.split(", ").explode().value_counts()
         lines += ["", cmp.markdown(["column", "records"], [[k, f"{v:,}"] for k, v in counted.items()])]
+    if removed is not None and applied is not None:
+        lines += ["", "## Hand decisions", "",
+                  f"Left out by a filter 2 hand \"no\": {len(removed):,} records "
+                  f"({(removed['in_filter3_final'] == 'yes').sum():,} of them filter3_final rows; "
+                  f"`removed_by_hand_no.csv`).", "",
+                  f"Set by a later filter 3 hand decision: {len(applied):,} records, directly or through a copy "
+                  f"(`filter3_hand_applied.csv`)."]
     lines += [""]
     return "\n".join(lines)
 
@@ -289,6 +344,8 @@ def main():
     parser.add_argument("--answers-4b", default=cmp.RUN_4B)
     parser.add_argument("--answers-35b", default=cmp.RUN_35B)
     parser.add_argument("--hand", default=cmp.HAND_CSV)
+    parser.add_argument("--hand-filter3", default=f3.FILTER3_HAND_CSV,
+                        help="the later filter 3 hand decisions (filter3_hand_decisions.csv)")
     parser.add_argument("--harvest", default=f3.DEFAULT_HARVEST)
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--self-check-only", action="store_true",
@@ -312,9 +369,12 @@ def main():
     kept_4b = cmp.four_b_keep(args.answers_4b, filter3)
     kept_35b, _ = cmp.keep_set(cmp.read_answers(args.answers_35b), hand)
     sources = keep_sources(kept_4b, kept_35b, hand)
-    if set(rules_new["record_id"]) != set(sources.index[sources == "35b_only"]):
+    hand_no = frozenset(hand.index[hand["kept"] == "no"])
+    if set(rules_new["record_id"]) - hand_no != set(sources.index[sources == "35b_only"]):
         raise SystemExit(f"ERROR: {args.rules_new} does not hold exactly the records only the 35b run keeps")
-    harvest = f3.read_harvest(args.harvest, set(sources.index))
+    extra_checks = f3.read_filter3_hand_decisions(args.hand_filter3)
+    # The new records a hand "no" leaves out are read too: their rows are made, then left out (and listed).
+    harvest = f3.read_harvest(args.harvest, set(sources.index) | set(rules_new["record_id"]))
 
     differ = self_check(old, harvest, catalogues)
     if differ:
@@ -326,12 +386,14 @@ def main():
 
     pass1, pass2, _ = f3.read_run(args.run)
     new_rows = f3.record_rows(rules_new, pass1, pass2, harvest, catalogues)
-    table = build_union(old, new_rows, sources, harvest, catalogues)
+    table = build_union(old, new_rows, sources, harvest, catalogues, hand_no, extra_checks)
     conflicts, n_class, n_group = f3.duplicate_conflicts(table, harvest)
     changes = changes_vs_old(table, old)
+    removed = removed_by_hand(old, new_rows, hand)
+    applied = hand_applied(table, extra_checks)
     inputs = {"filter 3 rows reused": args.old, "step 1 rules for the new records": args.rules_new,
               "Fir run": args.run, "4b answers": args.answers_4b, "35b answers": args.answers_35b,
-              "hand decisions": args.hand, "harvest": args.harvest}
+              "hand decisions": args.hand, "filter 3 hand decisions": args.hand_filter3, "harvest": args.harvest}
 
     os.makedirs(args.out, exist_ok=True)
     out = lambda name: os.path.join(args.out, name)  # noqa: E731
@@ -343,7 +405,9 @@ def main():
     f3.hakai_handcheck(table, harvest, catalogues).to_csv(out("hakai_handcheck.csv"), index=False, encoding="utf-8")
     conflicts.to_csv(out("duplicate_conflicts.csv"), index=False, encoding="utf-8")
     changes.to_csv(out("changes_vs_filter3_final.csv"), index=False, encoding="utf-8")
-    text = report(table, changes, rules_new, about, inputs, (n_class, n_group))
+    removed.to_csv(out("removed_by_hand_no.csv"), index=False, encoding="utf-8")
+    applied.to_csv(out("filter3_hand_applied.csv"), index=False, encoding="utf-8")
+    text = report(table, changes, rules_new, about, inputs, (n_class, n_group), removed, applied)
     with open(out("filter3_union_report.md"), "w", encoding="utf-8") as handle:
         handle.write(text)
     print(text)

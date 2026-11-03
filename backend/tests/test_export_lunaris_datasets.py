@@ -1,6 +1,7 @@
 """Tests for pipeline/lunaris/export_lunaris_datasets.py, on made-up
 records: which copy is shown (best front end group, then the latest Issued
-date, then the datestamp, then the lowest id), which groups are exported,
+date, then the datestamp, then the lowest id; a CanWIN copy gives way to its
+open.canada.ca twin in the same group), which groups are exported,
 links, licences, box flags (BC's rectangle and the Canada-wide extent
 among them), the location type, the pass 1 places with our lookup, the
 organisms of both runs, and the rows built for a copy group."""
@@ -63,6 +64,39 @@ def test_ties_go_to_the_datestamp_then_the_lowest_id():
     assert ex.pick_shown(members, facts) == "a"
     facts.loc["c", "datestamp"] = "2026-01-01T00:00:00Z"
     assert ex.pick_shown(members, facts) == "c"
+
+
+CANWIN = "oai:canwin-datahub.ad.umanitoba.ca:11111111-2222-3333-4444-555555555555"
+TWIN = "oai:open.canada.ca:11111111-2222-3333-4444-555555555555"
+
+
+def test_a_canwin_copy_gives_way_to_its_open_canada_twin_in_the_same_group():
+    """CanWIN's later Issued date is when it copied the record: the open.canada.ca record of the same id is shown."""
+    members = union_rows([(CANWIN, "canwin-datahub.ad.umanitoba.ca", "bc_data", "bc_only", "G1", "True"),
+                          (TWIN, "open.canada.ca", "bc_data", "bc_only", "G1", "False")])
+    facts = facts_for([(CANWIN, "2020-12-02", "2026-02-04T13:31:14Z", "", ""),
+                       (TWIN, "2009-01-01", "2026-02-04T13:31:14Z", "", "")])
+    assert ex.pick_shown(members, facts) == TWIN
+
+
+def test_a_canwin_copy_stays_when_its_twin_is_in_a_worse_group():
+    """The twin is only shown from among the best group's copies."""
+    members = union_rows([(CANWIN, "canwin-datahub.ad.umanitoba.ca", "bc_data", "bc_only", "G1", "True"),
+                          (TWIN, "open.canada.ca", "pending", "all_canada", "G1", "False")])
+    facts = facts_for([(CANWIN, "2020-12-02", "2026-02-04T13:31:14Z", "", ""),
+                       (TWIN, "2009-01-01", "2026-02-04T13:31:14Z", "", "")])
+    assert ex.pick_shown(members, facts) == CANWIN
+
+
+def test_a_canwin_copy_without_its_twin_is_picked_as_before():
+    """No open.canada.ca record of the same id: the usual rule; another open.canada.ca record does not count."""
+    other = "oai:open.canada.ca:99999999-2222-3333-4444-555555555555"
+    members = union_rows([(CANWIN, "canwin-datahub.ad.umanitoba.ca", "bc_data", "bc_only", "G1", "True"),
+                          (other, "open.canada.ca", "bc_data", "bc_only", "G1", "False")])
+    facts = facts_for([(CANWIN, "2020-12-02", "2026-02-04T13:31:14Z", "", ""),
+                       (other, "2009-01-01", "2026-02-04T13:31:14Z", "", "")])
+    assert ex.pick_shown(members, facts) == CANWIN
+    assert ex.open_canada_twin(other) is None and ex.open_canada_twin(CANWIN) == TWIN
 
 
 def test_only_groups_whose_best_copy_is_bc_data_or_pending_are_exported():

@@ -15,7 +15,13 @@ group. The group's front end group is the best one any copy has (bc_data,
 then pending), as in filter 3. Among the copies in that front end group,
 the most recent version is shown: the latest DataCite Issued date, then the
 latest OAI datestamp, then the lowest record id. The harvest has no version
-number and no modified date, so these are the only dates there are.
+number and no modified date, so these are the only dates there are. One
+exception: CanWIN mirrors the Open Government Portal under the same id, and
+its Issued date is the day it copied the record, not a newer version. So
+when the copy picked is a CanWIN record and the open.canada.ca record with
+the same id is also among those copies, the open.canada.ca record is shown
+instead. A CanWIN copy whose open.canada.ca twin is in a worse front end
+group (or not in the group) is still shown.
 
 The columns:
   id, title, abstract, subjects, publisher, places
@@ -103,6 +109,10 @@ NAMES_CSV = os.path.join(HERE, "lunaris_catalogue_names.csv")
 # two are exported.
 GROUPS = ["bc_data", "pending", "dropped"]
 EXPORTED = ["bc_data", "pending"]
+# CanWIN copies records of the Open Government Portal under the same id
+# (see pick_shown).
+CANWIN_PREFIX = "oai:canwin-datahub.ad.umanitoba.ca:"
+OPEN_CANADA_PREFIX = "oai:open.canada.ca:"
 LEVELS = ["species", "group", "none"]
 DATACITE = {"d": "http://datacite.org/schema/kernel-4"}
 # A box covering at least this share of the whole longitude by latitude
@@ -474,7 +484,9 @@ def pick_shown(members, facts):
     """
     Return the record id to show for one copy group (a DataFrame of its
     rows): among the copies in the group's best front end group, the
-    latest Issued date, then the latest OAI datestamp, then the lowest id.
+    latest Issued date, then the latest OAI datestamp, then the lowest id;
+    but a CanWIN copy gives way to the open.canada.ca record with the same
+    id when that record is among those copies too (see open_canada_twin).
     """
     rank = members["frontend_group"].map(GROUPS.index)
     best = members[rank == rank.min()]
@@ -482,7 +494,16 @@ def pick_shown(members, facts):
                           "issued": best["record_id"].map(facts["issued"]).values,
                           "datestamp": best["record_id"].map(facts["datestamp"]).values})
     order = order.sort_values(["issued", "datestamp", "record_id"], ascending=[False, False, True])
-    return order["record_id"].iloc[0]
+    picked = order["record_id"].iloc[0]
+    twin = open_canada_twin(picked)
+    return twin if twin in set(best["record_id"]) else picked
+
+
+def open_canada_twin(record_id):
+    """Return the open.canada.ca record id with the same id as a CanWIN record id, or None for any other record."""
+    if not record_id.startswith(CANWIN_PREFIX):
+        return None
+    return OPEN_CANADA_PREFIX + record_id[len(CANWIN_PREFIX):]
 
 
 def exported_groups(table):

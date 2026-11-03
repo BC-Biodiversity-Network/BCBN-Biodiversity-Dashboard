@@ -95,8 +95,15 @@ def test_hand_decisions_must_say_yes_or_no_once(tmp_path):
 def test_the_hand_decision_file_holds_the_agreed_decisions():
     hand = cmp.read_hand_decisions()
     assert set(hand.index[hand["kept"] == "yes"]) == set(FAILED_IN_FULL_RUN)
-    assert list(hand.index[hand["kept"] == "no"]) == [MANITOBA]
-    assert set(hand["decided_by"]) == {"Lucia"}
+    lucia = hand[hand["decided_by"] == "Lucia"]
+    assert list(lucia.index[lucia["kept"] == "no"]) == [MANITOBA]
+    # The 21 CanWIN copy groups found not to be biodiversity data (2026-11-02), every copy.
+    review = hand[hand["decided_by"] == "Claude's reading, approved by Lucia, 2026-11-02"]
+    assert len(review) == 43 and set(review["kept"]) == {"no"} and set(review["decided_on"]) == {"2026-11-02"}
+    assert review["recorded_in"].str.startswith(
+        "Results/lunaris_source_check_2026-11/canwin_54_claude_review.csv, row ").all()
+    assert review["recorded_in"].str.extract(r"group (G\d+)")[0].nunique() == 21
+    assert set(hand["decided_by"]) == {"Lucia", "Claude's reading, approved by Lucia, 2026-11-02"}
     assert hand.loc[FAILED_IN_FULL_RUN, "decided_on"].tolist() == ["2026-10-21"] * 3
     row = hand.loc[MANITOBA]
     assert (row["decided_by"], row["decided_on"]) == ("Lucia", "2026-10-27")

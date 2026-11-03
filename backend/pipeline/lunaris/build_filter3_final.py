@@ -38,6 +38,10 @@ How each record gets its final class:
          whose text names a place outside BC and none in BC (kept as
          hakai_outside_bc_candidates.csv, written by an earlier version of
          this script), and checked against their original sources.
+     Later hand decisions are kept in filter3_hand_decisions.csv (see
+     read_filter3_hand_decisions). This script does not use them: only
+     build_filter3_union.py passes them in, so filter3_final stays as it
+     was built.
 
 Each class belongs to one front end group:
   bc_data   bc_only, canada_incl_bc, bc_and_outside_canada (shown)
@@ -138,6 +142,10 @@ HAKAI_HAND = {
         "unknown", "Source page: a guidance document on mapping kelp, not collected data; covers Alaska to Baja "
         "California; no BC data stated."),
 }
+# The later filter 3 hand decisions, one row per checked record (each
+# applies to its whole copy group); read by build_filter3_union.py only.
+FILTER3_HAND_CSV = os.path.join(HERE, "filter3_hand_decisions.csv")
+FILTER3_HAND_COLUMNS = ["record_id", "final_class", "reason", "decided_by", "decided_on", "recorded_in"]
 HAKAI_CHECKED_BY = "Lucia"
 HAKAI_CHECKED_ON = "2026-10-27"
 HAKAI_SOURCE_CHECKED = "external"
@@ -362,14 +370,15 @@ def record_rows(rules, pass1, pass2, harvest, catalogues):
     return pd.DataFrame(rows)
 
 
-def whole_set_steps(table, harvest):
+def whole_set_steps(table, harvest, extra_checks=None):
     """
     Apply, in place and in this order, the steps that look across records:
     copy groups, the hand checks (passed on to whole copy groups), and the
-    front end groups. Return the table.
+    front end groups. Return the table. extra_checks are more hand checks,
+    as read_filter3_hand_decisions returns them (none by default).
     """
     assign_copy_groups(table, harvest)
-    apply_hand_checks(table)
+    apply_hand_checks(table, extra_checks)
     set_frontend_groups(table)
     assert set(table["final_class"]) <= set(CLASSES)
     return table
@@ -380,11 +389,35 @@ def add_note(old, new):
     return f"{old}; {new}" if old else new
 
 
-def direct_hand_checks(table):
+def read_filter3_hand_decisions(path=FILTER3_HAND_CSV):
+    """
+    Return the later filter 3 hand decisions as {record id: (class, note)},
+    ready for whole_set_steps' extra_checks. The note names who decided,
+    when, and the file. Stops if a column is missing, a record is listed
+    twice, or a class is not a filter 3 class.
+    """
+    hand = pd.read_csv(path, dtype=str, keep_default_na=False)
+    missing = [c for c in FILTER3_HAND_COLUMNS if c not in hand.columns]
+    if missing:
+        raise SystemExit(f"ERROR: {path} has no column {', '.join(missing)}")
+    twice = sorted(set(hand.loc[hand["record_id"].duplicated(), "record_id"]))
+    if twice:
+        raise SystemExit(f"ERROR: {path} lists a record twice: {twice}")
+    wrong = sorted(set(hand["final_class"]) - set(FRONTEND_GROUP))
+    if wrong:
+        raise SystemExit(f"ERROR: {path} has classes filter 3 does not know: {wrong}")
+    return {row.record_id: (row.final_class, f"checked by hand: {row.decided_by} "
+                                             f"({os.path.basename(path)})")
+            for row in hand.itertuples()}
+
+
+def direct_hand_checks(table, extra_checks=None):
     """
     Return the records checked by hand themselves, as {record id: (class,
-    note)}: the DFO trawl series (by UUID, from DFO_PROPOSALS) and the 3
-    Hakai records (by record id, from HAKAI_HAND).
+    note)}: the DFO trawl series (by UUID, from DFO_PROPOSALS), the 3
+    Hakai records (by record id, from HAKAI_HAND) and any extra_checks.
+    Stops if an extra check names a record the table does not hold, or one
+    the built-in checks already decide.
     """
     checks = {}
     for row in table[table["uuid"].isin(DFO_TRAWL_SERIES)].itertuples():
@@ -395,6 +428,14 @@ def direct_hand_checks(table):
         checks[row.record_id] = (HAKAI_HAND[row.record_id][0], f"Hakai record outside BC: checked by hand against "
                                                                f"the original source ({HAKAI_CHECKED_BY}, "
                                                                f"{HAKAI_CHECKED_ON})")
+    extra_checks = extra_checks or {}
+    unknown = sorted(set(extra_checks) - set(table["record_id"]))
+    if unknown:
+        raise SystemExit(f"ERROR: hand decisions for records not in the table, for example {unknown[:3]}")
+    twice = sorted(set(extra_checks) & set(checks))
+    if twice:
+        raise SystemExit(f"ERROR: records with a built-in hand check and another hand decision: {twice}")
+    checks.update(extra_checks)
     return checks
 
 
@@ -415,7 +456,7 @@ def hand_check_conflicts(table, checks):
     return found
 
 
-def apply_hand_checks(table):
+def apply_hand_checks(table, extra_checks=None):
     """
     Give the hand-checked records their class, in place, and pass it on to
     every copy in their copy group (run after assign_copy_groups). Each gets
@@ -424,8 +465,9 @@ def apply_hand_checks(table):
     keeps the class and how it was decided before, for every record the hand
     check changed; llm_class and rule_class are left as they were. Stop,
     listing them, if two hand checks in one copy group disagree.
+    extra_checks are passed to direct_hand_checks.
     """
-    checks = direct_hand_checks(table)
+    checks = direct_hand_checks(table, extra_checks)
     conflicts = hand_check_conflicts(table, checks)
     if conflicts:
         lines = [f"  {group}: " + "; ".join(f"{r} {c}" for r, c in members) for group, members in conflicts]

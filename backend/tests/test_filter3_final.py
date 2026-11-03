@@ -6,7 +6,9 @@ all_canada and global into bc_only, the DFO trawl series takes its
 hand-checked class, national-plus-outside records go to pending, every class
 has a front end group, copies are grouped without removing a row and one
 per group is shown, the Hakai records checked by hand take their class,
-the run folder is only read, and the checks sort and score as described."""
+the later hand decisions (filter3_hand_decisions.csv) are read and passed on
+to whole copy groups only when given, the run folder is only read, and the
+checks sort and score as described."""
 
 import json
 import sys
@@ -243,6 +245,84 @@ def test_a_hand_check_sets_every_copy_and_disagreeing_checks_stop(monkeypatch):
     monkeypatch.setattr(f3, "HAKAI_HAND", {canwin: ("unknown", "checked"), canada: ("unknown", "checked")})
     table = f3.merge(rules, pass1, pass2, harvest, []).set_index("record_id")
     assert "via copy" not in table.loc[canada, "note"]
+
+
+def test_extra_hand_checks_pass_to_copies_only_when_given():
+    """No extra checks: the classes are as before. Extra checks set the record and its copy, with the file's note."""
+    canwin, canada = f"oai:canwin:{UUID_A}", f"oai:open.canada.ca:{UUID_A}"
+    rules, pass1, pass2, harvest = made_up()
+    plain = f3.whole_set_steps(f3.record_rows(rules, pass1, pass2, harvest, []), harvest).set_index("record_id")
+    assert plain.loc[canada, "decided_by"] == "llm" and plain.loc[canwin, "decided_by"] == "llm"
+    extra = {canwin: ("elsewhere", "checked by hand: someone (filter3_hand_decisions.csv)")}
+    table = f3.whole_set_steps(f3.record_rows(rules, pass1, pass2, harvest, []), harvest, extra).set_index("record_id")
+    assert table.loc[canwin, ["final_class", "decided_by", "frontend_group", "before_hand"]].tolist() == [
+        "elsewhere", "hand", "dropped", "all_canada (llm)"]
+    assert table.loc[canwin, "note"].endswith("checked by hand: someone (filter3_hand_decisions.csv)")
+    assert table.loc[canada, ["final_class", "decided_by", "llm_class", "note"]].tolist() == [
+        "elsewhere", "hand", "bc_only", f"hand check applied via copy {canwin}"]
+    assert table.loc["oai:x:bc1", "decided_by"] == "rule"
+
+
+def test_extra_hand_checks_must_name_records_the_table_holds_and_no_built_in_one(monkeypatch):
+    """An extra check for a record not in the table, or one HAKAI_HAND already decides, stops."""
+    rules, pass1, pass2, harvest = made_up()
+    rows = f3.record_rows(rules, pass1, pass2, harvest, [])
+    with pytest.raises(SystemExit, match="not in the table"):
+        f3.whole_set_steps(rows.copy(), harvest, {"oai:nowhere:1": ("elsewhere", "n")})
+    monkeypatch.setattr(f3, "HAKAI_HAND", {"oai:x:bc1": ("bc_only", "checked")})
+    with pytest.raises(SystemExit, match="built-in hand check"):
+        f3.whole_set_steps(rows.copy(), harvest, {"oai:x:bc1": ("elsewhere", "n")})
+
+
+def write_hand(path, rows, columns=None):
+    """Write a made-up filter3_hand_decisions.csv from (record_id, final_class) pairs."""
+    frame = pd.DataFrame([{"record_id": r, "final_class": c, "reason": "why", "decided_by": "L",
+                           "decided_on": "2026-11-02", "recorded_in": "here"} for r, c in rows])
+    frame[columns or list(frame.columns)].to_csv(path, index=False)
+    return path
+
+
+def test_reading_the_filter3_hand_decisions(tmp_path):
+    """Each row becomes (class, note); a missing column, a record listed twice or an unknown class stops."""
+    path = write_hand(tmp_path / "hand.csv", [("a", "all_canada"), ("b", "elsewhere")])
+    assert f3.read_filter3_hand_decisions(path) == {
+        "a": ("all_canada", "checked by hand: L (hand.csv)"), "b": ("elsewhere", "checked by hand: L (hand.csv)")}
+    with pytest.raises(SystemExit, match="no column recorded_in"):
+        f3.read_filter3_hand_decisions(write_hand(tmp_path / "h1.csv", [("a", "global")],
+                                                  ["record_id", "final_class", "reason", "decided_by", "decided_on"]))
+    with pytest.raises(SystemExit, match="twice"):
+        f3.read_filter3_hand_decisions(write_hand(tmp_path / "h2.csv", [("a", "global"), ("a", "global")]))
+    with pytest.raises(SystemExit, match="does not know"):
+        f3.read_filter3_hand_decisions(write_hand(tmp_path / "h3.csv", [("a", "bc_data")]))
+
+
+def test_the_filter3_hand_decision_file_holds_the_approved_decisions():
+    """
+    The reviews of 2026-11-02: the 33 CanWIN groups (18 to all_canada, 5 to
+    elsewhere, 10 kept as they were), then the 14 datasets naming Alberta
+    parks (6 to elsewhere, 8 keep their group).
+    """
+    hand = pd.read_csv(f3.FILTER3_HAND_CSV, dtype=str, keep_default_na=False)
+    assert len(hand) == 47 and hand["record_id"].is_unique
+    assert set(hand["decided_by"]) == {"Claude's reading, approved by Lucia, 2026-11-02"}
+    assert set(hand["decided_on"]) == {"2026-11-02"}
+    canwin = hand[hand["recorded_in"].str.contains("canwin_54_claude_review.csv")]
+    assert len(canwin) == 33
+    assert canwin["record_id"].str.startswith("oai:canwin-datahub.ad.umanitoba.ca:").all()
+    assert canwin["action"].value_counts().to_dict() == {
+        "move bc_data to pending": 18, "no change": 10, "remove from site (outside BC)": 5}
+    assert set(canwin.loc[canwin["action"] == "move bc_data to pending", "final_class"]) == {"all_canada"}
+    assert set(canwin.loc[canwin["action"] == "remove from site (outside BC)", "final_class"]) == {"elsewhere"}
+    jasper = hand.set_index("title").loc["Amphibians - Jasper"]
+    assert (jasper["final_class"], jasper["outside_fact_not_from_record"]) == (
+        "elsewhere", "Jasper National Park is in Alberta, not BC.")
+    parks = hand[hand["recorded_in"].str.contains("alberta_parks_claude_review.csv")]
+    assert len(parks) == 14 and len(canwin) + len(parks) == len(hand)
+    assert parks["final_class"].value_counts().to_dict() == {
+        "canada_incl_bc": 7, "elsewhere": 6, "bc_and_outside_canada": 1}
+    assert set(parks.loc[parks["final_class"] == "elsewhere", "title"].str.extract(r"- ?(\w+)$")[0]) == {"Jasper"}
+    assert parks.set_index("title").at["Whitebark pine reforestation - Jasper", "final_class"] == "canada_incl_bc"
+    assert len(f3.read_filter3_hand_decisions()) == 47
 
 
 # --- The run folder is only read --------------------------------------------

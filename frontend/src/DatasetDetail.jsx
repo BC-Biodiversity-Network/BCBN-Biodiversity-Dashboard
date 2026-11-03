@@ -293,8 +293,8 @@ export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies
       <MayIncludeBcTag frontendGroup={dataset.frontend_group} />
       {copyAsked && (
         <p className="dataset-muted">
-          You followed a link to the copy in {copyAsked.source_name}. This is the most recent copy of the
-          same dataset.
+          You followed a link to the copy in {copyAsked.source_name}. This is another copy of the same
+          dataset, from {dataset.source_name}.
         </p>
       )}
 

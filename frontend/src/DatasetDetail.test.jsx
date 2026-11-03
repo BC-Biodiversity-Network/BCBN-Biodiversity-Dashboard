@@ -282,6 +282,9 @@ describe('the dataset details', () => {
   it('lists the other copies with links, and says when a copy was asked for', () => {
     show(eagles({ requested_copy: 'oai:catalogue.data.gov.bc.ca:crims' }))
     expect(screen.getByRole('link', { name: 'BC Data Catalogue' }).href).toBe('https://catalogue.data.gov.bc.ca/dataset/crims')
-    expect(screen.getByText(/You followed a link to the copy in BC Data Catalogue/)).toBeTruthy()
+    const note = screen.getByText(/You followed a link to the copy in BC Data Catalogue/)
+    expect(note.textContent).toBe('You followed a link to the copy in BC Data Catalogue. This is another copy of '
+      + `the same dataset, from ${eagles().source_name}.`)
+    expect(note.textContent).not.toMatch(/most recent/)
   })
 })

@@ -980,10 +980,15 @@ It stops if the file already exists (`--replace` writes over it).
   gulfs and mountain ranges (GeoNames feature class and code, listed in
   `LARGE_AREA_CODES`), which the page names but does not draw. A place
   pass 1 marked as an author's institution (`role` `affiliation`) is
-  neither drawn nor named. `location_type` is `looked_up_place` only when
-  some place can be drawn; `location_source` then says
-  `our_geonames_lookup`. `mappable` is true when the site's map can draw
-  anything for the dataset (1,955 of the 3,610).
+  neither drawn nor named. Since 2026-11-03 no looked-up place is drawn
+  (`drawable_place`): the lookup picks each name's match on its own,
+  without the record's context, and some picks were wrong (the Columbia
+  Basin placed in Illinois), so the map shows only the record's own boxes
+  and points until a lookup that uses the record's context has been
+  checked. The page lists the names as text. So `location_type` is never
+  `looked_up_place` for now, and `mappable` is true when the record has a
+  box that is drawn or a point (1,306 of the 3,578: 752 bc_data, 554
+  pending).
   Each dataset uses only its own location, never another copy's.
   `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
   The page does not draw those.

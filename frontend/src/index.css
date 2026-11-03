@@ -1370,12 +1370,6 @@ body {
   box-shadow: 0 0 0 1px #184f95;
 }
 
-.dataset-map-key-swatch.place {
-  border: 3px solid #c2410c;
-  border-radius: 50%;
-  background: #fff;
-}
-
 /* On a phone the panel and the map are stacked: the list (or the
    details) first, the map below it, and the page scrolls. */
 @media (max-width: 760px) {

@@ -45,7 +45,8 @@ The columns:
                        from filter 3, for the copy shown
   location_type        box, point, looked_up_place or none: the first that
                        applies, in that order; looked_up_place needs a place
-                       that can be drawn (see drawable_place)
+                       that can be drawn (see drawable_place), so while no
+                       looked-up place is drawn it is never given
   location_source      "harvested" for box and point, "our_geonames_lookup"
                        for looked_up_place, empty for none
   boxes, points        as harvested
@@ -55,15 +56,16 @@ The columns:
                        whether it is a large area (see LARGE_AREA_CODES),
                        and the lookup's own top candidate, kept for
                        checking; empty for records decided by step 1 rules
-                       (no pass 1)
+                       (no pass 1). Kept for checking; the site does not
+                       draw them (see drawable_place)
   box_swapped, box_zero_width, box_most_of_world, box_matches_bc_rectangle,
   box_matches_canada_extent
                        what the record's boxes are like (see box_flags);
                        true when any of its boxes has the flag. The boxes
                        themselves are kept as harvested
   mappable             true when the site's map can draw something for the
-                       dataset (see is_mappable): a box that is drawn, a
-                       point, or a looked-up place that is drawn
+                       dataset (see is_mappable): a box that is drawn or a
+                       point (no looked-up place is drawn)
   box_shared_by        for each box, in the order of boxes, how many
                        records of the same catalogue in the whole harvest
                        have exactly the same box (this record included)
@@ -413,8 +415,16 @@ def place_from_lookup(place, lookup):
 
 
 def drawable_place(place):
-    """Return True for a looked-up place the map draws: it has coordinates, is not a large area and is not an author's institution."""
-    return place["latitude"] is not None and not place["large_area"] and place["role"] != "affiliation"
+    """
+    Return True for a looked-up place the map draws: none, for now
+    (decided 2026-11-03). The lookup picks each name's GeoNames match on its
+    own, without the record's context, and some picks were wrong (the
+    Columbia Basin placed in Illinois), so no looked-up place is drawn until
+    a lookup that uses the record's context has been checked. The site lists
+    the names as text instead. Before, a place was drawn when it had
+    coordinates, was not a large area and was not an author's institution.
+    """
+    return False
 
 
 # Boxes with these flags are not drawn on the map (boxes that match BC's

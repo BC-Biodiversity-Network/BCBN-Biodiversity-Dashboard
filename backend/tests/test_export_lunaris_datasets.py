@@ -143,12 +143,12 @@ def test_a_box_over_the_180_degree_line_never_matches_the_canada_extent():
 
 
 def test_the_location_type_is_the_first_that_applies():
-    """A box, then a point, then a looked-up place with coordinates, then none."""
+    """A box, then a point, then none: a looked-up place, even with coordinates, is not drawn."""
     place = {"latitude": 49.0, "large_area": False, "role": "study_location"}
     no_coordinates = {"latitude": None, "large_area": False, "role": "study_location"}
     assert ex.location_type([{"w": 1}], [{"lat": 1}], [place]) == ("box", "harvested")
     assert ex.location_type([], [{"lat": 1}], [place]) == ("point", "harvested")
-    assert ex.location_type([], [], [no_coordinates, place]) == ("looked_up_place", "our_geonames_lookup")
+    assert ex.location_type([], [], [no_coordinates, place]) == ("none", "")
     assert ex.location_type([], [], [no_coordinates]) == ("none", "")
 
 
@@ -201,7 +201,7 @@ def test_large_areas(feature_class, feature_code, large):
 
 
 def test_mappable_means_the_map_can_draw_something():
-    """A drawn box (a box matching BC's rectangle is drawn, dashed), a point or a drawable place; not an odd box alone."""
+    """A drawn box (a box matching BC's rectangle is drawn, dashed) or a point; not an odd box or a looked-up place alone."""
     small_place = {"latitude": 49.0, "large_area": False, "role": "study_location"}
     bc = {"w": -139.5, "e": -113.5, "s": 48.0, "n": 60.0}
     swapped = {"w": -124.0, "e": -123.0, "s": 50.0, "n": 49.0}
@@ -209,16 +209,17 @@ def test_mappable_means_the_map_can_draw_something():
     assert ex.is_mappable([swapped, bc], [], [], BC)
     assert not ex.is_mappable([swapped], [], [], BC)
     assert ex.is_mappable([swapped], [{"lat": 49.0, "lon": -123.0}], [], BC)
-    assert ex.is_mappable([], [], [small_place], BC)
+    assert not ex.is_mappable([], [], [small_place], BC)
     assert not ex.is_mappable([], [], [{**small_place, "large_area": True}, {**small_place, "role": "affiliation"}], BC)
 
 
-def test_only_places_that_can_be_drawn_make_a_looked_up_location():
-    """A large area, an author's institution or a place with no coordinates alone gives location none."""
-    small = {"latitude": 49.0, "large_area": False, "role": "study_location"}
-    assert ex.location_type([], [], [{**small, "large_area": True}, {**small, "role": "affiliation"},
-                                     {**small, "latitude": None}]) == ("none", "")
-    assert ex.location_type([], [], [{**small, "large_area": True}, small]) == ("looked_up_place", "our_geonames_lookup")
+def test_no_looked_up_place_is_drawn_while_the_lookup_is_redone():
+    """Not a small place with coordinates in BC, nor one outside BC, nor a large area or an institution."""
+    small = {"latitude": 49.0, "large_area": False, "role": "study_location", "kind": "in_bc"}
+    for place in [small, {**small, "kind": "outside_bc"}, {**small, "large_area": True},
+                  {**small, "role": "affiliation"}, {**small, "latitude": None}]:
+        assert ex.drawable_place(place) is False
+    assert ex.location_type([], [], [small, {**small, "kind": "outside_bc"}]) == ("none", "")
 
 
 def write_run(folder, places, lookups):

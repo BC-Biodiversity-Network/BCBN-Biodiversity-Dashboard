@@ -352,12 +352,13 @@ describe('the dataset details', () => {
     expect(container.textContent).not.toMatch(/Issued/)
   })
 
-  it('credits GeoNames when places from our lookup are shown', () => {
-    show(eagles({ boxes: [], looked_up_places: [
-      { name: 'Haida Gwaii', kind: 'in_bc', role: 'study_location', latitude: 53, longitude: -132 }] }))
-    expect(screen.getByText(/Places named in the record: Haida Gwaii \(located by BCBN using GeoNames\)/))
-      .toBeTruthy()
-    expect(screen.getByRole('link', { name: 'CC BY 4.0' }).href).toBe('https://creativecommons.org/licenses/by/4.0/')
+  it('lists places from our lookup as text only, with no "(not in BC)" label and no GeoNames credit', () => {
+    const { container } = show(eagles({ boxes: [], looked_up_places: [
+      { name: 'Columbia Basin', kind: 'outside_bc', role: 'study_location', latitude: 41.8, longitude: -87.6,
+        large_area: false }] }))
+    expect(locationTexts(container)).toEqual(["Columbia Basin (place named in the record; BCBN's lookup is being " +
+      'redone, so it is not drawn).'])
+    expect(container.textContent).not.toMatch(/not in BC|GeoNames/)
   })
 
   it('lists the linked species between Location and Also listed in, each linked to its card', () => {

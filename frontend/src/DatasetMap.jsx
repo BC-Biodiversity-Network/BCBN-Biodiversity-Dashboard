@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Map, { Layer, Popup, Source } from 'react-map-gl/maplibre'
+import Map, { Layer, Source } from 'react-map-gl/maplibre'
 
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { BASEMAP_STYLE, INITIAL_VIEW_STATE } from './HexMap'
-import { placeLabel } from './datasetText'
 
-// The colours of what the map draws: the record's own boxes and points in
-// the site's blue (boxes that match all of BC or all of Canada dashed), the
-// places our lookup found in orange rings, so the two never look alike.
+// The colour of what the map draws: only the record's own boxes and points,
+// in the site's blue (boxes that match all of BC or all of Canada dashed).
+// The places our lookup found are not drawn while the lookup is redone; the
+// Location section lists them as text.
 const RECORD_COLOUR = '#184f95'
-const LOOKED_UP_COLOUR = '#c2410c'
 
 // The closest the map zooms in when fitting a dataset, so a single point or
 // a tiny box does not fill the screen.
@@ -37,16 +36,6 @@ const POINT_LAYER = {
     'circle-radius': 5, 'circle-color': RECORD_COLOUR, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5,
   },
 }
-// The looked-up places: hollow orange rings.
-const PLACE_LAYER = {
-  id: 'dataset-places',
-  type: 'circle',
-  paint: {
-    'circle-radius': 6, 'circle-color': '#fff', 'circle-opacity': 0.6,
-    'circle-stroke-color': LOOKED_UP_COLOUR, 'circle-stroke-width': 3,
-  },
-}
-
 // A box as a GeoJSON polygon. A box crossing the 180 degree line (west in
 // the eastern half, east in the western half) is drawn the short way across
 // it, by writing its east edge past 180.
@@ -62,21 +51,19 @@ export function boxFeature(box) {
   }
 }
 
-// A point as a GeoJSON feature, with its label for the hover box.
-function pointFeature(longitude, latitude, label = '') {
-  return { type: 'Feature', properties: { label }, geometry: { type: 'Point', coordinates: [longitude, latitude] } }
+// A point as a GeoJSON feature.
+function pointFeature(longitude, latitude) {
+  return { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [longitude, latitude] } }
 }
 
 // The GeoJSON of everything drawn for a location (see describeLocation):
-// { boxes, matchingBoxes, points, places }, each a FeatureCollection.
+// { boxes, matchingBoxes, points }, each a FeatureCollection.
 export function locationGeoJson(location) {
   const collection = (features) => ({ type: 'FeatureCollection', features })
   return {
     boxes: collection((location?.boxes ?? []).map(boxFeature)),
     matchingBoxes: collection((location?.matchingBoxes ?? []).map(boxFeature)),
     points: collection((location?.points ?? []).map((point) => pointFeature(point.lon, point.lat))),
-    places: collection((location?.places ?? []).map(
-      (place) => pointFeature(place.longitude, place.latitude, placeLabel(place)))),
   }
 }
 
@@ -97,7 +84,7 @@ export function boundsOfLocation(geojson) {
   for (const feature of [...geojson.boxes.features, ...geojson.matchingBoxes.features]) {
     feature.geometry.coordinates[0].forEach(take)
   }
-  for (const feature of [...geojson.points.features, ...geojson.places.features]) {
+  for (const feature of geojson.points.features) {
     take(feature.geometry.coordinates)
   }
   return west === Infinity ? null : [[west, south], [east, north]]
@@ -115,9 +102,6 @@ function MapKey({ geojson, sourceName }) {
   }
   if (geojson.points.features.length > 0) {
     lines.push(['point', `Point from the ${sourceName} record`])
-  }
-  if (geojson.places.features.length > 0) {
-    lines.push(['place', 'Place named in the record, located by BCBN (GeoNames)'])
   }
   if (lines.length === 0) {
     return null
@@ -141,7 +125,6 @@ function MapKey({ geojson, sourceName }) {
 export default function DatasetMap({ location, datasetId, sourceName, message }) {
   const mapRef = useRef(null)
   const [loaded, setLoaded] = useState(false)
-  const [hovered, setHovered] = useState(null)
   const geojson = useMemo(() => locationGeoJson(location), [location])
 
   // Fits the map to what is drawn for a newly selected dataset, or goes
@@ -160,12 +143,6 @@ export default function DatasetMap({ location, datasetId, sourceName, message })
     }
   }, [loaded, datasetId, geojson])
 
-  // Shows the name of the point or place under the pointer, if it has one.
-  function handleHover(event) {
-    const feature = event.features?.find((f) => f.properties?.label)
-    setHovered(feature ? { label: feature.properties.label, lngLat: event.lngLat } : null)
-  }
-
   return (
     <div className="dataset-map">
       {message && <div className="status-message">{message}</div>}
@@ -176,9 +153,6 @@ export default function DatasetMap({ location, datasetId, sourceName, message })
         mapStyle={BASEMAP_STYLE}
         style={{ width: '100%', height: '100%' }}
         onLoad={() => setLoaded(true)}
-        interactiveLayerIds={[PLACE_LAYER.id, POINT_LAYER.id]}
-        onMouseMove={handleHover}
-        onMouseLeave={() => setHovered(null)}
       >
         <Source id="dataset-matching-boxes" type="geojson" data={geojson.matchingBoxes}>
           <Layer {...MATCHING_BOX_FILL} />
@@ -191,14 +165,6 @@ export default function DatasetMap({ location, datasetId, sourceName, message })
         <Source id="dataset-points" type="geojson" data={geojson.points}>
           <Layer {...POINT_LAYER} />
         </Source>
-        <Source id="dataset-places" type="geojson" data={geojson.places}>
-          <Layer {...PLACE_LAYER} />
-        </Source>
-        {hovered && (
-          <Popup longitude={hovered.lngLat.lng} latitude={hovered.lngLat.lat} closeButton={false} offset={10}>
-            {hovered.label}
-          </Popup>
-        )}
       </Map>
     </div>
   )

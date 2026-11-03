@@ -6,8 +6,7 @@ import { DATASETS_OGL_LICENCES } from './sources'
 // from, the attribution the Open Government Licences of their catalogues
 // ask for, that each dataset belongs to its own repository, that which
 // datasets count as BC data is BCBN's own judgement, and the base map
-// credit (always visible here, as on the species map). The GeoNames credit
-// is shown next to the places it was used for, in a dataset's details.
+// credit (always visible here, as on the species map).
 export default function DatasetsFooter() {
   return (
     <footer className="site-footer">

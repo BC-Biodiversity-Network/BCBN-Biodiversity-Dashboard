@@ -241,8 +241,7 @@ function CoordinatesNote({ note }) {
   )
 }
 
-// Where the dataset's location comes from, in words (see describeLocation),
-// with the GeoNames attribution whenever places from our lookup are shown.
+// Where the dataset's location comes from, in words (see describeLocation).
 function Location({ location }) {
   return (
     <section className="dataset-section">
@@ -250,13 +249,6 @@ function Location({ location }) {
       {location.notes.map((note, i) => (typeof note === 'string'
         ? <p key={i}>{note}</p>
         : <CoordinatesNote key={i} note={note} />))}
-      {location.geonames && (
-        <p className="dataset-attribution">
-          Place names from <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">GeoNames</a>,
-          licensed under{' '}
-          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>.
-        </p>
-      )}
     </section>
   )
 }

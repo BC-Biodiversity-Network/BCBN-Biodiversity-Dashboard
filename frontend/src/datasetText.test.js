@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   LICENCE_NAME_LENGTH, boxKind, capitalised, checkedAccessLabel, creatorsLabel, describeLocation, harvestedDegrees,
-  identifierLabel, issuedLabel, licenceListLabel, noteText, placeLabel, plainText, readLicence, readLicences, shorten,
+  identifierLabel, issuedLabel, licenceListLabel, noteText, plainText, readLicence, readLicences, shorten,
   shownCoordinates, shownDegrees,
 } from './datasetText'
 
@@ -245,62 +245,49 @@ describe('where the location comes from', () => {
     expect(texts(one)).toEqual(['Location: a point from the record (latitude 51.65, longitude -128.1).'])
   })
 
-  it('draws looked-up places, says BCBN located them and which are not in BC', () => {
+  it('never draws looked-up places, and lists them once each as text with why, wherever the lookup put them', () => {
     const location = describeLocation(dataset({
-      looked_up_places: [place('Kamloops', 'in_bc'), place('Goose Island', 'outside_bc'),
+      looked_up_places: [place('Kamloops', 'in_bc'), place('Columbia Basin', 'outside_bc'),
+        place('British Columbia', 'in_bc', { large: true }), place('Canada', 'contains_bc', { large: true }),
+        place('Canada', 'contains_bc', { large: true }),
         { name: 'Nowhere Creek', kind: null, role: 'study_location', latitude: null, longitude: null }],
     }))
-    expect(location.places.map((p) => p.name)).toEqual(['Kamloops', 'Goose Island'])
-    expect(texts(location)).toEqual(['Places named in the record: Kamloops, Goose Island (not in BC), ' +
-      'Nowhere Creek (could not be placed on the map) (located by BCBN using GeoNames).'])
-    expect(location.geonames).toBe(true)
+    expect([location.boxes, location.matchingBoxes, location.points]).toEqual([[], [], []])
+    expect(location).not.toHaveProperty('places')
+    expect(texts(location)).toEqual(['Kamloops, Columbia Basin, British Columbia, Canada and Nowhere Creek (places ' +
+      "named in the record; BCBN's lookup is being redone, so they are not drawn)."])
+    expect(texts(location).join(' ')).not.toMatch(/not in BC|GeoNames/)
   })
 
-  it('lists large areas in the text only, once each, and never names an author\'s institution', () => {
+  it('lists one place in the singular, and never names an author\'s institution', () => {
     const location = describeLocation(dataset({
-      looked_up_places: [place('Vancouver Island', 'in_bc'), place('British Columbia', 'in_bc', { large: true }),
-        place('North America', 'contains_bc', { large: true }), place('Canada', 'contains_bc', { large: true }),
-        place('Canada', 'contains_bc', { large: true }),
+      looked_up_places: [place('Columbia Basin', 'outside_bc'),
         place('University of Manitoba', 'outside_bc', { role: 'affiliation' })],
     }))
-    expect(location.places.map((p) => p.name)).toEqual(['Vancouver Island'])
-    expect(texts(location)).toEqual([
-      'Places named in the record: Vancouver Island (located by BCBN using GeoNames).',
-      'Other places named: British Columbia, North America, Canada (large areas, not drawn on the map).'])
-  })
-
-  it('says "Places named in the record" when every place is a large area', () => {
-    const location = describeLocation(dataset({
-      looked_up_places: [place('British Columbia', 'in_bc', { large: true })] }))
-    expect([location.places, location.geonames]).toEqual([[], true])
-    expect(texts(location)).toEqual(
-      ['Places named in the record: British Columbia (large areas, not drawn on the map).'])
+    expect(texts(location)).toEqual(["Columbia Basin (place named in the record; BCBN's lookup is being redone, so it " +
+      'is not drawn).'])
   })
 
   it('treats a record whose only places are authors\' institutions as having no location', () => {
     const location = describeLocation(dataset({
       looked_up_places: [place('University of Victoria', 'in_bc', { role: 'affiliation' })] }))
-    expect([location.places, location.notes, location.geonames]).toEqual(
-      [[], ['No location given in the record.'], false])
+    expect(location.notes).toEqual(['No location given in the record.'])
   })
 
-  it('uses looked-up places only when the record itself gives nothing to draw', () => {
+  it('lists looked-up places only when the record itself gives no solid box and no point', () => {
     const withBox = describeLocation(dataset({
       boxes: [{ w: -124, e: -123, s: 49, n: 50 }], looked_up_places: [place('Kamloops', 'in_bc')] }))
-    expect([withBox.places, withBox.geonames]).toEqual([[], false])
+    expect(texts(withBox).join(' ')).not.toMatch(/Kamloops/)
     const standardBox = describeLocation(dataset({
       boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }], looked_up_places: [place('Kamloops', 'in_bc')] }))
-    expect(standardBox.places).toHaveLength(1)
+    expect(standardBox.matchingBoxes).toHaveLength(1)
+    expect(texts(standardBox)[1]).toMatch(/^Kamloops \(place named in the record;/)
   })
 
   it('says when there is no location at all', () => {
     expect(describeLocation(dataset({})).notes).toEqual(['No location given in the record.'])
   })
 
-  it('labels a place on its own', () => {
-    expect(placeLabel(place('Canada', 'contains_bc'))).toBe('Canada (a large area that includes BC)')
-    expect(placeLabel(place('Victoria', 'in_bc'))).toBe('Victoria')
-  })
 })
 
 describe('what BCBN checked at the source', () => {

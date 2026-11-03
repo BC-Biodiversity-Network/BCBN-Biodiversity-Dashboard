@@ -404,28 +404,14 @@ const NOT_DRAWN_BECAUSE = {
   most_of_world: 'it covers most of the world, so it does not show where the data is',
 }
 
-// How a looked-up place relates to BC, in words, from the kind of the
-// GeoNames match the export picked (a match in BC is preferred), or null for
-// a place in BC.
-const PLACE_NOTES = {
-  outside_bc: 'not in BC',
-  contains_bc: 'a large area that includes BC',
-  spans_bc_border: 'crosses the BC border',
-  ocean_no_country: 'at sea, not in BC',
-}
-
-// What one looked-up place is called on the page: its name, with a note in
-// brackets when it is not in BC or could not be placed.
-export function placeLabel(place) {
-  if (place.latitude == null || place.longitude == null) {
-    return `${place.name} (could not be placed on the map)`
-  }
-  return PLACE_NOTES[place.kind] ? `${place.name} (${PLACE_NOTES[place.kind]})` : place.name
-}
-
 // The items of a list once each, in order.
 function once(items) {
   return [...new Set(items)]
+}
+
+// The items in words: "A and B", "A, B and C".
+function listed(items) {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
 // The note for the boxes (as harvested) that match BC's rectangle or the
@@ -444,22 +430,20 @@ function matchingBoxNote(kind, boxes, source, sharedBy) {
 
 // Works out what the map draws for a dataset and what the page says about
 // where its location comes from. Returns { boxes, matchingBoxes, points,
-// places, notes, geonames }:
+// notes }:
 //   boxes   the harvested boxes drawn with a solid line (any box that is
 //           not one of the kinds below)
 //   matchingBoxes  the harvested boxes that match BC's rectangle or the
 //           Canada-wide extent, drawn with a dashed line (swapped edges put
 //           back)
 //   points  the harvested points to draw
-//   places  the looked-up places to draw, only when the record gives no
-//           solid box and no point: each has coordinates and is not a large
-//           area (large_area, worked out by the export from the GeoNames
-//           feature class and code)
 //   notes   the sentences to show, in order: text, or for a sentence that
 //           lists boxes or points, a coordinates note (see coordinatesNote
 //           and noteText)
-//   geonames  true when looked-up places are shown, so the GeoNames
-//           attribution must be shown with them
+// The map draws only the record's own boxes and points. The place names our
+// lookup found are listed as text only, while the lookup is redone (it
+// picked each GeoNames match without the record's context, and some were
+// wrong, such as the Columbia Basin placed in Illinois).
 // Places pass 1 marked as an author's institution are never drawn or named.
 export function describeLocation(dataset) {
   const source = dataset.source_name || 'the source catalogue'
@@ -496,26 +480,22 @@ export function describeLocation(dataset) {
     notes.push(coordinatesNote(`Location: ${points.length} points from the record:`, 'point', points, '.'))
   }
 
-  // Places our lookup found are only used when the record itself gives
-  // nothing that can be drawn, and never an author's institution.
-  const looked = drawn.length === 0 && points.length === 0
-    ? (dataset.looked_up_places ?? []).filter((place) => place.role !== 'affiliation')
+  // The place names our lookup found are listed only when the record itself
+  // gives no solid box and no point, and never an author's institution.
+  const named = drawn.length === 0 && points.length === 0
+    ? once((dataset.looked_up_places ?? []).filter((place) => place.role !== 'affiliation')
+      .map((place) => place.name))
     : []
-  const small = looked.filter((place) => !place.large_area)
-  const large = looked.filter((place) => place.large_area)
-  const places = small.filter((place) => place.latitude != null && place.longitude != null)
-  if (small.length > 0) {
-    notes.push(`Places named in the record: ${once(small.map(placeLabel)).join(', ')} ` +
-      '(located by BCBN using GeoNames).')
-  }
-  if (large.length > 0) {
-    notes.push(`${small.length > 0 ? 'Other places named' : 'Places named in the record'}: ` +
-      `${once(large.map((place) => place.name)).join(', ')} (large areas, not drawn on the map).`)
+  if (named.length === 1) {
+    notes.push(`${named[0]} (place named in the record; BCBN's lookup is being redone, so it is not drawn).`)
+  } else if (named.length > 1) {
+    notes.push(`${listed(named)} (places named in the record; BCBN's lookup is being redone, so they are not ` +
+      'drawn).')
   }
 
-  if (boxes.length === 0 && points.length === 0 && looked.length === 0) {
+  if (boxes.length === 0 && points.length === 0 && named.length === 0) {
     notes.push('No location given in the record.')
   }
 
-  return { boxes: drawn, matchingBoxes, points, places, notes, geonames: looked.length > 0 }
+  return { boxes: drawn, matchingBoxes, points, notes }
 }

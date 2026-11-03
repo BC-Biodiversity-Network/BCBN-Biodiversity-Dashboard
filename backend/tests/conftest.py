@@ -1,7 +1,7 @@
 """
 conftest.py
 
-Shared test set-up: writes a tiny copy of the API's six data files into a
+Shared test set-up: writes a tiny copy of the API's seven data files into a
 temporary folder, so the tests never need the real (large, uncommitted)
 data.
 
@@ -45,6 +45,14 @@ The test data:
         CCCC, DDDD  no datasets
         Names that do not link: "bald eagle" (eagle-nests), "salmon"
         (salmon), "golden eagle" (golden).
+    The source check (SOURCE_CHECKS_SQL)
+        eagle-nests  open, as the record says; its licence agrees
+        salmon       open (the record says restricted), with a licence
+                     the record does not have
+        forest-plots no longer on the catalogue; access not checked
+        golden       downloadable by government users only (the record says
+                     open), so restricted for the Access filter
+        beagle       not checked
 
 BCSEE_WITH_NO_STATUS_SQL is the BCSEE file as it would be if it also
 listed species whose BCSEE entries have no shown status: it adds CCCC,
@@ -288,6 +296,26 @@ LINKS_SQL = """
     ) AS t(dataset_id, position, name_as_written, match_status, specieskey, matched_name, matched_field)
 """
 
+# What the source check found (see the top of this file), with the types the
+# export writes.
+SOURCE_CHECKS_SQL = f"""
+    SELECT dataset_id, catalogue_checked, '2026-11-02' AS checked_on, 'source API' AS checked_how, access,
+           NULL::VARCHAR AS access_until, access_note, access_matches_record,
+           CASE WHEN dataset_id LIKE '%salmon'
+                THEN [{{'name': 'CC-BY 4.0', 'uri': 'https://creativecommons.org/licenses/by/4.0/'}}]::{LICENCE_TYPE}[]
+                WHEN dataset_id LIKE '%eagle-nests'
+                THEN [{{'name': 'Open Government Licence - British Columbia', 'uri': NULL}}]::{LICENCE_TYPE}[]
+                ELSE NULL::{LICENCE_TYPE}[] END AS licences,
+           removed
+    FROM (VALUES
+        ('oai:catalogue.data.gov.bc.ca:eagle-nests', 'BC Data Catalogue', 'open', 'download_audience Public',
+         true, false),
+        ('oai:catalogue.hakai.org:salmon', 'Hakai Institute', 'open', NULL, false, false),
+        ('oai:catalogue.data.gov.bc.ca:forest-plots', 'BC Data Catalogue', NULL, NULL, NULL, true),
+        ('oai:datadryad.org:doi:10.5061/dryad.golden', 'Dryad', 'government_only', NULL, false, false)
+    ) AS t(dataset_id, catalogue_checked, access, access_note, access_matches_record, removed)
+"""
+
 DOWNLOAD_INFO = {
     "download_key": "0000000-000000000000000",
     "doi": "10.15468/dl.test",
@@ -305,12 +333,14 @@ def write_parquet(query, path):
 
 
 def write_test_data(folder, card_sql=CARD_SQL, hex_sql=HEX_SQL, bcsee_sql=BCSEE_SQL,
-                    download_info=DOWNLOAD_INFO, datasets_sql=DATASETS_SQL, links_sql=LINKS_SQL):
-    """Write the six data files into folder and return folder. A test can
+                    download_info=DOWNLOAD_INFO, datasets_sql=DATASETS_SQL, links_sql=LINKS_SQL,
+                    source_checks_sql=SOURCE_CHECKS_SQL):
+    """Write the seven data files into folder and return folder. A test can
     pass its own version of any one of them to try a broken file."""
     write_parquet(card_sql, folder / "species_card_gbif.parquet")
     write_parquet(datasets_sql, folder / "lunaris_datasets.parquet")
     write_parquet(links_sql, folder / "dataset_species_links.parquet")
+    write_parquet(source_checks_sql, folder / "dataset_source_checks.parquet")
     write_parquet(hex_sql, folder / "species_hex.parquet")
     write_parquet(bcsee_sql, folder / "bcsee_status_by_gbif_species.parquet")
     with open(folder / "download_info.json", "w", encoding="utf-8") as handle:

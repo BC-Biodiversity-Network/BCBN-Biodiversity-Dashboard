@@ -203,15 +203,54 @@ export function readLicences(entries) {
 const LIST_LICENCE_LENGTH = 60
 
 // The short licence label for a list item: the first licence's name, cut to
-// LIST_LICENCE_LENGTH characters, with how many more there are; or "No
-// licence in the record".
-export function licenceListLabel(entries) {
-  const { licences } = readLicences(entries)
+// LIST_LICENCE_LENGTH characters, with how many more there are; when the
+// record has none, the first of the licences BCBN found at the original
+// catalogue (checkedEntries) instead; or "No licence in the record".
+export function licenceListLabel(entries, checkedEntries = null) {
+  let { licences } = readLicences(entries)
+  if (licences.length === 0) {
+    licences = readLicences(checkedEntries).licences
+  }
   if (licences.length === 0) {
     return 'No licence in the record'
   }
   const more = licences.length > 1 ? ` and ${licences.length - 1} more` : ''
   return shorten(licences[0].name, LIST_LICENCE_LENGTH) + more
+}
+
+// --- What BCBN checked at the source -----------------------------------------
+
+// The source check's access values (the API's dataset_source_checks), in
+// plain words.
+const CHECKED_ACCESS_WORDS = {
+  open: 'open access',
+  restricted: 'restricted access',
+  on_request: 'available on request',
+  embargoed: 'embargoed',
+  not_downloadable: 'not downloadable',
+  government_only: 'downloadable by government users only',
+  government_bceid_only: 'downloadable by government and business BCeID users only',
+  named_users_only: 'downloadable by named users only',
+  ubc_only: 'open to UBC users only',
+  limited: 'limited access',
+  no_files: 'no files in the record',
+  some_files_locked: 'some files locked',
+}
+
+// The checked access in plain words, with its date when it has one ("some
+// files locked until 1 February 2027"), or null when access was not
+// checked.
+export function checkedAccessLabel(check) {
+  if (!check?.access) {
+    return null
+  }
+  const words = CHECKED_ACCESS_WORDS[check.access] ?? check.access.replaceAll('_', ' ')
+  return check.access_until ? `${words} until ${issuedLabel(check.access_until)}` : words
+}
+
+// Text with its first letter in capitals ("open access" gives "Open access").
+export function capitalised(text) {
+  return text ? text[0].toUpperCase() + text.slice(1) : text
 }
 
 // --- Location ---------------------------------------------------------------

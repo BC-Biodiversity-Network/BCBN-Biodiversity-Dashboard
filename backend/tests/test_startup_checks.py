@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from api.db import DataFilesError, open_data
 from api.main import create_app
 from api.settings import Settings, SettingsError
-from conftest import BCSEE_SQL, CARD_SQL, DATASETS_SQL, DOWNLOAD_INFO, write_test_data
+from conftest import BCSEE_SQL, CARD_SQL, DATASETS_SQL, DOWNLOAD_INFO, SOURCE_CHECKS_SQL, write_test_data
 
 
 def test_good_data_opens(settings):
@@ -45,6 +45,36 @@ def test_a_datasets_file_without_creators_is_refused(tmp_path):
     """A datasets file written before the creators column was added is refused, by name."""
     write_test_data(tmp_path, datasets_sql=f"SELECT * EXCLUDE (creators) FROM ({DATASETS_SQL})")
     with pytest.raises(DataFilesError, match="lunaris_datasets.parquet has no column.*creators"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+def test_a_source_check_without_its_access_column_is_refused(tmp_path):
+    """The source check file must have every column the API reads."""
+    write_test_data(tmp_path, source_checks_sql=f"SELECT * EXCLUDE (access) FROM ({SOURCE_CHECKS_SQL})")
+    with pytest.raises(DataFilesError, match="dataset_source_checks.parquet has no column.*access"):
+        open_data(Settings(data_dir=tmp_path))
+
+
+@pytest.mark.parametrize("change, message", [
+    (f"SELECT * FROM ({SOURCE_CHECKS_SQL}) UNION ALL "
+     f"SELECT * FROM ({SOURCE_CHECKS_SQL}) WHERE dataset_id LIKE '%salmon'",
+     "these datasets are checked twice: oai:catalogue.hakai.org:salmon"),
+    (f"SELECT * REPLACE ('oai:x:gone' AS dataset_id) FROM ({SOURCE_CHECKS_SQL}) WHERE dataset_id LIKE '%salmon'",
+     "these dataset ids are not datasets on the site: oai:x:gone"),
+    (f"SELECT * REPLACE ('maybe' AS access) FROM ({SOURCE_CHECKS_SQL})",
+     "these access values are not ones the API knows: maybe"),
+    (f"SELECT * REPLACE ('2027-02-01' AS access_until) FROM ({SOURCE_CHECKS_SQL}) WHERE dataset_id LIKE '%salmon'",
+     "a date with an access value that takes none.*salmon"),
+    (f"SELECT * REPLACE ('some_files_locked' AS access, '1 Feb 2027' AS access_until) FROM ({SOURCE_CHECKS_SQL}) "
+     "WHERE dataset_id LIKE '%salmon'", "or a date that is not YYYY-MM-DD: oai:catalogue.hakai.org:salmon"),
+    (f"SELECT * REPLACE ('' AS catalogue_checked) FROM ({SOURCE_CHECKS_SQL}) WHERE dataset_id LIKE '%salmon'",
+     "no catalogue or no day of the check: oai:catalogue.hakai.org:salmon"),
+])
+def test_a_source_check_the_site_cannot_show_is_refused(tmp_path, change, message):
+    """A dataset checked twice or not on the site, an unknown access value, a misplaced or badly written date,
+    or no catalogue: the API does not start."""
+    write_test_data(tmp_path, source_checks_sql=change)
+    with pytest.raises(DataFilesError, match=message):
         open_data(Settings(data_dir=tmp_path))
 
 

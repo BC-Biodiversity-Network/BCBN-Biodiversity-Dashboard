@@ -237,11 +237,17 @@ def test_organism_names_match_the_start_of_words(client, organism, expected):
 
 
 def test_access_filter_and_counts(client):
-    """Open or restricted from the record's access right; a dataset with none is in neither."""
-    response = client.get("/api/datasets", params={"access": "restricted"})
-    assert ids(response) == [SALMON]
-    assert counts(response, "access") == {"open": 1, "restricted": 1}
-    assert counts(client.get("/api/datasets", params=BOTH), "access") == {"open": 3, "restricted": 1}
+    """
+    The source check's access where there is one (any value but open is
+    restricted), else the record's: salmon (restricted in the record) was
+    found open, golden (open in the record) government only; a dataset with
+    neither is in neither.
+    """
+    assert ids(client.get("/api/datasets", params={"access": "open"})) == [SALMON, EAGLE_NESTS]
+    response = client.get("/api/datasets", params={**BOTH, "access": "restricted"})
+    assert ids(response) == [GOLDEN]
+    assert counts(response, "access") == {"open": 3, "restricted": 1}
+    assert counts(client.get("/api/datasets"), "access") == {"open": 2, "restricted": 0}
 
 
 def test_only_datasets_the_map_can_draw(client):
@@ -303,6 +309,28 @@ def test_a_looked_up_place_comes_with_its_coordinates(client):
     body = client.get(f"/api/datasets/{BEAGLE}").json()
     assert (body["location_type"], body["location_source"]) == ("looked_up_place", "our_geonames_lookup")
     assert body["looked_up_places"][0]["geonames_name"] == "Winnipeg"
+
+
+def test_each_list_item_has_the_checked_licences(client):
+    """The licences the source check found, or None for a dataset it did not check."""
+    results = {r["id"]: r for r in client.get("/api/datasets", params=BOTH).json()["results"]}
+    assert results[SALMON]["checked_licences"] == [
+        {"name": "CC-BY 4.0", "uri": "https://creativecommons.org/licenses/by/4.0/"}]
+    assert results[BEAGLE]["checked_licences"] is None and results[FOREST]["checked_licences"] is None
+
+
+def test_the_detail_gives_what_the_source_check_found(client):
+    """Every column of the source check but the id, or None for a dataset that was not checked."""
+    assert client.get(f"/api/datasets/{SALMON}").json()["source_check"] == {
+        "catalogue_checked": "Hakai Institute", "checked_on": "2026-11-02", "checked_how": "source API",
+        "access": "open", "access_until": None, "access_note": None, "access_matches_record": False,
+        "licences": [{"name": "CC-BY 4.0", "uri": "https://creativecommons.org/licenses/by/4.0/"}],
+        "removed": False}
+    forest = client.get(f"/api/datasets/{FOREST}").json()["source_check"]
+    assert (forest["removed"], forest["access"], forest["licences"]) == (True, None, None)
+    assert client.get(f"/api/datasets/{BEAGLE}").json()["source_check"] is None
+    # A link to another copy gives the shown dataset's check.
+    assert client.get(f"/api/datasets/{COPY}").json()["source_check"]["access_note"] == "download_audience Public"
 
 
 def test_another_copy_gives_the_shown_dataset(client):

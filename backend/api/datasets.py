@@ -41,8 +41,11 @@ Filters, each also in the counts:
   organism  a name that must start a word of one of the organism names
             stored for the dataset (both filter 2 runs), written the
             search way; several words must follow each other in one name.
-  access    open or restricted, from the record's access right
-            (info:eu-repo/semantics/openAccess or restrictedAccess).
+  access    open or restricted: what the original catalogue said when
+            BCBN checked it (dataset_source_checks.parquet, November 2026;
+            every value but open counts as restricted), else the record's
+            own access right (info:eu-repo/semantics/openAccess or
+            restrictedAccess).
   mappable  true for only the datasets the map can draw something for
             (the export's mappable column).
   species   a species key: only the datasets with a name linked to that
@@ -56,7 +59,10 @@ and organism name, as written in the record, with the species only when
 the name links to one (matched exactly, or by a confirmed row of the
 hand-checked name list). The dataset endpoint lists the linked species,
 each with the names as written that link to it, and the other names the
-record gives (other_organisms), so no name is hidden.
+record gives (other_organisms), so no name is hidden. It also gives what
+the source check found for the dataset (source_check, written by
+pipeline/lunaris/export_dataset_source_checks.py), or null when the
+dataset was not checked.
 
 The counts for the filter options (options in the response) follow the
 search: each filter's counts use the query and the other filters, but not
@@ -65,7 +71,8 @@ its own, so ticking one catalogue still shows how many the others have.
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
-from api.db import DATASET_DEFAULT_FRONTEND_GROUPS, DATASET_FINAL_CLASSES, DATASET_FRONTEND_GROUPS
+from api.db import (DATASET_DEFAULT_FRONTEND_GROUPS, DATASET_FINAL_CLASSES, DATASET_FRONTEND_GROUPS,
+                    SOURCE_ACCESS_OPEN, sql_text)
 from api.search import MIN_QUERY_LENGTH, QueryTooShort, normalise
 from api.species import resolve_key, species_labels, without_subgenus
 
@@ -86,6 +93,8 @@ ACCESS_URIS = {
     "restricted": "info:eu-repo/semantics/restrictedAccess",
 }
 ACCESS_VALUES = list(ACCESS_URIS)
+# The source check's access values that count as open for the filter.
+CHECKED_OPEN = ", ".join(sql_text(value) for value, is_open in SOURCE_ACCESS_OPEN.items() if is_open)
 
 # How long the abstract preview in the list is, at most, in characters.
 PREVIEW_LENGTH = 300
@@ -93,7 +102,9 @@ PREVIEW_LENGTH = 300
 # What each dataset is searched and filtered on, worked out once when the
 # API starts: the title alone (for ranking and the title sort) and the
 # title, abstract and subjects together (for finding), written the search
-# way; the year of the issued date; and the access right. For the title
+# way; the year of the issued date; the access (what the source check
+# found, as open or restricted, else the record's access right); and the
+# licences the source check found, for the list. For the title
 # sort, also what the title starts with, once any "[", "(" or quote marks
 # (and spaces) at its start are skipped (title_group: 0 a letter, after
 # removing any accent; 1 a digit; 2 anything else) and, for a digit, the
@@ -111,7 +122,10 @@ DATASET_INDEX_SQL = f"""
            ' ' || search_norm(concat_ws(' ', d.title, d.abstract,
                                         list_aggregate(d.subjects, 'string_agg', ' '))) AS text_norm,
            TRY_CAST(substr(NULLIF(d.issued, ''), 1, 4) AS INTEGER) AS year,
-           coalesce(a.access, '') AS access
+           CASE WHEN c.access IS NOT NULL
+                THEN CASE WHEN c.access IN ({CHECKED_OPEN}) THEN 'open' ELSE 'restricted' END
+                ELSE coalesce(a.access, '') END AS access,
+           c.licences AS checked_licences
     FROM (
         SELECT *, regexp_replace(trim(coalesce(title, '')), '^[[("''“”‘’«»„ ]+', '') AS title_start
         FROM lunaris_datasets
@@ -123,6 +137,7 @@ DATASET_INDEX_SQL = f"""
         FROM (SELECT id, unnest(licences) AS rights FROM lunaris_datasets)
         GROUP BY id
     ) AS a USING (id)
+    LEFT JOIN dataset_source_checks AS c ON c.dataset_id = d.id
 """
 
 # One row per organism name of each dataset, written the search way, so a
@@ -135,7 +150,10 @@ DATASET_ORGANISMS_SQL = """
 
 # The fields each result in the list has (the detail endpoint has them all).
 # licences are as harvested: a name can be long, and some catalogues put
-# HTML in it, so the front end must show it as plain text.
+# HTML in it, so the front end must show it as plain text. Each result also
+# has checked_licences, the licences the source check found (null when it
+# found none or did not check), so the list can name one where the record
+# has none.
 LIST_FIELDS = ["id", "title", "abstract", "subjects", "publisher", "issued", "source", "source_name",
                "link", "link_type", "licences", "final_class", "frontend_group", "location_type",
                "organism_level", "organisms", "mappable", "copy_count"]
@@ -336,7 +354,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
 
     in_title = " AND ".join(["s.title_norm LIKE '% ' || ? || '%'"] * len(words)) or "TRUE"
     order_params = list(words) if sort == "relevance" else []
-    columns = ", ".join(f"d.{field}" for field in LIST_FIELDS)
+    columns = ", ".join(f"d.{field}" for field in LIST_FIELDS) + ", s.checked_licences"
     rows = cursor.execute(
         f"""SELECT {columns} FROM {FROM_DATASETS}
             WHERE {condition}
@@ -346,7 +364,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
 
     results = []
     for row in rows:
-        result = dict(zip(LIST_FIELDS, row))
+        result = dict(zip(LIST_FIELDS + ["checked_licences"], row))
         result["abstract_preview"] = preview(result.pop("abstract"))
         results.append(result)
 
@@ -415,7 +433,8 @@ def get_dataset(data, dataset_id):
     Return one dataset with every field, or None for an unknown id. The id
     of another copy of a dataset gives the copy that is shown, with
     requested_copy set to the id asked for. species and other_organisms
-    are its organism names, linked to species or not (linked_species).
+    are its organism names, linked to species or not (linked_species), and
+    source_check is what the source check found (None when not checked).
     """
     requested_copy = None
     shown_id = data.dataset_copies.get(dataset_id)
@@ -429,4 +448,15 @@ def get_dataset(data, dataset_id):
     dataset = dict(zip([column[0] for column in cursor.description], row))
     dataset["requested_copy"] = requested_copy
     dataset["species"], dataset["other_organisms"] = linked_species(cursor, dataset_id)
+    dataset["source_check"] = source_check(cursor, dataset_id)
     return dataset
+
+
+def source_check(cursor, dataset_id):
+    """Return what the source check found for one dataset (every column but
+    the id), or None when it was not checked."""
+    cursor.execute("SELECT * EXCLUDE (dataset_id) FROM dataset_source_checks WHERE dataset_id = ?", [dataset_id])
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return dict(zip([column[0] for column in cursor.description], row))

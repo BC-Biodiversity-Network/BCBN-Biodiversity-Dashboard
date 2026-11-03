@@ -123,24 +123,117 @@ describe('the dataset details', () => {
     expect(screen.queryByText('None')).toBeNull()
   })
 
-  it('adds a note under the access line for Zenodo and PANGAEA datasets only', () => {
-    const note = "Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say " +
-      'restricted access, which may not match the source. Check the source page.'
-    const restricted = [{ name: null, uri: 'info:eu-repo/semantics/restrictedAccess' }]
-    for (const source of ['https-zenodo.org', 'pangaea.de']) {
-      const { container } = show(eagles({ source, licences: restricted }))
-      expect(screen.getByText('No licence in the record. Check the source page.')).toBeTruthy()
-      const access = screen.getByText('Restricted access')
-      expect(access.nextElementSibling.textContent).toBe(note)
-      expect(access.closest('tr').querySelector('th').textContent).toBe('Access')
-      expect(container.textContent).toContain(note)
+  // What BCBN found at the original catalogue, as /api/datasets/{id} gives it.
+  function checked(fields = {}) {
+    return { catalogue_checked: 'BC Data Catalogue', checked_on: '2026-11-02', checked_how: 'source API',
+      access: 'open', access_until: null, access_note: null, access_matches_record: true, licences: null,
+      removed: false, ...fields }
+  }
+  const OPEN = { name: null, uri: 'info:eu-repo/semantics/openAccess' }
+  const RESTRICTED = { name: null, uri: 'info:eu-repo/semantics/restrictedAccess' }
+
+  it("shows the original catalogue's access when it differs, marked and explained in a tip", () => {
+    const { container } = show(eagles({
+      source_name: 'BC Data Catalogue',
+      source_check: checked({ access: 'not_downloadable', access_matches_record: false }),
+    }))
+    const access = detailValue(container, 'Access')
+    expect(access.textContent).toBe('Not downloadable (checked by BCBN)?')
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Where does this access come from?' }))
+    expect(screen.getByRole('tooltip').textContent).toBe('From BC Data Catalogue, where this dataset is published '
+      + '(checked by BCBN on 2 November 2026). Lunaris, which collects records from many catalogues, lists it as '
+      + 'open access, so we follow the original catalogue.')
+  })
+
+  it('puts every checked access value in plain words, with its date', () => {
+    const cases = [
+      [{ access: 'government_only' }, 'Downloadable by government users only'],
+      [{ access: 'ubc_only' }, 'Open to UBC users only'],
+      [{ access: 'limited' }, 'Limited access'],
+      [{ access: 'no_files' }, 'No files in the record'],
+      [{ access: 'some_files_locked', access_until: '2027-02-01' }, 'Some files locked until 1 February 2027'],
+    ]
+    for (const [fields, words] of cases) {
+      const { container } = show(eagles({ source_check: checked({ ...fields, access_matches_record: false }) }))
+      expect(detailValue(container, 'Access').textContent).toBe(`${words} (checked by BCBN)?`)
       cleanup()
     }
-    for (const source of ['canwin-datahub.ad.umanitoba.ca', 'datadryad.org', undefined]) {
-      const { container } = show(eagles({ source, licences: restricted }))
-      expect(container.textContent).not.toContain('Note from BCBN')
+    const { container } = show(eagles({
+      licences: [RESTRICTED], source_check: checked({ catalogue_checked: 'Zenodo', access_matches_record: false }),
+    }))
+    expect(detailValue(container, 'Access').textContent).toBe('Open access (checked by BCBN)?')
+    fireEvent.click(screen.getByRole('button', { name: 'Where does this access come from?' }))
+    expect(screen.getByRole('tooltip').textContent).toContain('lists it as restricted access, so we follow')
+  })
+
+  it('shows the access as the record gives it when the check agrees, or there was none', () => {
+    for (const sourceCheck of [checked(), checked({ access: 'not_downloadable', access_matches_record: null }),
+      null, undefined]) {
+      const { container } = show(eagles({ source_check: sourceCheck }))
+      expect(detailValue(container, 'Access').textContent).toBe('Open access')
+      expect(container.textContent).not.toContain('checked by BCBN')
       cleanup()
     }
+  })
+
+  it("adds the original catalogue's licence when the record has none, linked, marked and explained", () => {
+    const { container } = show(eagles({
+      source_name: 'Zenodo', licences: [RESTRICTED],
+      source_check: checked({ catalogue_checked: 'Zenodo', access: 'restricted',
+        licences: [{ name: 'cc-by-4.0', uri: 'https://creativecommons.org/licenses/by/4.0/legalcode' }] }),
+    }))
+    expect(detailValue(container, 'Licence').textContent).toBe('cc-by-4.0 (checked by BCBN)?')
+    expect(screen.getByRole('link', { name: 'cc-by-4.0' }).href)
+      .toBe('https://creativecommons.org/licenses/by/4.0/legalcode')
+    fireEvent.click(screen.getByRole('button', { name: 'Where does this licence come from?' }))
+    expect(screen.getByRole('tooltip').textContent).toBe('From Zenodo, where this dataset is published (checked by '
+      + 'BCBN on 2 November 2026). The record Lunaris collected from Zenodo did not include a licence.')
+    expect(detailValue(container, 'Access').textContent).toBe('Restricted access')
+  })
+
+  it("keeps the record's own licence, and says when neither has one", () => {
+    const check = checked({ licences: [{ name: 'Another licence', uri: null }] })
+    const { container } = show(eagles({ source_check: check }))
+    expect(detailValue(container, 'Licence').textContent)
+      .toBe('Statistics Canada Open Licence Show the full licence text')
+    expect(container.textContent).not.toContain('Another licence')
+    expect(container.textContent).not.toContain('checked by BCBN')
+    cleanup()
+    const none = show(eagles({ licences: [OPEN], source_check: checked() })).container
+    expect(detailValue(none, 'Licence').textContent).toBe('No licence in the record. Check the source page.')
+  })
+
+  it('notes under the access line that PANGAEA access is not checked yet, for PANGAEA datasets only', () => {
+    const note = 'Note from BCBN: Lunaris marks every PANGAEA record as restricted access, which may not match '
+      + 'PANGAEA. Check the source page.'
+    const pangaea = { source: 'pangaea.de', licences: [RESTRICTED] }
+    let { container } = show(eagles({ ...pangaea, source_check: checked({ access: null, removed: false }) }))
+    const access = detailValue(container, 'Access')
+    expect(access.querySelector('p').textContent).toBe('Restricted access')
+    expect(access.querySelector('.dataset-attribution').textContent.replace(/\s+/g, ' ')).toBe(note)
+    cleanup()
+    container = show(eagles({ ...pangaea, source_check: null })).container
+    expect(container.textContent).toContain('Lunaris marks every PANGAEA record')
+    cleanup()
+    // Once checked, or for another catalogue, no note.
+    container = show(eagles({ ...pangaea, source_check: checked({ access: 'restricted' }) })).container
+    expect(container.textContent).not.toContain('Lunaris marks every PANGAEA record')
+    cleanup()
+    container = show(eagles({ source: 'https-zenodo.org', licences: [RESTRICTED] })).container
+    expect(container.textContent).not.toContain('Lunaris marks every PANGAEA record')
+  })
+
+  it('says when the original catalogue no longer has the dataset, on the page, and no Zenodo note any more', () => {
+    const note = 'Note from BCBN: on 2 November 2026 this dataset was no longer on Zenodo, where it was '
+      + 'published, so the link may not work.'
+    const { container } = show(eagles({ source: 'https-zenodo.org', licences: [RESTRICTED],
+      source_check: checked({ catalogue_checked: 'Zenodo', access: null, removed: true }) }))
+    expect(container.querySelector('.dataset-removed-note').textContent.replace(/\s+/g, ' ')).toBe(note)
+    expect(container.textContent).not.toContain('Zenodo and PANGAEA')
+    expect(detailValue(container, 'Access').textContent).toBe('Restricted access')
+    cleanup()
+    expect(show(eagles({ source_check: checked() })).container.querySelector('.dataset-removed-note')).toBeNull()
   })
 
   it('puts the page in order: button, abstract, Details, Location, Species, Also listed in', () => {

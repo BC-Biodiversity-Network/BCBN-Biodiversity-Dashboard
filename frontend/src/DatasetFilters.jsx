@@ -11,7 +11,9 @@ const SORT_LABELS = {
   title: 'Title A-Z',
 }
 
-// The access rights a record can give, in words, in the API's order.
+// The access a dataset can have, in words, in the API's order: the original
+// catalogue's where BCBN checked it (every value but open counts as
+// restricted), else the record's.
 const ACCESS_LABELS = { open: 'Open access', restricted: 'Restricted access' }
 
 // One section of the Filters panel, with its heading.
@@ -198,6 +200,9 @@ function FilterPanel({ state, options, onApply, onClose }) {
             onChange={() => change({ access: toggled(draft.access, option.value) })}
           />
         ))}
+        <p className="datasets-filter-note">
+          Where BCBN checked the original catalogue (2 November 2026), the filter uses what that catalogue says.
+        </p>
       </FilterSection>
 
       <FilterSection title="Location">

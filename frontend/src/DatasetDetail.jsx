@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react'
 
 import {
-  coordinateFields, creatorsLabel, harvestedDegrees, identifierLabel, isWebLink, issuedLabel, looksLikeHtml,
-  plainText, readLicences, shownCoordinates, shownDegrees,
+  capitalised, checkedAccessLabel, coordinateFields, creatorsLabel, harvestedDegrees, identifierLabel, isWebLink,
+  issuedLabel, looksLikeHtml, plainText, readLicences, shownCoordinates, shownDegrees,
 } from './datasetText'
+import InfoTip from './InfoTip'
 import { speciesMapSearch } from './route'
 import SpeciesName from './SpeciesName'
 import { MayIncludeBcTag } from './widerDatasets'
@@ -54,11 +55,33 @@ function Licence({ licence }) {
   )
 }
 
-// The catalogues (source ids) whose records in Lunaris all give no licence
-// and say restricted access, while the source pages we checked give a
-// CC BY 4.0 licence and open access (October 2026). Their datasets get a
-// note under the access line; the lines themselves stay as harvested.
-const SOURCES_WITH_DOUBTFUL_RIGHTS = new Set(['https-zenodo.org', 'pangaea.de'])
+// "(checked by BCBN)" after a value taken from the original catalogue, and a
+// "?" whose tip says where it comes from and why the page follows it (the
+// original catalogue is where the dataset is published; Lunaris only
+// collects records from many catalogues).
+function CheckedByBcbn({ ariaLabel, children }) {
+  return (
+    <>
+      {' '}
+      <span className="dataset-checked">
+        (checked by BCBN)
+        <InfoTip label="?" className="help-button" ariaLabel={ariaLabel}>{children}</InfoTip>
+      </span>
+    </>
+  )
+}
+
+// The catalogues whose access BCBN has not checked yet although Lunaris
+// marks every one of their records restricted, which may not match the
+// catalogue: their datasets get a note under the access line until they are
+// checked by hand.
+const SOURCES_WITH_UNCHECKED_ACCESS = new Set(['pangaea.de'])
+
+// Where a checked value comes from, the start of each tip.
+function checkedFrom(check) {
+  return `From ${check.catalogue_checked}, where this dataset is published (checked by BCBN on `
+    + `${issuedLabel(check.checked_on)}).`
+}
 
 // One row of the Details table: the label (with an optional note under it)
 // on the left, the value on the right; stacked on a phone.
@@ -75,11 +98,13 @@ function DetailRow({ label, note, children }) {
 }
 
 // The Details table, like the "Citation Metadata" table on Borealis: what the
-// record itself says, from the export only (nothing from the source sites),
-// all as plain text. Each row is left out when the record has nothing for
-// it, except Licence, which says so when there is none. The publisher is
-// left out when it is the catalogue's own name (ignoring case), which the
-// line under the title already gives.
+// record itself says, all as plain text. Each row is left out when the
+// record has nothing for it, except Licence, which says so when there is
+// none. The publisher is left out when it is the catalogue's own name
+// (ignoring case), which the line under the title already gives. Where BCBN
+// checked the original catalogue (dataset.source_check), its access is shown
+// instead of the record's when the two differ, and its licence when the
+// record has none, each marked "(checked by BCBN)" with a tip.
 function Details({ dataset }) {
   const creators = creatorsLabel(dataset.creators)
   const publisher = dataset.publisher?.trim()
@@ -89,7 +114,10 @@ function Details({ dataset }) {
   const identifier = identifierLabel(dataset.link, dataset.link_type)
   const subjects = dataset.subjects ?? []
   const { licences, accessRights } = readLicences(dataset.licences)
-  const doubtfulRights = SOURCES_WITH_DOUBTFUL_RIGHTS.has(dataset.source)
+  const check = dataset.source_check
+  const checkedAccess = check?.access_matches_record === false ? checkedAccessLabel(check) : null
+  const checkedLicences = licences.length === 0 ? readLicences(check?.licences).licences : []
+  const uncheckedAccess = SOURCES_WITH_UNCHECKED_ACCESS.has(dataset.source) && !check?.access
 
   return (
     <section className="dataset-section">
@@ -112,21 +140,43 @@ function Details({ dataset }) {
             </DetailRow>
           )}
           <DetailRow label="Licence">
-            {licences.length === 0
-              ? 'No licence in the record. Check the source page.'
-              : (
+            {licences.length === 0 && checkedLicences.length === 0
+              && 'No licence in the record. Check the source page.'}
+            {licences.length > 0 && (
+              <ul className="dataset-licences">
+                {licences.map((licence, i) => <Licence key={i} licence={licence} />)}
+              </ul>
+            )}
+            {checkedLicences.length > 0 && (
+              <div className="dataset-checked-value">
                 <ul className="dataset-licences">
-                  {licences.map((licence, i) => <Licence key={i} licence={licence} />)}
+                  {checkedLicences.map((licence, i) => <Licence key={i} licence={licence} />)}
                 </ul>
-              )}
+                <CheckedByBcbn ariaLabel="Where does this licence come from?">
+                  {checkedFrom(check)} The record Lunaris collected from {dataset.source_name} did not include a
+                  licence.
+                </CheckedByBcbn>
+              </div>
+            )}
           </DetailRow>
-          {(accessRights.length > 0 || doubtfulRights) && (
+          {(accessRights.length > 0 || checkedAccess) && (
             <DetailRow label="Access">
-              {accessRights.length > 0 && <p>{accessRights.join(', ')}</p>}
-              {doubtfulRights && (
+              {checkedAccess
+                ? (
+                  <p>
+                    {capitalised(checkedAccess)}
+                    <CheckedByBcbn ariaLabel="Where does this access come from?">
+                      {checkedFrom(check)} Lunaris, which collects records from many catalogues, lists it
+                      as {accessRights.length > 0 ? accessRights.join(', ').toLowerCase() : 'no access'}, so we
+                      follow the original catalogue.
+                    </CheckedByBcbn>
+                  </p>
+                )
+                : <p>{accessRights.join(', ')}</p>}
+              {uncheckedAccess && (
                 <p className="dataset-attribution">
-                  Note from BCBN: Lunaris's records from Zenodo and PANGAEA give no licence and all say restricted
-                  access, which may not match the source. Check the source page.
+                  Note from BCBN: Lunaris marks every PANGAEA record as restricted access, which may not match
+                  PANGAEA. Check the source page.
                 </p>
               )}
             </DetailRow>
@@ -291,6 +341,12 @@ export default function DatasetDetail({ dataset, location, onBack, onOpenSpecies
       <h2>{plainText(dataset.title) || 'Untitled dataset'}</h2>
       <p className="dataset-meta">{dataset.source_name}</p>
       <MayIncludeBcTag frontendGroup={dataset.frontend_group} />
+      {dataset.source_check?.removed && (
+        <p className="dataset-removed-note">
+          Note from BCBN: on {issuedLabel(dataset.source_check.checked_on)} this dataset was no longer
+          on {dataset.source_check.catalogue_checked}, where it was published, so the link may not work.
+        </p>
+      )}
       {copyAsked && (
         <p className="dataset-muted">
           You followed a link to the copy in {copyAsked.source_name}. This is another copy of the same

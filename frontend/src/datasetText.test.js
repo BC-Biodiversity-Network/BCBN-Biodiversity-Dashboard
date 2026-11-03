@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  LICENCE_NAME_LENGTH, boxKind, creatorsLabel, describeLocation, harvestedDegrees, identifierLabel, issuedLabel,
-  licenceListLabel, noteText, placeLabel, plainText, readLicence, readLicences, shorten, shownCoordinates,
-  shownDegrees,
+  LICENCE_NAME_LENGTH, boxKind, capitalised, checkedAccessLabel, creatorsLabel, describeLocation, harvestedDegrees,
+  identifierLabel, issuedLabel, licenceListLabel, noteText, placeLabel, plainText, readLicence, readLicences, shorten,
+  shownCoordinates, shownDegrees,
 } from './datasetText'
 
 // Real rights entries from the 2026-10-20 harvest (long ones cut).
@@ -124,6 +124,11 @@ describe('licences', () => {
     expect(licenceListLabel([PRINCE_GEORGE, { name: 'CC0 1.0', uri: null }])).toBe(
       'Open Government License – City of Prince George and 1 more')
     expect(licenceListLabel([STATCAN])).toBe('Statistics Canada Open Licence')
+    // No licence in the record: the one BCBN found at the original catalogue, else none.
+    const checked = [{ name: 'Creative Commons Attribution 4.0 International', uri: 'https://example.org/by' }]
+    expect(licenceListLabel([OPEN_ACCESS], checked)).toBe('Creative Commons Attribution 4.0 International')
+    expect(licenceListLabel([STATCAN], checked)).toBe('Statistics Canada Open Licence')
+    expect(licenceListLabel([OPEN_ACCESS], null)).toBe('No licence in the record')
     expect(licenceListLabel([{ name: 'The Government of Example Open Data Licence for Data Sets, Version 2', uri: null }]))
       .toBe('The Government of Example Open Data Licence for Data Sets...')
   })
@@ -297,3 +302,22 @@ describe('where the location comes from', () => {
     expect(placeLabel(place('Victoria', 'in_bc'))).toBe('Victoria')
   })
 })
+
+describe('what BCBN checked at the source', () => {
+  it('puts the checked access in plain words, with its date, or null when it was not checked', () => {
+    expect(checkedAccessLabel({ access: 'not_downloadable' })).toBe('not downloadable')
+    expect(checkedAccessLabel({ access: 'government_bceid_only' }))
+      .toBe('downloadable by government and business BCeID users only')
+    expect(checkedAccessLabel({ access: 'some_files_locked', access_until: '2027-02-01' }))
+      .toBe('some files locked until 1 February 2027')
+    expect(checkedAccessLabel({ access: 'embargoed', access_until: '2027-08-14' })).toBe('embargoed until 14 August 2027')
+    expect(checkedAccessLabel({ access: null })).toBeNull()
+    expect(checkedAccessLabel(null)).toBeNull()
+  })
+
+  it('capitalises the first letter only', () => {
+    expect(capitalised('open to UBC users only')).toBe('Open to UBC users only')
+    expect(capitalised('')).toBe('')
+  })
+})
+

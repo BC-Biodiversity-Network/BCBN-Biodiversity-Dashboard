@@ -33,6 +33,7 @@ const LIST = {
     id: 'oai:datadryad.org:doi:10.5061/dryad.golden', title: 'Golden eagle tracking worldwide',
     issued: '2021-11-30', source_name: 'Dryad', final_class: 'global', frontend_group: 'pending',
     abstract_preview: 'GPS tracks.', licences: [],
+    checked_licences: [{ name: 'Creative Commons Attribution 4.0 International', uri: null }],
   }],
   options: {
     catalogue: [{ value: 'catalogue.data.gov.bc.ca', name: 'BC Data Catalogue', count: 1 },
@@ -116,6 +117,26 @@ describe('the Datasets page', () => {
     expect(screen.getByRole('textbox', { name: 'Organism name' }).placeholder).toBe('For example salmon or Oncorhynchus')
     expect(screen.getByText('Only matches names the record uses for living things, so salmon finds the fish but ' +
       'not Salmon Arm or the Salmon River.')).toBeTruthy()
+  })
+
+  it('says under the Access options that the checked catalogue wins, with the same two labels', async () => {
+    stubList()
+    await showPage('?view=datasets')
+    openFilters()
+    const note = screen.getByText('Where BCBN checked the original catalogue (2 November 2026), the filter uses what '
+      + 'that catalogue says.')
+    const section = note.closest('fieldset, section, div')
+    expect([...section.querySelectorAll('input[type="checkbox"]')].map((box) => box.labels[0].textContent))
+      .toEqual(['Open access', 'Restricted access'])
+    expect(note.previousElementSibling.textContent).toBe('Restricted access')
+  })
+
+  it("names the licence BCBN found at the original catalogue when the record has none", async () => {
+    stubList()
+    await showPage('?view=datasets&wider=1')
+    const golden = screen.getByRole('link', { name: 'Golden eagle tracking worldwide' }).closest('li')
+    expect(golden.textContent).toContain('Creative Commons Attribution 4.0 International')
+    expect(golden.textContent).not.toContain('No licence in the record')
   })
 
   it('tags only the datasets that may include BC', async () => {

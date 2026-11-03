@@ -57,10 +57,11 @@ def test_a_species_with_no_datasets_gives_none(client):
 
 def test_the_species_filter_combines_with_the_others(client):
     """The species filter is applied with the search and the other filters, and in their counts."""
-    body = client.get("/api/datasets", params={"species": "AAAA", "q": "eagle", "access": "open"}).json()
-    assert ids_of(body) == [EAGLE_NESTS]
+    body = client.get("/api/datasets", params={"species": "AAAA", "q": "eagle", "access": "restricted"}).json()
+    assert ids_of(body) == []
+    # Salmon's record says restricted, but the source check found it open.
     counts = {option["value"]: option["count"] for option in body["options"]["access"]}
-    assert counts == {"open": 1, "restricted": 1}
+    assert counts == {"open": 2, "restricted": 0}
     assert client.get("/api/datasets", params={"species": "AAAA", "mappable": "true", **BOTH}).json()[
         "options"]["location"] == [{"value": "mappable", "count": 2}]
 

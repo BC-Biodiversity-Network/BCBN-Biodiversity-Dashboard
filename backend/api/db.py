@@ -1,15 +1,17 @@
 """
 db.py
 
-Opens the API's data: checks that the six files are there and have the
+Opens the API's data: checks that the seven files are there and have the
 columns the API reads, that every species key has one answer, that
-every Lunaris dataset id has one answer and that every link between a
-dataset and a species points at both, opens one DuckDB connection over
-them, and works out the figures /api/meta returns and the lookup from
-merged (old) keys to kept keys.
+every Lunaris dataset id has one answer, that every link between a
+dataset and a species points at both and that the source check only
+holds datasets on the site, once each, with values the API knows, opens
+one DuckDB connection over them, and works out the figures /api/meta
+returns and the lookup from merged (old) keys to kept keys.
 
-The four small files (the species cards, the BCSEE statuses, the
-Lunaris datasets and their links to species) are copied into memory when
+The five small files (the species cards, the BCSEE statuses, the
+Lunaris datasets, their links to species and the source check) are
+copied into memory when
 the API starts. species_hex is read in place (a DuckDB
 view over read_parquet): it is sorted by species key, so a request for one
 species only reads the few parquet row groups that hold it. Either way it
@@ -63,6 +65,12 @@ REQUIRED_COLUMNS = {
         "dataset_id", "position", "name_as_written", "match_status", "specieskey",
         "matched_name", "matched_field",
     ],
+    # Written by pipeline/lunaris/export_dataset_source_checks.py: what the
+    # November 2026 source check found, one row per checked dataset.
+    "dataset_source_checks.parquet": [
+        "dataset_id", "catalogue_checked", "checked_on", "checked_how", "access", "access_until",
+        "access_note", "access_matches_record", "licences", "removed",
+    ],
 }
 
 # The fields of download_info.json the API passes on, for citing the GBIF
@@ -90,6 +98,17 @@ DATASET_FINAL_CLASSES = ["bc_only", "canada_incl_bc", "bc_and_outside_canada", "
 # hand-checked list. Every other status is a name that does not link.
 LINKED_MATCH_STATUSES = ["scientific", "common", "expanded_abbreviation", "manual"]
 
+# The access values the source check can give (ACCESS_VALUES in
+# export_dataset_source_checks.py), and whether each is open for the Access
+# filter; every other value counts as restricted there. SOURCE_ACCESS_DATED
+# are the values that come with a date (access_until).
+SOURCE_ACCESS_OPEN = {
+    "open": True, "restricted": False, "on_request": False, "embargoed": False, "not_downloadable": False,
+    "government_only": False, "government_bceid_only": False, "named_users_only": False, "ubc_only": False,
+    "limited": False, "no_files": False, "some_files_locked": False,
+}
+SOURCE_ACCESS_DATED = ["embargoed", "some_files_locked"]
+
 # The name each parquet file is given inside DuckDB.
 VIEW_NAMES = {
     "species_card_gbif.parquet": "species_card",
@@ -97,6 +116,7 @@ VIEW_NAMES = {
     "bcsee_status_by_gbif_species.parquet": "bcsee_status",
     "lunaris_datasets.parquet": "lunaris_datasets",
     "dataset_species_links.parquet": "dataset_species_links",
+    "dataset_source_checks.parquet": "dataset_source_checks",
 }
 
 # The files copied into memory when the API starts, rather than read from
@@ -107,9 +127,10 @@ VIEW_NAMES = {
 # by key, so DuckDB only reads the part that holds the species asked for.
 # The Lunaris datasets (about 3 MB) are searched as a whole on every
 # request, so they are kept in memory too, and so are their links to
-# species (about 0.3 MB).
+# species (about 0.3 MB) and the source check (about 0.2 MB).
 LOADED_INTO_MEMORY = {"species_card_gbif.parquet", "bcsee_status_by_gbif_species.parquet",
-                      "lunaris_datasets.parquet", "dataset_species_links.parquet"}
+                      "lunaris_datasets.parquet", "dataset_species_links.parquet",
+                      "dataset_source_checks.parquet"}
 
 
 class DataFilesError(RuntimeError):
@@ -304,6 +325,42 @@ def check_species_links(con):
     return problems
 
 
+def check_source_checks(con):
+    """Return a list of problems with the source check: each row must be for
+    a dataset on the site, once; access must be a value the API knows
+    (SOURCE_ACCESS_OPEN), with a date (YYYY-MM-DD) only for the values that
+    take one; and the catalogue and the day of the check must be given.
+    Otherwise a dataset page or the Access filter would show a value the
+    site cannot put into words."""
+    problems = []
+    known = ", ".join(sql_text(value) for value in SOURCE_ACCESS_OPEN)
+    dated = ", ".join(sql_text(value) for value in SOURCE_ACCESS_DATED)
+    for query, what in (
+            ("""SELECT dataset_id FROM dataset_source_checks
+                GROUP BY dataset_id HAVING count(*) > 1 ORDER BY 1""",
+             "these datasets are checked twice"),
+            ("""SELECT s.dataset_id FROM dataset_source_checks AS s
+                ANTI JOIN lunaris_datasets AS d ON d.id = s.dataset_id ORDER BY 1""",
+             "these dataset ids are not datasets on the site"),
+            (f"""SELECT DISTINCT access FROM dataset_source_checks
+                 WHERE access IS NOT NULL AND access NOT IN ({known}) ORDER BY 1""",
+             "these access values are not ones the API knows"),
+            (f"""SELECT dataset_id FROM dataset_source_checks
+                 WHERE access_until IS NOT NULL
+                   AND (coalesce(access NOT IN ({dated}), true)
+                        OR NOT regexp_matches(access_until, '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$'))
+                 ORDER BY 1""",
+             "these datasets have a date with an access value that takes none, or a date that is not YYYY-MM-DD"),
+            ("""SELECT dataset_id FROM dataset_source_checks
+                WHERE coalesce(catalogue_checked, '') = '' OR coalesce(checked_on, '') = '' ORDER BY 1""",
+             "these datasets have no catalogue or no day of the check")):
+        found = [str(row[0]) for row in con.execute(query).fetchall()]
+        if found:
+            problems.append(f"dataset_source_checks.parquet: {what}: {', '.join(found[:10])}"
+                            + (f" and {len(found) - 10} more" if len(found) > 10 else ""))
+    return problems
+
+
 def read_merged_keys(con):
     """Return a dict from each old (merged-away) key to the key it was
     merged into. It has a few hundred entries, so it is kept in memory and
@@ -477,6 +534,7 @@ def open_data(settings):
             problems += check_keys(con)
             problems += check_datasets(con)
             problems += check_species_links(con)
+            problems += check_source_checks(con)
 
         if problems:
             raise DataFilesError(

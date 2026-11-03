@@ -43,6 +43,27 @@ export const OGL_BC_PREFIX = 'Contains information licensed under the '
 export const OGL_BC_NAME = 'Open Government Licence – British Columbia'
 export const OGL_BC_STATEMENT = `${OGL_BC_PREFIX}${OGL_BC_NAME}.`
 
+// The Open Government Licences of the catalogues whose dataset descriptions
+// the Datasets page shows, in the footer's attribution line, each with the
+// page of its text found in the November 2026 licence and source checks:
+// Canada's own page, the PDF Prince George's records link to, Port Moody's
+// terms of use, and Surrey's licence page on its ArcGIS open data site.
+// Squamish is named without a link (Lucia's decision, November 2026).
+export const DATASETS_OGL_LICENCES = [
+  { name: 'Open Government Licence – British Columbia', url: OGL_BC_URL },
+  { name: 'Open Government Licence – Canada', url: 'https://open.canada.ca/en/open-government-licence-canada' },
+  {
+    name: 'Open Government License – City of Prince George',
+    url: 'https://pgmap.princegeorge.ca/opendata/CityofPrinceGeorge_Open_Government_License_Open_Data.pdf',
+  },
+  { name: 'Open Government Licence – Port Moody', url: 'https://www.portmoody.ca/opendatatou' },
+  { name: 'Open Government Licence – Squamish', url: null },
+  {
+    name: 'Open Government License – City of Surrey',
+    url: 'https://opendata-surrey.hub.arcgis.com/pages/55089a19491a4fe59a41e059fd8af708',
+  },
+]
+
 // The BC Species and Ecosystems Explorer, cited the way the BC Conservation
 // Data Centre asks ("How to Cite Information & Data from the Conservation
 // Data Centre", BCSEE_CITATION_GUIDE_URL): the year of the export, and when

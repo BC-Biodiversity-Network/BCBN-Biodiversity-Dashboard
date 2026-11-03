@@ -1258,6 +1258,30 @@ body {
   list-style: none;
 }
 
+/* A value taken from the original catalogue: "(checked by BCBN)" in grey
+   after it, then the "?" with where it comes from, kept together on one
+   line. A checked licence sits on the same line as these. */
+.dataset-checked {
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+
+.dataset-checked-value .dataset-licences,
+.dataset-checked-value .dataset-licences li {
+  display: inline;
+}
+
+/* The note on a dataset its original catalogue no longer has. */
+.dataset-removed-note {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid #b26b00;
+  background: #fff7e6;
+  font-size: 13px;
+  color: #3d2a00;
+}
+
 /* On a phone the label goes above its value. */
 @media (max-width: 760px) {
   .dataset-details th,

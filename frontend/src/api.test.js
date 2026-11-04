@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchSpecies, searchWords, searchableLength }
+import { ApiError, MIN_SEARCH_CHARACTERS, fetchCell, fetchDataset, fetchDatasets, searchSpecies, searchWords, searchableLength }
   from './api'
 
 // Each case is a search and the number of letters and digits the API counts
@@ -210,5 +210,16 @@ describe('the dataset requests', () => {
     const urls = recordUrls()
     await fetchDataset('oai:datadryad.org:doi:10.5061/dryad.x y')
     expect(urls[0]).toBe('/api/datasets/oai%3Adatadryad.org%3Adoi%3A10.5061/dryad.x%20y')
+  })
+})
+
+describe('fetchCell', () => {
+  it('asks for one hexagon with the page, and the years, filter and species only when given', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({ cell: '872800b30ffffff' }) })
+    await fetchCell('872800b30ffffff')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/hexes/872800b30ffffff?offset=0&limit=50')
+    await fetchCell('872800b30ffffff', { years: { from: 2000, to: null }, q: ' robin ', species: '59PMB', offset: 50 })
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      '/api/hexes/872800b30ffffff?offset=50&limit=50&year_from=2000&q=robin&species=59PMB')
   })
 })

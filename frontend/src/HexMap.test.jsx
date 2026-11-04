@@ -4,8 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The real map (MapLibre) and layers (deck.gl) need a graphics card, which
 // the test page does not have. These stand-ins record what the map is given
 // instead: the layers handed to deck.gl, the map's onMove handler (to pretend
-// the user zoomed) and every fitBounds call.
-const mapState = vi.hoisted(() => ({ layers: [], getTooltip: null, onMove: null, fitBounds: null }))
+// the user zoomed) and every fitBounds call, the overlay's click handler, the
+// map's onLoad handler, and every easeTo and jumpTo call. bounds is the part
+// of the world on screen, [[west, south], [east, north]].
+const mapState = vi.hoisted(() => ({
+  layers: [], getTooltip: null, onMove: null, fitBounds: null, onClick: null, onLoad: null, easeTo: null,
+  jumpTo: null, bounds: [[-140, 47], [-113, 61]],
+}))
 
 vi.mock('react-map-gl/maplibre', async () => {
   const React = await import('react')
@@ -14,13 +19,27 @@ vi.mock('react-map-gl/maplibre', async () => {
     React.useImperativeHandle(ref, () => ({
       fitBounds: (...args) => mapState.fitBounds(...args),
       getContainer: () => ({ clientWidth: 1280, clientHeight: 800 }),
+      loaded: () => true,
+      getBounds: () => ({
+        contains: ([lng, lat]) => lng >= mapState.bounds[0][0] && lng <= mapState.bounds[1][0]
+          && lat >= mapState.bounds[0][1] && lat <= mapState.bounds[1][1],
+      }),
+      easeTo: (...args) => mapState.easeTo(...args),
+      jumpTo: (...args) => mapState.jumpTo(...args),
     }))
     mapState.onMove = props.onMove
+    mapState.onLoad = props.onLoad
     return React.createElement('div', { 'data-testid': 'map' }, props.children)
   })
   // A stand-in for useControl: keeps the overlay's latest layers.
   function useControl() {
-    return { setProps: (props) => { mapState.layers = props.layers; mapState.getTooltip = props.getTooltip } }
+    return {
+      setProps: (props) => {
+        mapState.layers = props.layers
+        mapState.getTooltip = props.getTooltip
+        mapState.onClick = props.onClick
+      },
+    }
   }
   return { default: Map, useControl }
 })
@@ -36,7 +55,10 @@ vi.mock('@deck.gl/geo-layers', () => ({
 }))
 
 // Imported after the stand-ins above, which vitest puts in place first.
+import { cellToLatLng } from 'h3-js'
+
 import HexMap from './HexMap'
+import { pickResolution, zoomShowingResolution } from './zoomTiers'
 
 // One overview hexagon per resolution, real H3 cells in BC.
 const OVERVIEW = {
@@ -85,6 +107,9 @@ async function settle() {
 
 beforeEach(() => {
   mapState.fitBounds = vi.fn()
+  mapState.easeTo = vi.fn()
+  mapState.jumpTo = vi.fn()
+  mapState.bounds = [[-140, 47], [-113, 61]]
 })
 
 afterEach(() => {
@@ -336,5 +361,71 @@ describe('a year range', () => {
     render(<HexMap overview={OVERVIEW} species={null} years={null} yearBounds={{ firstYear: 1784, lastYear: 2026 }} />)
     const controls = document.querySelector('.top-left-controls')
     expect([...controls.children].map((el) => el.className)).toEqual(['hex-size-label', 'variable-toggle', 'year-filter'])
+  })
+})
+
+describe('the clicked hexagon', () => {
+  it('opens the panel of the hexagon under a click, on the overview and on a species map', async () => {
+    stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
+    const onCellClick = vi.fn()
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} onCellClick={onCellClick} />)
+    act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
+    expect(onCellClick).toHaveBeenLastCalledWith('8428c9bffffffff')
+    act(() => mapState.onClick({ object: null }))
+    expect(onCellClick).toHaveBeenCalledTimes(1)
+    rerender(<HexMap overview={OVERVIEW} species={ROBIN} onCellClick={onCellClick} />)
+    await settle()
+    act(() => mapState.onClick({ object: { h3Cell: '8428c9bffffffff', occurrences: 3 } }))
+    expect(onCellClick).toHaveBeenCalledTimes(2)
+  })
+
+  it('outlines the open hexagon above the others, dark and 3 pixels wide, and never in the way of a click', () => {
+    render(<HexMap overview={OVERVIEW} species={null} selectedCell="8528c9b7fffffff" />)
+    const outline = mapState.layers[mapState.layers.length - 1]
+    expect(outline.id).toBe('selected-cell-8528c9b7fffffff')
+    expect(outline.props).toMatchObject({
+      data: [{ h3Cell: '8528c9b7fffffff' }], filled: false, stroked: true, getLineColor: [26, 26, 26],
+      getLineWidth: 3, lineWidthUnits: 'pixels', pickable: false,
+    })
+  })
+
+  it('draws no outline with no hexagon open', () => {
+    render(<HexMap overview={OVERVIEW} species={null} />)
+    expect(mapState.layers.some((layer) => layer.id.startsWith('selected-cell-'))).toBe(false)
+  })
+
+  it('opens a hexagon from a shared link at a zoom that shows hexagons of its size', () => {
+    render(<HexMap overview={OVERVIEW} species={null} selectedCell="8728c9b40ffffff" />)
+    act(() => mapState.onLoad())
+    const [{ center, zoom }] = mapState.jumpTo.mock.calls[0]
+    const [lat, lng] = cellToLatLng('8728c9b40ffffff')
+    expect(center).toEqual([lng, lat])
+    expect(zoom).toBe(zoomShowingResolution(7))
+  })
+
+  it('brings the open hexagon into view only when it is off screen', () => {
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedCell="8728c9b40ffffff" />)
+    expect(mapState.easeTo).not.toHaveBeenCalled()
+    mapState.bounds = [[-130, 53], [-125, 56]]
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedCell="8628c9b47ffffff" />)
+    expect(mapState.easeTo).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays on the hexagon instead of moving to the species while the panel is open, and does not jump on closing', async () => {
+    stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={ROBIN} selectedCell="8428c9bffffffff" />)
+    await settle()
+    expect(mapState.fitBounds).not.toHaveBeenCalled()
+    rerender(<HexMap overview={OVERVIEW} species={ROBIN} selectedCell={null} />)
+    await settle()
+    expect(mapState.fitBounds).not.toHaveBeenCalled()
+  })
+})
+
+describe('the zoom for a resolution', () => {
+  it('is inside that resolution\'s tier', () => {
+    for (const res of [4, 5, 6, 7]) {
+      expect(pickResolution(zoomShowingResolution(res), null)).toBe(res)
+    }
   })
 })

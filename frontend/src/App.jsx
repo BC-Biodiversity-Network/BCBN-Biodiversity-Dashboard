@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
+import HexagonPanel from './HexagonPanel'
 import HexMap from './HexMap'
 import { loadHexData } from './loadHexData'
-import { readSpeciesKey, speciesDatasetsSearch, speciesMapSearch } from './route'
+import { PANEL_FROM_CLICK, readCell, readSpeciesKey, speciesDatasetsSearch, speciesMapSearch } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
 import SpeciesCard from './SpeciesCard'
@@ -25,9 +26,40 @@ const HEX_DATA_URLS = {
 // The whole page: the map (the overview, or the species whose card is open),
 // the search box and species card on the right, and the footer. search is
 // the address's query string, which names the species whose card is open
-// (?species=<key>, see route.js), and navigate changes it, so a card can be
-// linked to and the back button returns to it.
-export default function App({ search = '', navigate = () => {} }) {
+// (?species=<key>) and the hexagon whose panel is open (?cell=<H3 id>, see
+// route.js), and navigate changes it, so a card or a hexagon can be linked
+// to and the back button returns to it. goBack is the browser's back button
+// (the card's "Back to this hexagon's species" link uses it).
+//
+// The side panel under the search box shows one thing at a time:
+//   - the hexagon panel when the address has a cell: on the overview, every
+//     species in the hexagon; on a species map, that species alone in the
+//     hexagon, with a link to show every species (which switches to the
+//     overview for the same hexagon); the species card is then only covered,
+//     not closed;
+//   - else the species card when the address has a species;
+//   - else nothing (the plain overview).
+// History: the first hexagon click (no cell in the address yet) adds an
+// address entry, so Back closes the panel and returns to what was there
+// before; further clicks while the panel is open replace that entry, so
+// clicking hexagon after hexagon does not fill the history. Opening a
+// species from the panel's list adds an entry, so Back returns to the panel;
+// the card then shows a link that does the same. The panel's x acts like
+// Back when the panel's entry was added by a click in this visit (it is
+// marked with PANEL_FROM_CLICK in the history state), so no dead entry is
+// left; when the panel came from a shared link, with nothing to go back to,
+// the x removes the cell in place. Either way the overview shows again, or
+// the species card on a species map. "Show all species" on a species map's
+// panel adds an entry (not marked), so Back returns to the species panel and
+// the x then closes the overview's panel in place. Picking a species in the
+// search box replaces the entry, as before, which closes the panel.
+//
+// historyState reads the current history entry's state (the browser's
+// window.history.state; the tests give their own).
+export default function App({
+  search = '', navigate = () => {}, goBack = () => window.history.back(),
+  historyState = () => window.history.state,
+}) {
   const [overviewRows, setOverviewRows] = useState({})
   const [overviewError, setOverviewError] = useState(null)
   // The species whose card is open, or null for the plain overview:
@@ -38,6 +70,7 @@ export default function App({ search = '', navigate = () => {} }) {
   // every time a species is picked, so the map moves to it again even when
   // the same species is picked twice.
   const addressKey = readSpeciesKey(search)
+  const addressCell = readCell(search)
   const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
   // What the data is and where it comes from (/api/meta), for the GBIF
@@ -48,6 +81,9 @@ export default function App({ search = '', navigate = () => {} }) {
   // { from, to } (see yearRange.js). It lives here rather than in the map,
   // so it stays the same when a species card is opened or closed.
   const [years, setYears] = useState(null)
+  // The species last opened from a hexagon's list ({ key }), so its card can
+  // offer the way back to that list; null when none was.
+  const [openedFromCell, setOpenedFromCell] = useState(null)
 
   // Fetches /api/meta once, when the page first appears. If the API is not
   // there, the overview still works and the card says the citation is loading.
@@ -103,6 +139,50 @@ export default function App({ search = '', navigate = () => {} }) {
     navigate(speciesMapSearch(null), { replace: true })
   }
 
+  // Opens the panel of a clicked hexagon, keeping the species map if one is
+  // open: a new address entry for the first click, marked as added by a
+  // click; the same entry replaced, with its mark kept, while the panel is
+  // already open (see the top of this component).
+  function openCell(cell) {
+    if (cell === addressCell) {
+      return
+    }
+    if (addressCell) {
+      navigate(speciesMapSearch(addressKey, cell), { replace: true, state: historyState() })
+    } else {
+      navigate(speciesMapSearch(addressKey, cell), { state: PANEL_FROM_CLICK })
+    }
+  }
+
+  // Closes the hexagon panel: like Back when a click in this visit added its
+  // entry, else in place. Either way the overview shows again, or the
+  // species card on a species map.
+  function closeCell() {
+    if (historyState()?.panelFromClick) {
+      goBack()
+    } else {
+      navigate(speciesMapSearch(addressKey), { replace: true })
+    }
+  }
+
+  // Switches from a species map's hexagon panel to every species in the same
+  // hexagon on the overview, as a new address entry, so Back returns to the
+  // species panel. It is not marked as a click's entry: the x on the
+  // overview's panel then closes it in place rather than going back to the
+  // species panel.
+  function showAllSpecies() {
+    navigate(speciesMapSearch(null, addressCell))
+  }
+
+  // Opens a species picked from a hexagon's list: its card and map, as a new
+  // address entry, so Back returns to the list.
+  function openSpeciesFromCell(key) {
+    picks.current += 1
+    setSpecies({ key, name: null, id: picks.current })
+    setOpenedFromCell({ key })
+    navigate(speciesMapSearch(key))
+  }
+
   // Keeps the scientific name of a species opened from the address, for the
   // map legend, once its card arrives.
   function cardLoaded(card) {
@@ -131,18 +211,38 @@ export default function App({ search = '', navigate = () => {} }) {
           years={years}
           yearBounds={yearBounds}
           onYearsChange={setYears}
+          selectedCell={addressCell}
+          onCellClick={openCell}
         />
 
         <div className="top-right-controls">
           <SearchBox onSelect={pickSpecies} />
-          {species && (
-            <SpeciesCard
-              requestedKey={species.key}
-              meta={meta}
-              onClose={closeCard}
-              onLoaded={cardLoaded}
-              onOpenDatasets={(key) => navigate(speciesDatasetsSearch(key))}
+          {addressCell && (
+            <HexagonPanel
+              key={addressCell}
+              cell={addressCell}
+              years={years}
+              species={species}
+              onClose={closeCell}
+              onOpenSpecies={openSpeciesFromCell}
+              onShowAllSpecies={showAllSpecies}
             />
+          )}
+          {species && !addressCell && openedFromCell?.key === species.key && (
+            <button type="button" className="text-button panel-back" onClick={goBack}>
+              Back to this hexagon&apos;s species
+            </button>
+          )}
+          {species && (
+            <div className="card-holder" hidden={Boolean(addressCell)}>
+              <SpeciesCard
+                requestedKey={species.key}
+                meta={meta}
+                onClose={closeCard}
+                onLoaded={cardLoaded}
+                onOpenDatasets={(key) => navigate(speciesDatasetsSearch(key))}
+              />
+            </div>
           )}
         </div>
       </div>

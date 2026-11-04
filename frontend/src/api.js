@@ -226,3 +226,26 @@ export function fetchDataset(id, { signal } = {}) {
 export function fetchOverviewHexes(resolution, { signal, years = null } = {}) {
   return fetchJson(`/overview/hexes?${mapParams(resolution, years)}`, signal)
 }
+
+// Fetches the species in one hexagon (/api/hexes/{cell}): its records and
+// species for the years (null for all years, else { from, to }, either end
+// possibly null, as for the maps), and one page of its species, most
+// records first. q filters them by name (sent only when it is not empty),
+// species asks for that species' own records in the hexagon, and offset and
+// limit choose the page.
+export function fetchCell(cell, { years = null, q = '', species = null, offset = 0, limit = 50, signal } = {}) {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (years?.from != null) {
+    params.set('year_from', String(years.from))
+  }
+  if (years?.to != null) {
+    params.set('year_to', String(years.to))
+  }
+  if (q.trim()) {
+    params.set('q', q.trim())
+  }
+  if (species) {
+    params.set('species', species)
+  }
+  return fetchJson(`/hexes/${encodeURIComponent(cell)}?${params}`, signal)
+}

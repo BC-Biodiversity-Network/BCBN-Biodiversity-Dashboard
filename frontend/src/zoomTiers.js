@@ -110,6 +110,17 @@ export const ZOOM_DEAD_ZONE = 0.25
 // where the records are, far enough to see where that is.
 export const FIT_MAX_ZOOM = 8
 
+// The zoom in the middle of a resolution's tier, where the map shows that
+// resolution's hexagons: halfway between the tier's own minZoom and the next
+// tier's (MAX_ZOOM for the finest). Used to open a hexagon named in the
+// address at its own size.
+export function zoomShowingResolution(resolution) {
+  const index = ZOOM_TIERS.findIndex((tier) => tier.resolution === resolution)
+  const low = ZOOM_TIERS[index].minZoom
+  const high = index + 1 < ZOOM_TIERS.length ? ZOOM_TIERS[index + 1].minZoom : MAX_ZOOM
+  return (low + high) / 2
+}
+
 // Works out which tier a zoom level belongs to, ignoring the dead zone.
 // Walks the list from coarsest to finest and keeps the last tier the zoom has
 // reached.

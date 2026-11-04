@@ -6,6 +6,10 @@ import { useCallback, useEffect, useState } from 'react'
 //   (no query)                        the species map, as the site always was
 //   ?species=<key>                    the species map with that species'
 //                                     card open
+//   ?cell=<H3 id>                     the species map with that hexagon's
+//                                     panel open (the species in it)
+//   ?species=<key>&cell=<H3 id>       that species' map with the hexagon's
+//                                     panel open, leading with the species
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
 //       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
@@ -27,10 +31,36 @@ export function readSpeciesKey(search) {
   return new URLSearchParams(search).get('species') || null
 }
 
-// The query string for the species map with a species' card open, or with
-// none (key null).
-export function speciesMapSearch(key) {
-  return key ? `?${new URLSearchParams({ species: key })}` : '?'
+// An H3 hexagon id at resolution 4 to 7, as the map draws them: "8", the
+// resolution, then 13 more hexadecimal digits (the same rule as CELL_ID in
+// backend/api/cells.py).
+const CELL_ID = /^8[4-7][0-9a-f]{13}$/
+
+// The hexagon whose panel is open on the species map, from a query string:
+// its id in lower case, or null for none (or for something that is not a
+// hexagon id).
+export function readCell(search) {
+  const cell = (new URLSearchParams(search).get('cell') || '').trim().toLowerCase()
+  return CELL_ID.test(cell) ? cell : null
+}
+
+// The history state of an address entry added by a click on a hexagon, so
+// the panel's x knows it can go back instead of leaving a dead entry (see
+// App.jsx).
+export const PANEL_FROM_CLICK = { panelFromClick: true }
+
+// The query string for the species map with a species' card open (key, or
+// null for none) and a hexagon's panel open (cell, or null for none).
+export function speciesMapSearch(key, cell = null) {
+  const params = new URLSearchParams()
+  if (key) {
+    params.set('species', key)
+  }
+  if (cell) {
+    params.set('cell', cell)
+  }
+  const text = params.toString()
+  return text ? `?${text}` : '?'
 }
 
 // The orders the list can be sorted in. Relevance only makes sense with a
@@ -141,7 +171,8 @@ export function speciesDatasetsSearch(key) {
 // Keeps track of the address bar's query string. Returns [search, navigate]:
 // navigate(newSearch) puts a new entry in the browser history (so back
 // returns to the old one), or replaces the current one with { replace: true }.
-// The back and forward buttons update search too.
+// state is kept with the entry (window.history.state while it is the current
+// one; null unless given). The back and forward buttons update search too.
 export function useLocationSearch() {
   const [search, setSearch] = useState(() => window.location.search)
 
@@ -154,12 +185,12 @@ export function useLocationSearch() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
-  const navigate = useCallback((newSearch, { replace = false } = {}) => {
+  const navigate = useCallback((newSearch, { replace = false, state = null } = {}) => {
     const url = `${window.location.pathname}${newSearch === '?' ? '' : newSearch}`
     if (replace) {
-      window.history.replaceState(null, '', url)
+      window.history.replaceState(state, '', url)
     } else {
-      window.history.pushState(null, '', url)
+      window.history.pushState(state, '', url)
     }
     setSearch(window.location.search)
   }, [])

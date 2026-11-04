@@ -399,6 +399,167 @@ body {
   color: #1a1a1a;
 }
 
+/* Holds the species card, so the card stays loaded while a hexagon's panel
+   covers it. It sizes like the card itself; hidden overrides display. */
+.card-holder {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.card-holder[hidden] {
+  display: none;
+}
+
+/* The link above a card opened from a hexagon's list, back to that list.
+   Two classes, so it wins over .text-button, which comes later. */
+.text-button.panel-back {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+}
+
+/* The panel of a clicked hexagon: the species in it, in the card's place. */
+.hexagon-title {
+  margin: 0 24px 2px 0;
+  font-size: 16px;
+}
+
+.hexagon-size,
+.hexagon-note,
+.hexagon-sources {
+  margin: 0 0 6px;
+  color: #555;
+}
+
+.hexagon-totals,
+.hexagon-years,
+.hexagon-gbif,
+.hexagon-show-all {
+  margin: 0 0 6px;
+}
+
+.hexagon-show-all {
+  padding-top: 6px;
+  border-top: 1px solid #eee;
+}
+
+/* The bar chart of one species' records per year in a hexagon. */
+.year-bars {
+  margin: 2px 0 6px;
+}
+
+.year-bars svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.year-bars-readout {
+  margin: 0;
+  font-size: 12px;
+  color: #555;
+}
+
+.year-bars-label {
+  font-size: 10px;
+  fill: #666;
+}
+
+.year-bars-axis {
+  stroke: #999;
+  stroke-width: 1;
+}
+
+.year-bars-grid {
+  stroke: #e3e3e3;
+  stroke-width: 1;
+}
+
+.year-bars-table summary {
+  font-size: 12px;
+  color: #184f95;
+  cursor: pointer;
+}
+
+.year-bars-table table {
+  margin-top: 4px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.year-bars-table th,
+.year-bars-table td {
+  padding: 1px 10px 1px 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.hexagon-english {
+  color: #555;
+}
+
+.hexagon-filter {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 5px 8px;
+  border: 1px solid #c8c8c8;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.hexagon-species {
+  margin: 0 0 6px;
+  padding-left: 30px;
+}
+
+.hexagon-row {
+  padding: 2px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.hexagon-chip {
+  margin-left: 6px;
+  cursor: default;
+}
+
+/* The names and chips on the left, wrapping if they must, and the records
+   on the right, on the row's first line. */
+.hexagon-row-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hexagon-row-names {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hexagon-records {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: #333;
+}
+
+.hexagon-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+
+.hexagon-sources {
+  font-size: 11.5px;
+}
+
 .card-close {
   position: absolute;
   top: 6px;

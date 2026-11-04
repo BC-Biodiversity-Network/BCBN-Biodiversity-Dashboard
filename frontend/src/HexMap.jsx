@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Map, { useControl } from 'react-map-gl/maplibre'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
-import { cellToBoundary } from 'h3-js'
+import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
 
 // MapLibre ships its own stylesheet. Without it the map still draws, but the
 // zoom buttons and the attribution line in the corner come out unstyled.
@@ -15,7 +15,7 @@ import { useOverviewHexes, useSpeciesHexes } from './speciesHexes'
 import YearFilter from './YearFilter'
 import { yearsLabel } from './yearRange'
 import {
-  FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonSizeLabel, hexagonWidthPixels, pickResolution,
+  FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonSizeLabel, hexagonWidthPixels, pickResolution, zoomShowingResolution,
 } from './zoomTiers'
 
 // The basemap style. Swap this one line to change providers (the Datasets
@@ -110,6 +110,29 @@ function buildHexagonLayer(id, rows, visible, schemeName, outline) {
   })
 }
 
+// The outline of the hexagon whose panel is open: dark and thicker than the
+// white outline of every hexagon, so it shows on any colour.
+export const SELECTED_OUTLINE = { rgb: [26, 26, 26], widthPixels: 3 }
+
+// The layer that outlines the clicked hexagon (cell, an H3 id). It has its
+// own id for each hexagon, so deck.gl never carries one hexagon's geometry
+// over to another (see buildLayers). It is drawn above the hexagons and is
+// not pickable, so clicks go through to the hexagon under it.
+export function selectedCellLayer(cell) {
+  return new H3HexagonLayer({
+    id: `selected-cell-${cell}`,
+    data: [{ h3Cell: cell }],
+    getHexagon: (hexagon) => hexagon.h3Cell,
+    filled: false,
+    stroked: true,
+    getLineColor: SELECTED_OUTLINE.rgb,
+    getLineWidth: SELECTED_OUTLINE.widthPixels,
+    lineWidthUnits: 'pixels',
+    extruded: false,
+    pickable: false,
+  })
+}
+
 // Builds every layer the map holds.
 //
 // All four overview resolutions from the shipped files (all years) are
@@ -127,10 +150,11 @@ function buildHexagonLayer(id, rows, visible, schemeName, outline) {
 // They are meant to be thrown away and made again; deck.gl keeps the real
 // work, the data already on the graphics card, and finds it again by layer
 // id. Holding on to an old layer object and handing the same one back is what
-// caused hexagons from one zoom tier to show up under another.
+// caused hexagons from one zoom tier to show up under another. The outline of
+// the clicked hexagon (selectedCell, or null) comes last, above the rest.
 export function buildLayers({
   overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
-  overviewFiltered = false, filteredOverview = null,
+  overviewFiltered = false, filteredOverview = null, selectedCell = null,
 }) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
@@ -151,6 +175,10 @@ export function buildLayers({
     layers.push(buildHexagonLayer(
       speciesLayerId(speciesData.specieskey, speciesData.resolution),
       speciesData.rows, true, 'speciesMap', outline))
+  }
+
+  if (selectedCell) {
+    layers.push(selectedCellLayer(selectedCell))
   }
 
   return layers.filter((layer) => layer !== null)
@@ -270,7 +298,14 @@ function apiStatus(hexes, what) {
 // when the overview uses the shipped files and the site looks as it always
 // has), yearBounds is { firstYear, lastYear } from /api/meta or null, and
 // onYearsChange sets a new range (see YearFilter).
-export default function HexMap({ overview, species, years = null, yearBounds = null, onYearsChange = () => {} }) {
+//
+// selectedCell is the H3 id of the hexagon whose panel is open (null for
+// none), outlined on the map, and onCellClick(cell) is called when a
+// hexagon is clicked, on either map.
+export default function HexMap({
+  overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
+  onCellClick = () => {},
+}) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
   const [schemeName, setSchemeName] = useState(DEFAULT_SCHEME)
@@ -289,15 +324,18 @@ export default function HexMap({ overview, species, years = null, yearBounds = n
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
-      overviewFiltered, filteredOverview: overviewHexes.data,
+      overviewFiltered, filteredOverview: overviewHexes.data, selectedCell,
     }),
-    [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data],
+    [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data,
+      selectedCell],
   )
 
   // Moves the map to a newly picked species once its first hexagons arrive:
   // fits them in view beside the card, but no closer than FIT_MAX_ZOOM, so a
   // species with one or two records does not fill the screen. Only the
   // hexagons are used to move the map; no coordinates are shown anywhere.
+  // While a hexagon's panel is open the map stays on the hexagon instead
+  // (the species counts as moved to, so closing the panel does not jump).
   useEffect(() => {
     const map = mapRef.current
     if (!species || !speciesData || speciesData.rows.length === 0 || !map
@@ -305,13 +343,49 @@ export default function HexMap({ overview, species, years = null, yearBounds = n
       return
     }
     fittedFor.current = species.id
+    if (selectedCell) {
+      return
+    }
     const container = map.getContainer()
     map.fitBounds(boundsOfCells(speciesData.rows), {
       padding: fitPadding(container.clientWidth, container.clientHeight),
       maxZoom: FIT_MAX_ZOOM,
       duration: 900,
     })
-  }, [species, speciesData])
+  }, [species, speciesData, selectedCell])
+
+  // Brings the open hexagon into view when it is not on screen, for example
+  // after the back button returns to its panel from another species' map.
+  // A clicked hexagon is on screen already, so the map does not move then.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!selectedCell || !map || !map.loaded()) {
+      return
+    }
+    const [lat, lng] = cellToLatLng(selectedCell)
+    if (!map.getBounds().contains([lng, lat])) {
+      map.easeTo({ center: [lng, lat], duration: 900 })
+    }
+  }, [selectedCell, species?.id])
+
+  // When the page opens with a hexagon in the address (a shared link), moves
+  // the map to it, at a zoom where hexagons of its size are shown.
+  function handleLoad() {
+    const map = mapRef.current
+    if (!selectedCell || !map) {
+      return
+    }
+    const [lat, lng] = cellToLatLng(selectedCell)
+    map.jumpTo({ center: [lng, lat], zoom: zoomShowingResolution(getResolution(selectedCell)) })
+  }
+
+  // Opens the panel of the hexagon under a click, on either map.
+  function handleClick(info) {
+    const cell = info.object?.h3Cell
+    if (cell) {
+      onCellClick(cell)
+    }
+  }
 
   // Called whenever the map moves. Only stores a new resolution when the tier
   // actually changes, and a new outline strength when it moves to another
@@ -385,9 +459,10 @@ export default function HexMap({ overview, species, years = null, yearBounds = n
         mapStyle={BASEMAP_STYLE}
         style={{ width: '100%', height: '100%' }}
         onMove={handleMove}
+        onLoad={handleLoad}
         maxZoom={MAX_ZOOM}
       >
-        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={tooltipFor} />
+        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={tooltipFor} onClick={handleClick} />
       </Map>
     </>
   )

@@ -942,6 +942,37 @@ in 0.08 to 0.27 s once the file has been read once. So no precomputed table is
 needed. The page still uses the shipped files for all years and calls this
 endpoint only when a year range is set (see "Running the front end").
 
+`GET /api/hexes/{cell}?year_from=&year_to=&q=&species=&offset=&limit=` gives
+the species in one hexagon (`backend/api/cells.py`), for the map's side
+panel. The resolution (4 to 7) is read from the H3 id itself ("87..." is
+resolution 7), so no H3 package is needed. It gives the hexagon's `records`
+and `species` for the year range (the same totals as the overview map's
+hover box, including the one record with no specieskey in `records`), with
+`records_no_year_left_out` and `records_outside_years` as above, and one page
+of its species, most records first (`results`: key, Catalogue of Life name
+with its `name_source`, BCSEE English name, shown BCSEE statuses, records),
+`limit` per page (default 50, at most 200) from `offset`. `q` keeps the
+species with any searchable name holding it, as in the species search
+(`matching` says how many, for paging). `species` gives that species on
+its own in the hexagon (`species_asked_for`), for the species map's panel:
+its `records` for the years (0 if none), `records_per_year` (each year with
+records in the range, or every year), `first_year` and `last_year`,
+`records_no_year` (counted in `records` only with no year range, as on the
+maps) and `gbif_keys`, its own key and every key merged into its card, for
+the link to the same records on GBIF; an old merged key gives the kept key
+with `merged_from`. Species the sensitive-species setting hides at this
+resolution are left out of the list, the totals and `species_asked_for`
+(whose names stay but whose records, years, no-year records and GBIF keys
+are then all null); the decision goes
+through `backend/api/sensitive.py`, which hides nothing while
+`BCBN_SENSITIVE_MAX_RES` is empty, the only value allowed for now, so a rule
+decided later covers these lists too. A cell id that is not a hexagon at 4
+to 7, a bad year range, or a filter with fewer than 2 letters or digits gives
+400; an unknown species, 404; a hexagon with no records, zeros. Measured on
+the Mac with the real data, best of three: 29 to 78 ms, including the
+busiest resolution 7 hexagon (3,293 species) and the busiest resolution 4
+hexagon (10,846 species); a page of 50 is about 8.5 KB.
+
 ### The Lunaris datasets API
 
 The Datasets tab (not built yet) lists Lunaris datasets: users find one and
@@ -1120,6 +1151,57 @@ The overview map reads `frontend/public/data/bc_hex_r4.csv.gz` to
 committed. They are plain files, so the overview map works with no API behind
 it; only the species search and the year filter need the API, and say so if
 they cannot reach it.
+
+Clicking a hexagon opens its panel (`frontend/src/HexagonPanel.jsx`, from
+`GET /api/hexes/{cell}`) in the side panel where the species card goes, and
+outlines the hexagon on the map. Both kinds give the hexagon's resolution and
+own area (from `h3-js`). On the overview the panel lists every species in
+the hexagon: its records and species for the chosen years, and its species,
+most records first, 50 at a time, with a box to filter them by name and
+each name opening that species' card and map. On a species map the panel is
+about that species alone ("Turdus migratorius in this hexagon"): its records
+for the chosen years with the first and last year, a small bar chart of
+records per year (`frontend/src/YearBars.jsx`, with the numbers as a table
+under it), the records with no date noted as on the maps, or "No records of
+... in this hexagon"; a link "See these N records on GBIF" (a new tab; see
+below); and a link "Show all M species in this hexagon", which switches to
+the overview for the same hexagon as a new address entry, so Back returns
+to the species panel (the x on the overview's panel then closes it in
+place). When the sensitive-species rule hides the species at this size, the
+panel shows nothing about its records. The GBIF link
+(`frontend/src/gbifLinks.js`) is an occurrence search with
+`checklistKey=7ddf754f-d193-4cc9-b351-99906754a03b` (the Catalogue of Life:
+our species keys are ids in it, and without it GBIF finds nothing),
+`taxonKey` once for the card's key and once for each key merged into it,
+`geometry` the hexagon's outline as WKT (longitude first, closed,
+counter-clockwise), `occurrenceStatus=PRESENT` (as in our download) and
+`year=from,to` when a range is chosen. These parameters were checked
+against GBIF's occurrence API on 2026-11-03 (the robin in one resolution 7
+hexagon in Victoria: GBIF 1,492 records, ours 1,455; 2000 to 2020: GBIF
+372, ours 383; without the checklist, 0). The gbif.org search page reads
+the same parameters: Lucia opened that hexagon's link for 2000 to 2020 by
+hand on 2026-11-03, and it showed Turdus migratorius, the years 2000 to
+2020, one location filter around 48.43N 123.35W and 372 results, the same
+as the API. The panel says GBIF shows its current data,
+without our snapshot's cleaning, so its count may differ a little. The side
+panel shows one thing
+at a time: the hexagon panel when the address has `?cell=<H3 id>` (on a
+species map the card is only covered, and comes back when the panel
+closes), else the species card. History: the first click (no `cell` in the
+address yet) adds an address entry, so Back closes the panel and returns to
+what was there before; further clicks while the panel is open replace that
+entry, so clicking hexagon after hexagon does not fill the history; opening
+a species from the list adds an entry, so Back returns to the list, and the
+card shows a "Back to this hexagon's species" link that does the same; the
+panel's x acts like Back when a click in this visit added the panel's entry
+(marked in the history state), so no dead entry is left, and removes `cell`
+in place when the panel came from a shared link, with nothing to go back
+to; picking a species in the search box replaces the entry, as before, and
+closes the panel. A shared link with
+`cell` opens the map at that hexagon, at a zoom that shows hexagons of its
+size, and while a panel is open the map stays on the hexagon rather than
+moving to a newly opened species. The page tests the history rules on a
+real browser history (`frontend/src/AppHexagon.test.jsx`).
 
 While a species card is open, the map shows that species' own hexagons
 instead of the overview (`GET /api/species/{key}/hexes?res=N`). It uses the same zoom tiers as the overview (resolution 4 to 7,

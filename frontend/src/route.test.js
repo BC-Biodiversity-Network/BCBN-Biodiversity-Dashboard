@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  speciesDatasetsSearch, speciesMapSearch,
+  readCell, speciesDatasetsSearch, speciesMapSearch,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -57,6 +57,18 @@ describe('the page state in the address', () => {
     expect(readView(speciesMapSearch('49JFH'))).toBe('species')
     expect(speciesMapSearch(null)).toBe('?')
     expect(readSpeciesKey('')).toBeNull()
+  })
+
+  it('puts the open hexagon in the address, with or without a species', () => {
+    expect(speciesMapSearch(null, '872800b30ffffff')).toBe('?cell=872800b30ffffff')
+    expect(speciesMapSearch('59PMB', '872800b30ffffff')).toBe('?species=59PMB&cell=872800b30ffffff')
+    expect(readCell('?species=59PMB&cell=872800b30ffffff')).toBe('872800b30ffffff')
+    expect(readSpeciesKey('?species=59PMB&cell=872800b30ffffff')).toBe('59PMB')
+    expect(readView('?cell=872800b30ffffff')).toBe('species')
+    expect(readCell('?cell=872800B30FFFFFF')).toBe('872800b30ffffff')
+    for (const bad of ['', '?cell=', '?cell=abc', '?cell=882800b30ffffff', '?cell=832800bffffffff']) {
+      expect(readCell(bad)).toBeNull()
+    }
   })
 
   it('counts each filter in use once, and clears them all', () => {

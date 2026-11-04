@@ -34,6 +34,15 @@ Endpoints so far:
                     the overview map: records and distinct species per H3
                     hexagon at res (4 to 7), optionally for a year range
                     (see overview.py). A bad res or year range gives 400.
+    GET /api/hexes/{cell}?year_from=&year_to=&q=&species=&offset=&limit=
+                    the species in one H3 hexagon (resolution 4 to 7, read
+                    from the id): its records and species for a year
+                    range, and one page of its species, most records
+                    first, optionally filtered by name, with the records
+                    of the species asked for (see cells.py). Species the
+                    sensitive setting hides are left out (none for now;
+                    see sensitive.py). A bad cell, year range or filter
+                    gives 400, an unknown species 404.
     GET /api/datasets?q=&sort=&catalogue=&final_class=&frontend_group=&year_from=
                      &year_to=&organism=&access=&mappable=&species=&page=&page_size=
                     Lunaris datasets matching the keyword q (title,
@@ -62,6 +71,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 
+from api.cells import DEFAULT_PAGE_SIZE as CELL_PAGE_SIZE
+from api.cells import MAX_PAGE_SIZE as CELL_MAX_PAGE_SIZE
+from api.cells import UnknownSpecies, cell_species
 from api.datasets import (DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, DatasetsRequestError, get_dataset,
                           list_datasets, prepare_datasets)
 from api.db import open_data
@@ -147,6 +159,23 @@ def create_app(settings=None):
             return overview_hexes(request.app.state.data, res, year_from, year_to)
         except HexesRequestError as error:
             raise HTTPException(status_code=400, detail=str(error))
+
+    @app.get("/api/hexes/{cell}")
+    def hexagon(cell: str, request: Request, year_from: int | None = None, year_to: int | None = None,
+                q: str | None = Query(None, max_length=200), species: str | None = Query(None, max_length=50),
+                offset: int = Query(0, ge=0),
+                limit: int = Query(CELL_PAGE_SIZE, ge=1, le=CELL_MAX_PAGE_SIZE)):
+        """Return the species in one hexagon, most records first, a page at
+        a time, for the years year_from to year_to if either is given (see
+        cells.py). species is a species key whose records in the hexagon
+        are given on their own."""
+        try:
+            return cell_species(request.app.state.data, cell, year_from, year_to, q, species,
+                                offset, limit)
+        except (HexesRequestError, QueryTooShort) as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except UnknownSpecies:
+            raise unknown_key(species)
 
     @app.get("/api/search")
     def species_search(request: Request, q: str = Query(..., max_length=200),

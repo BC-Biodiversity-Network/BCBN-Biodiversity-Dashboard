@@ -980,15 +980,19 @@ It stops if the file already exists (`--replace` writes over it).
   gulfs and mountain ranges (GeoNames feature class and code, listed in
   `LARGE_AREA_CODES`), which the page names but does not draw. A place
   pass 1 marked as an author's institution (`role` `affiliation`) is
-  neither drawn nor named. Since 2026-11-03 no looked-up place is drawn
-  (`drawable_place`): the lookup picks each name's match on its own,
-  without the record's context, and some picks were wrong (the Columbia
-  Basin placed in Illinois), so the map shows only the record's own boxes
-  and points until a lookup that uses the record's context has been
-  checked. The page lists the names as text. So `location_type` is never
-  `looked_up_place` for now, and `mappable` is true when the record has a
-  box that is drawn or a point (1,306 of the 3,578: 752 bc_data, 554
-  pending).
+  neither drawn nor named. No looked-up place is drawn or shown
+  (`drawable_place` is always false): this lookup picks each name's match
+  on its own, without the record's context, and some picks were wrong (the
+  Columbia Basin placed in Illinois), and the context-aware lookup tried
+  after it did not pass its checks (see "The place lookup (tried, not
+  used)" below). `looked_up_places` stays in the export, but the site does
+  not use it. So `location_type` is never `looked_up_place`, and
+  `mappable` is true when the record has a box that is drawn or a point
+  (1,306 of the 3,578: 752 bc_data, 554 pending). The dataset page shows
+  the record's own place list instead (`places`, as harvested, each entry
+  unchanged) under "Places listed in the record", whether or not the
+  record also has a box or point: 710 of the 3,578 have one (515 bc_data,
+  195 pending).
   Each dataset uses only its own location, never another copy's.
   `box_swapped`, `box_zero_width` and `box_most_of_world` flag odd boxes.
   The page does not draw those.
@@ -1056,6 +1060,47 @@ start of the abstract (`abstract_preview`).
 `GET /api/datasets/{id}` returns one dataset with every column, including
 its location. The id of another copy gives the copy shown, with
 `requested_copy` set. Any other id gives 404.
+
+### The place lookup (tried, not used)
+
+From 2026-11-03 a new place lookup was tried, to draw a point for the place
+names in a record that has no box or point of its own: rules first
+(`place_lookup_rules.py`), then a model on Fir that chose, for each name,
+one listed GeoNames place or none, with a quote from the record, asked
+twice with the places in two orders (`llm/place_pick_prompt.py`, prompt
+P1; `llm/place_pick_prepare.py`, `llm/place_pick_run.py`,
+`llm/fir/place_pick.sbatch` and `place_pick_submit.sh`), then checks on
+the Mac (`place_pick_checks.py`: both orders agree, the quote is in the
+record) and drawing rules (`place_drawing_rules.py`: no large areas,
+streams, parks, lakes or area features too big for one point;
+`place_rules_lakes_never_drawn.csv`). The bar was that every point drawn
+must be right.
+
+It did not pass. Of the 1,455 names asked, 349 would have been drawn, and
+a hand-check draft of all 349 read 235 as right, 97 as wrong and 17 as
+unsure. The wrong ones were mostly towns named for another reason (the
+AAFC centres in every Annual Crop Inventory record), national parks drawn
+through a town or summit of the same name, large areas that GeoNames
+codes as one point (an archipelago, a strait, a plateau), and another
+place of the same name. No group of the drawn names was both large and
+free of errors (`place_pick_groups.py`). So nothing it finds is drawn or
+shown.
+
+The code and its tests are kept, unused: nothing in the export, the API
+or the site calls them. The details, counts, hand-check sample and
+reports are in `Results/lunaris_place_lookup_2026-11/` (start with
+`README.txt` and `stage3/summary.txt`); the run folders and inputs are in
+`backend/data/lunaris_place_lookup/`, which is not in git.
+
+**A later option: coordinates written in a record's own text.** Some
+records give coordinates in their description or place list ("Riske
+Creek (52.0025°N, 122.4116°W)"). `record_text_coordinates.py` (report
+only) found 42 points in 34 shown datasets; 17 of those datasets have no
+box or point the map draws and would gain a map. These come from the
+authors, not from a lookup, but some are a weather station, the end of a
+species' range or one site of many, so each point would have to be
+checked by hand before it is drawn (`Results/lunaris_place_lookup_2026-11/text_coordinates/summary.txt`).
+Not done for now.
 
 ## Running the front end
 

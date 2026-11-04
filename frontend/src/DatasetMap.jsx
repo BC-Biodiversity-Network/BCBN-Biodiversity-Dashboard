@@ -7,8 +7,8 @@ import { BASEMAP_STYLE, INITIAL_VIEW_STATE } from './HexMap'
 
 // The colour of what the map draws: only the record's own boxes and points,
 // in the site's blue (boxes that match all of BC or all of Canada dashed).
-// The places our lookup found are not drawn while the lookup is redone; the
-// Location section lists them as text.
+// Place names are never drawn: the Location section lists the record's own
+// place list as text.
 const RECORD_COLOUR = '#184f95'
 
 // The closest the map zooms in when fitting a dataset, so a single point or

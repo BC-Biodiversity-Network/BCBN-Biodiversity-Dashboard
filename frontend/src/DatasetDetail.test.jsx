@@ -352,13 +352,40 @@ describe('the dataset details', () => {
     expect(container.textContent).not.toMatch(/Issued/)
   })
 
-  it('lists places from our lookup as text only, with no "(not in BC)" label and no GeoNames credit', () => {
+  it('lists the record\'s own places under "Places listed in the record", as given, after the location notes', () => {
+    const { container } = show(eagles({ places: ['Vancouver; British Columbia; Canada', 'North America'] }))
+    const section = [...container.querySelectorAll('.dataset-section')]
+      .find((element) => element.querySelector('h3').textContent === 'Location')
+    expect(section.querySelector('h4').textContent).toBe('Places listed in the record')
+    expect([...section.querySelectorAll('.dataset-places li')].map((li) => li.textContent)).toEqual([
+      'Vancouver; British Columbia; Canada', 'North America'])
+    expect(locationTexts(container)[0]).toMatch(/^Extent: whole of BC/)
+  })
+
+  it('says only that there is no box or point when the record gives just a place list', () => {
+    const { container } = show(eagles({ boxes: [], places: ['Kamloops; British Columbia; Canada'] }))
+    expect(locationTexts(container)).toEqual(['No box or point given in the record.'])
+    expect(container.querySelector('.dataset-places').textContent).toBe('Kamloops; British Columbia; Canada')
+  })
+
+  it('has no place list heading when the record has none, and never shows names from the lookup', () => {
     const { container } = show(eagles({ boxes: [], looked_up_places: [
       { name: 'Columbia Basin', kind: 'outside_bc', role: 'study_location', latitude: 41.8, longitude: -87.6,
         large_area: false }] }))
-    expect(locationTexts(container)).toEqual(["Columbia Basin (place named in the record; BCBN's lookup is being " +
-      'redone, so it is not drawn).'])
-    expect(container.textContent).not.toMatch(/not in BC|GeoNames/)
+    expect(container.querySelector('h4')).toBeNull()
+    expect(locationTexts(container)).toEqual(['No location given in the record.'])
+    expect(container.textContent).not.toMatch(/Columbia Basin|lookup|GeoNames/)
+  })
+
+  it('folds a long place list after ten entries, with a button to show them all', () => {
+    const places = Array.from({ length: 13 }, (_, i) => `Lake ${i + 1}`)
+    const { container } = show(eagles({ places }))
+    const items = () => [...container.querySelectorAll('.dataset-places li')].map((li) => li.textContent)
+    expect(items()).toHaveLength(10)
+    expect(locationTexts(container).at(-1)).toBe('and 3 more. Show all')
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    expect(items()).toEqual(places)
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy()
   })
 
   it('lists the linked species between Location and Also listed in, each linked to its card', () => {

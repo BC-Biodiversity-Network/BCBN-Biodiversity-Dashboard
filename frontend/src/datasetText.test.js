@@ -245,43 +245,34 @@ describe('where the location comes from', () => {
     expect(texts(one)).toEqual(['Location: a point from the record (latitude 51.65, longitude -128.1).'])
   })
 
-  it('never draws looked-up places, and lists them once each as text with why, wherever the lookup put them', () => {
-    const location = describeLocation(dataset({
-      looked_up_places: [place('Kamloops', 'in_bc'), place('Columbia Basin', 'outside_bc'),
-        place('British Columbia', 'in_bc', { large: true }), place('Canada', 'contains_bc', { large: true }),
-        place('Canada', 'contains_bc', { large: true }),
-        { name: 'Nowhere Creek', kind: null, role: 'study_location', latitude: null, longitude: null }],
-    }))
-    expect([location.boxes, location.matchingBoxes, location.points]).toEqual([[], [], []])
-    expect(location).not.toHaveProperty('places')
-    expect(texts(location)).toEqual(['Kamloops, Columbia Basin, British Columbia, Canada and Nowhere Creek (places ' +
-      "named in the record; BCBN's lookup is being redone, so they are not drawn)."])
-    expect(texts(location).join(' ')).not.toMatch(/not in BC|GeoNames/)
+  it('gives the record\'s own place list unchanged, whether or not it has a box or point', () => {
+    const places = ['Vancouver; British Columbia; Canada', 'Lac du Bois Grasslands Protected Area', 'Global']
+    const withBox = describeLocation(dataset({ boxes: [{ w: -124, e: -123, s: 49, n: 50 }], places }))
+    expect(withBox.places).toEqual(places)
+    expect(withBox.boxes).toHaveLength(1)
+    const withPoint = describeLocation(dataset({ points: [{ lat: 49, lon: -123 }], places: ['Bamfield'] }))
+    expect(withPoint.places).toEqual(['Bamfield'])
+    expect(describeLocation(dataset({})).places).toEqual([])
+    expect(describeLocation(dataset({ places: null })).places).toEqual([])
   })
 
-  it('lists one place in the singular, and never names an author\'s institution', () => {
-    const location = describeLocation(dataset({
-      looked_up_places: [place('Columbia Basin', 'outside_bc'),
-        place('University of Manitoba', 'outside_bc', { role: 'affiliation' })],
-    }))
-    expect(texts(location)).toEqual(["Columbia Basin (place named in the record; BCBN's lookup is being redone, so it " +
-      'is not drawn).'])
+  it('leaves out only empty entries of the place list', () => {
+    expect(describeLocation(dataset({ places: ['', '  ', ' Kamloops ', 'BC'] })).places).toEqual([' Kamloops ', 'BC'])
   })
 
-  it('treats a record whose only places are authors\' institutions as having no location', () => {
+  it('never shows or draws place names from the lookup', () => {
     const location = describeLocation(dataset({
-      looked_up_places: [place('University of Victoria', 'in_bc', { role: 'affiliation' })] }))
+      looked_up_places: [place('Kamloops', 'in_bc'), place('Columbia Basin', 'outside_bc')] }))
+    expect([location.boxes, location.matchingBoxes, location.points, location.places]).toEqual([[], [], [], []])
     expect(location.notes).toEqual(['No location given in the record.'])
+    expect(JSON.stringify(location)).not.toMatch(/Kamloops|Columbia Basin|lookup/)
   })
 
-  it('lists looked-up places only when the record itself gives no solid box and no point', () => {
-    const withBox = describeLocation(dataset({
-      boxes: [{ w: -124, e: -123, s: 49, n: 50 }], looked_up_places: [place('Kamloops', 'in_bc')] }))
-    expect(texts(withBox).join(' ')).not.toMatch(/Kamloops/)
-    const standardBox = describeLocation(dataset({
-      boxes: [{ w: -139.5, e: -113.5, s: 48, n: 60 }], looked_up_places: [place('Kamloops', 'in_bc')] }))
-    expect(standardBox.matchingBoxes).toHaveLength(1)
-    expect(texts(standardBox)[1]).toMatch(/^Kamloops \(place named in the record;/)
+  it('says there is no box or point when the record gives only a place list', () => {
+    const location = describeLocation(dataset({ places: ['Kamloops; British Columbia; Canada'] }))
+    expect(location.notes).toEqual(['No box or point given in the record.'])
+    const withBox = describeLocation(dataset({ boxes: [{ w: -124, e: -123, s: 49, n: 50 }], places: ['Kamloops'] }))
+    expect(texts(withBox).join(' ')).not.toMatch(/No box or point|No location/)
   })
 
   it('says when there is no location at all', () => {

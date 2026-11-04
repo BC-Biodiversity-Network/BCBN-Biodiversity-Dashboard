@@ -404,16 +404,6 @@ const NOT_DRAWN_BECAUSE = {
   most_of_world: 'it covers most of the world, so it does not show where the data is',
 }
 
-// The items of a list once each, in order.
-function once(items) {
-  return [...new Set(items)]
-}
-
-// The items in words: "A and B", "A, B and C".
-function listed(items) {
-  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
-}
-
 // The note for the boxes (as harvested) that match BC's rectangle or the
 // Canada-wide extent: what they cover, with their numbers, and, when other
 // records of the same catalogue have exactly the same box (sharedBy, the
@@ -430,7 +420,7 @@ function matchingBoxNote(kind, boxes, source, sharedBy) {
 
 // Works out what the map draws for a dataset and what the page says about
 // where its location comes from. Returns { boxes, matchingBoxes, points,
-// notes }:
+// notes, places }:
 //   boxes   the harvested boxes drawn with a solid line (any box that is
 //           not one of the kinds below)
 //   matchingBoxes  the harvested boxes that match BC's rectangle or the
@@ -440,11 +430,12 @@ function matchingBoxNote(kind, boxes, source, sharedBy) {
 //   notes   the sentences to show, in order: text, or for a sentence that
 //           lists boxes or points, a coordinates note (see coordinatesNote
 //           and noteText)
-// The map draws only the record's own boxes and points. The place names our
-// lookup found are listed as text only, while the lookup is redone (it
-// picked each GeoNames match without the record's context, and some were
-// wrong, such as the Columbia Basin placed in Illinois).
-// Places pass 1 marked as an author's institution are never drawn or named.
+//   places  the record's own place list, as the catalogue gives it (the
+//           harvested places field, each entry unchanged; empty entries
+//           left out), shown as text under "Places listed in the record"
+// The map draws only the record's own boxes and points. Place names found
+// in the text, and anything from BCBN's place lookup, are never shown: the
+// lookup did not pass its checks (see the README).
 export function describeLocation(dataset) {
   const source = dataset.source_name || 'the source catalogue'
   const boxes = dataset.boxes ?? []
@@ -480,22 +471,10 @@ export function describeLocation(dataset) {
     notes.push(coordinatesNote(`Location: ${points.length} points from the record:`, 'point', points, '.'))
   }
 
-  // The place names our lookup found are listed only when the record itself
-  // gives no solid box and no point, and never an author's institution.
-  const named = drawn.length === 0 && points.length === 0
-    ? once((dataset.looked_up_places ?? []).filter((place) => place.role !== 'affiliation')
-      .map((place) => place.name))
-    : []
-  if (named.length === 1) {
-    notes.push(`${named[0]} (place named in the record; BCBN's lookup is being redone, so it is not drawn).`)
-  } else if (named.length > 1) {
-    notes.push(`${listed(named)} (places named in the record; BCBN's lookup is being redone, so they are not ` +
-      'drawn).')
+  const places = (dataset.places ?? []).filter((place) => typeof place === 'string' && place.trim() !== '')
+  if (boxes.length === 0 && points.length === 0) {
+    notes.push(places.length > 0 ? 'No box or point given in the record.' : 'No location given in the record.')
   }
 
-  if (boxes.length === 0 && points.length === 0 && named.length === 0) {
-    notes.push('No location given in the record.')
-  }
-
-  return { boxes: drawn, matchingBoxes, points, notes }
+  return { boxes: drawn, matchingBoxes, points, notes, places }
 }

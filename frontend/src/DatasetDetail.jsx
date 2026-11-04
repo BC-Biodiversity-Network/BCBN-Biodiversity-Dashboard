@@ -241,7 +241,39 @@ function CoordinatesNote({ note }) {
   )
 }
 
-// Where the dataset's location comes from, in words (see describeLocation).
+// How many entries of a record's place list are shown before the rest are
+// folded behind a "Show all" button.
+const SHOWN_PLACES = 10
+
+// The record's own place list, as the catalogue gives it, one entry per
+// line, under "Places listed in the record". A long list is folded after
+// SHOWN_PLACES entries.
+function RecordPlaces({ places }) {
+  const [all, setAll] = useState(false)
+  if (places.length === 0) {
+    return null
+  }
+  const shown = all ? places : places.slice(0, SHOWN_PLACES)
+  return (
+    <>
+      <h4>Places listed in the record</h4>
+      <ul className="dataset-places">
+        {shown.map((place, i) => <li key={i}>{place}</li>)}
+      </ul>
+      {places.length > SHOWN_PLACES && (
+        <p>
+          {!all && `and ${(places.length - SHOWN_PLACES).toLocaleString()} more. `}
+          <button type="button" className="text-button" onClick={() => setAll(!all)} aria-expanded={all}>
+            {all ? 'Show less' : 'Show all'}
+          </button>
+        </p>
+      )}
+    </>
+  )
+}
+
+// Where the dataset's location comes from, in words (see describeLocation),
+// then the record's own place list.
 function Location({ location }) {
   return (
     <section className="dataset-section">
@@ -249,6 +281,7 @@ function Location({ location }) {
       {location.notes.map((note, i) => (typeof note === 'string'
         ? <p key={i}>{note}</p>
         : <CoordinatesNote key={i} note={note} />))}
+      <RecordPlaces places={location.places} />
     </section>
   )
 }

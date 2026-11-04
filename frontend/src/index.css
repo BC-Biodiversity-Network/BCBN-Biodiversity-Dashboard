@@ -1182,6 +1182,17 @@ body {
   margin: 0 0 6px;
 }
 
+.dataset-section h4 {
+  margin: 8px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dataset-places {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
 .dataset-subjects {
   display: flex;
   flex-wrap: wrap;

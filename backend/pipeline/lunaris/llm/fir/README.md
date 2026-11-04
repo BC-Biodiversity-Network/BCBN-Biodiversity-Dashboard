@@ -952,6 +952,145 @@ Copy back (Mac, from `backend/`):
 
     scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/runs/harvest_2026_10_20_qwen3.6-35b-a3b_nofa' data/lunaris_llm_runs/fir_harvest_2026_10_20_qwen3.6-35b-a3b_nofa
 
+## 11. Place lookup: which place a record means (prompt P1, qwen3.6:35b-a3b)
+
+**Not used.** This lookup was run on 2026-11-03 and did not pass its checks, so
+nothing it finds is drawn or shown; the code is kept for reference (see "The
+place lookup (tried, not used)" in the main README). There is no need to
+run it again.
+
+Planned 2026-11-03 (Results/lunaris_place_lookup_2026-11/README.txt). For
+each place name the rules could not settle (`pipeline/lunaris/place_lookup_rules.py`,
+on the Mac), the model says which listed GeoNames place the record means, or
+that none should be used and why, with a quote copied from the record
+(`llm/place_pick_prompt.py`). Each record is asked twice, with each name's
+places in the lookup's order and in a shuffled order. Nothing is drawn on
+the map from these answers until they are checked on the Mac (stage 3) and
+a hand-checked sample passes.
+
+The job (`fir/place_pick.sbatch`, submitted by `fir/place_pick_submit.sh`)
+uses the same setup as the BC filter (`fir/job_setup.sh`), the same model
+store (`$B/bcf/models/qwen3.6-35b-a3b`) and flash attention off for
+qwen3.6 models, recorded in the run folder. It needs only pandas on the
+node: no GeoNames table and no shapely. Its code has its own folder,
+`$B/places/code`, so it never touches `$B/bcf/code`. Every prompt is
+rebuilt on Fir and checked against the fingerprint made on the Mac before
+anything is asked.
+
+**Size.** 731 records, 1,496 prompts (two orders, at most 8 names each),
+1,750 tokens on average and 6,700 at most (well inside the 16,384-token
+context). At about 3 to 4 s a prompt that is about 1.5 hours of 3g.40gb
+slice time; with `PARTS=4`, about 25 minutes a part plus 1 to 2 minutes to
+copy and load the model.
+
+### A. Copy the code and the input
+
+On Fir, once:
+
+    mkdir -p /scratch/$USER/lunaris_llm/places/code /scratch/$USER/lunaris_llm/places/inputs
+
+On the Mac, from `backend/`:
+
+    scp -r pipeline/lunaris/* 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/code/'
+    scp -r data/lunaris_place_lookup/fir_inputs/places_p1 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/inputs/'
+
+### B. A dry run, then a 2-record test (Fir)
+
+    export B=/scratch/$USER/lunaris_llm
+    chmod +x $B/places/code/llm/fir/*.sh
+    DRY_RUN=1 $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+    squeue --me
+    cat $B/places/runs/places_p1_qwen3.6-35b-a3b/logs/place-pick_*_0.out
+
+The dry run asks nothing. Its log should say `1496 prompts, all identical to
+the Mac's fingerprints`, `dry run: would ask 1496 prompts` and `exit 0`.
+Then the test, which goes to its own folder (`..._limit2`):
+
+    LIMIT=2 $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+    R=$B/places/runs/places_p1_qwen3.6-35b-a3b_limit2
+    cat $R/logs/place-pick_*_0.out
+    cat $R/report.txt
+
+Check, as in section 9 B: the submit line says `flash attention off`, the
+job log has `runner   flash attention: off (asked for off)`, `model
+loaded ..., 100% on the GPU`, every prompt `ok`, and `exit 0`. Send Claude
+`$R/answers.jsonl` (or copy the folder back as in D) before the full run.
+
+### B2. A test on chosen records (Fir)
+
+`ONLY_IDS=<file>` asks only the records whose dataset ids the file lists
+(one per line; lines starting with `#` are skipped), instead of the first
+`LIMIT`. The records keep their numbers, so their prompts are exactly the
+full run's. The run goes to its own folder, named after the file
+(`..._only-hard_cases`); give `LIMIT` or `ONLY_IDS`, not both.
+`test_lists/hard_cases.txt` has six hard records (14 prompts): Susan Lake at
+Recreation Site, Coal Creek (COL001), Williams Lake with Riske Creek, the
+shoreline mapping record (James Bay, Banks Island), Mammal Occupancy - Yoho
+(Yoho National Park from the contains search) and a Bamfield record (one
+place of the name).
+
+On Fir, once:
+
+    mkdir -p /scratch/$USER/lunaris_llm/places/inputs/test_lists
+
+On the Mac, from `backend/` (the three changed code files and the list):
+
+    scp pipeline/lunaris/llm/place_pick_run.py 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/code/llm/'
+    scp pipeline/lunaris/llm/fir/place_pick_submit.sh pipeline/lunaris/llm/fir/place_pick.sbatch 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/code/llm/fir/'
+    scp data/lunaris_place_lookup/fir_inputs/test_lists/hard_cases.txt 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/inputs/test_lists/'
+
+On Fir, a dry run first, then the test:
+
+    export B=/scratch/$USER/lunaris_llm
+    chmod +x $B/places/code/llm/fir/*.sh
+    L=$B/places/inputs/test_lists/hard_cases.txt
+    R=$B/places/runs/places_p1_qwen3.6-35b-a3b_only-hard_cases
+    DRY_RUN=1 ONLY_IDS=$L $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+    squeue --me
+    cat $R/logs/place-pick_*_0.out
+
+The dry run's log should say `6 records, part 0 of 1 has 6 (14 prompts, all
+identical to the Mac's fingerprints)`, `dry run: would ask 14 prompts` and
+`exit 0`. Then:
+
+    ONLY_IDS=$L $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+    squeue --me
+    cat $R/logs/place-pick_*_0.out
+    cat $R/report.txt
+
+Check the same lines as in B, then copy the folder back (as in D, with this
+folder's name) for Claude.
+
+### C. The full run (Fir), only once B is clean
+
+    PARTS=4 $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+
+Watch it (1,496 prompts in all; each line of a progress file is one prompt):
+
+    R=$B/places/runs/places_p1_qwen3.6-35b-a3b
+    squeue --me
+    wc -l $R/progress_part*.jsonl
+    tail -2 $R/logs/place-pick_*_*.out
+    cat $R/logs/failures_part*.txt 2>/dev/null | tail -20
+
+The exit codes and what to do are those of section 9 C (exit 4: some
+prompts failed; resubmit that part and only they are asked again).
+Resubmit only the parts that need it, with the same PARTS:
+
+    PARTS=4 ONLY=1,3 $B/places/code/llm/fir/place_pick_submit.sh qwen3.6:35b-a3b places_p1
+
+The last part to finish writes `answers.jsonl`, `failed.csv` and
+`report.txt` once every prompt has a result.
+
+### D. Copy the run back (Mac, from `backend/`)
+
+    mkdir -p data/lunaris_place_lookup/fir_runs
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/runs/places_p1_qwen3.6-35b-a3b' data/lunaris_place_lookup/fir_runs/
+
+The test of B2 the same way:
+
+    scp -r 'songyanf@fir.alliancecan.ca:/scratch/songyanf/lunaris_llm/places/runs/places_p1_qwen3.6-35b-a3b_only-hard_cases' data/lunaris_place_lookup/fir_runs/
+
 ## When something goes wrong
 
 - **"is being worked on by job N".** Another job holds the batch. If that job

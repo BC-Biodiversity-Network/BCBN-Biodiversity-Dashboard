@@ -52,8 +52,9 @@ describe('the Datasets map', () => {
       'Solid line: extent from the CanWIN record', 'Point from the CanWIN record'])
   })
 
-  it('has no key and nothing drawn when the record\'s only location is a looked-up place', () => {
-    const location = describeLocation(dataset({ looked_up_places: [COLUMBIA_BASIN] }))
+  it('has no key and nothing drawn when the record gives only a place list (or only looked-up places)', () => {
+    const location = describeLocation(dataset({ places: ['Kamloops; British Columbia; Canada'],
+      looked_up_places: [COLUMBIA_BASIN] }))
     const { container } = render(<DatasetMap location={location} datasetId="a" sourceName="CanWIN" />)
     expect(container.querySelector('.dataset-map-key')).toBeNull()
     for (const id of ['dataset-boxes', 'dataset-matching-boxes', 'dataset-points']) {

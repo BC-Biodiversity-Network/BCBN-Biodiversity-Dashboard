@@ -73,10 +73,10 @@ function stubCard(card) {
 
 // Shows the card for key and waits until it has loaded; returns the card
 // element and the close function given to it.
-async function showCard(card, { key = card.specieskey, meta = META } = {}) {
+async function showCard(card, { key = card.specieskey, meta = META, onOpenRank = vi.fn() } = {}) {
   stubCard(card)
   const onClose = vi.fn()
-  render(<SpeciesCard requestedKey={key} meta={meta} onClose={onClose} />)
+  render(<SpeciesCard requestedKey={key} meta={meta} onClose={onClose} onOpenRank={onOpenRank} />)
   await screen.findByRole('heading', { level: 2 })
   return { panel: screen.getByRole('complementary'), onClose }
 }
@@ -120,18 +120,34 @@ describe('the top of the card', () => {
     expect(header.querySelector('.card-common-name').textContent).toBe('American RobinCommon name from BCSEE')
   })
 
-  it('each classification name opens its rank on hover, with the keyboard and on a tap', async () => {
-    await showCard(makeCard())
-    const aves = screen.getByRole('button', { name: 'Class: Aves' })
-    fireEvent.mouseEnter(aves.parentElement)
-    expect(screen.getByRole('tooltip').textContent).toBe('Class')
-    fireEvent.mouseLeave(aves.parentElement)
-    expect(screen.queryByRole('tooltip')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Kingdom: Animalia' }))
-    expect(screen.getByRole('tooltip').textContent).toBe('Kingdom')
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Kingdom: Animalia' }), { key: 'Escape' })
-    act(() => screen.getByRole('button', { name: 'Genus: Turdus' }).focus())
-    expect(screen.getByRole('tooltip').textContent).toBe('Genus')
+  it('links each classification name to its rank, named on hover, opening it in place of following the link',
+    async () => {
+      const onOpenRank = vi.fn()
+      await showCard(makeCard(), { onOpenRank })
+      const aves = screen.getByRole('link', { name: 'Class Aves' })
+      expect(aves.getAttribute('title')).toBe('Class Aves')
+      expect(aves.getAttribute('href')).toBe('?rank=class&kingdom=Animalia&phylum=Chordata&class=Aves')
+      const turdus = screen.getByRole('link', { name: 'Genus Turdus' })
+      expect(turdus.querySelector('i').textContent).toBe('Turdus')
+      fireEvent.click(aves)
+      expect(onOpenRank).toHaveBeenCalledWith({ rank: 'class', name: 'Aves', path: [
+        { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+      ] })
+    })
+
+  it('shows a rank GBIF leaves out as such, not as a link, and keeps it in the path of the ranks below', async () => {
+    const onOpenRank = vi.fn()
+    const { panel } = await showCard(makeCard({ taxonomy: { kingdom: 'Animalia', phylum: 'Arthropoda',
+      class: 'Insecta', order: null, family: 'Apidae', genus: null } }), { onOpenRank })
+    const line = panel.querySelector('.card-taxonomy')
+    expect(line.textContent).toBe('Animalia › Arthropoda › Insecta › no order › Apidae › no genus')
+    expect([...line.querySelectorAll('.rank-missing')].map((el) => el.textContent)).toEqual(['no order', 'no genus'])
+    expect(line.querySelectorAll('a')).toHaveLength(4)
+    const apidae = screen.getByRole('link', { name: 'Family Apidae' })
+    expect(apidae.getAttribute('href')).toBe('?rank=family&kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae')
+    fireEvent.click(apidae)
+    expect(onOpenRank.mock.calls[0][0].path[3]).toEqual({ rank: 'order', name: null })
   })
 
   it('says "common name", never "English name", and no source lines in the card body', async () => {

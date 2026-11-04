@@ -422,6 +422,119 @@ describe('the clicked hexagon', () => {
   })
 })
 
+describe('a rank map', () => {
+  // The genus Turdus, as App gives it (with the id that changes each time
+  // it is opened).
+  const TURDUS = { rank: 'genus', name: 'Turdus', id: 1, path: [
+    { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+    { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
+  ] }
+  const TURDUS_ID = 'Animalia|Chordata|Aves|Passeriformes|Turdidae|Turdus|genus'
+  const TURDUS_PATH = 'kingdom=Animalia&phylum=Chordata&class=Aves&order=Passeriformes&family=Turdidae&genus=Turdus'
+
+  // A pretend API answer for the rank's map, in the overview's shape.
+  function rankAnswer(res, yearsCounted = null) {
+    return {
+      rank: 'genus', name: 'Turdus', res, years_counted: yearsCounted, hexagon_count: 2,
+      records_shown: 965537, records_no_year_left_out: yearsCounted ? 18 : 0,
+      cells: ['8428c9bffffffff', '842800bffffffff'], occurrences: [965000, 537], distinct_species: [3, 1],
+    }
+  }
+
+  function renderRank(props = {}) {
+    return render(<HexMap overview={OVERVIEW} species={null} rank={TURDUS} rankId={TURDUS_ID} {...props} />)
+  }
+
+  it('shows only the rank\'s species, with the overview\'s toggle, colours and bins, and names the rank', async () => {
+    const urls = stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1])) }))
+    renderRank()
+    await settle()
+    expect(urls()).toEqual([`/api/ranks/genus/hexes?res=4&${TURDUS_PATH}`])
+    expect(visibleLayers()).toEqual([`rank-${TURDUS_ID}-all-r4`])
+    const layer = () => mapState.layers.find((l) => l.id === `rank-${TURDUS_ID}-all-r4`)
+    expect(layer().props.updateTriggers.getFillColor).toBe('species')
+    const caption = document.querySelector('.legend-caption')
+    expect(caption.textContent).toBe('Species of Turdus per hexagon')
+    expect(caption.querySelector('i').textContent).toBe('Turdus')
+    expect([...document.querySelectorAll('.legend-edge')].map((el) => el.textContent))
+      .toEqual(['1', '3', '10', '30', '100', '300', '1K', '3K+'])
+    expect(document.querySelector('.legend-summary').textContent).toBe('965,537 records in 2 hexagons')
+
+    act(() => screen.getByRole('button', { name: 'Records' }).click())
+    expect(layer().props.updateTriggers.getFillColor).toBe('records')
+    expect(document.querySelector('.legend-caption').textContent).toBe('Records of Turdus per hexagon')
+    expect([...document.querySelectorAll('.legend-edge')].map((el) => el.textContent))
+      .toEqual(['1', '10', '100', '1K', '10K', '100K', '1M+'])
+    // One answer colours both views.
+    expect(urls()).toHaveLength(1)
+  })
+
+  it('says which rank is shown, with an x back to all species', async () => {
+    stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1])) }))
+    const onCloseRank = vi.fn()
+    renderRank({ onCloseRank })
+    await settle()
+    const label = document.querySelector('.rank-showing')
+    expect(label.textContent).toBe('Showing genus Turdus×')
+    expect(label.querySelector('i').textContent).toBe('Turdus')
+    act(() => screen.getByRole('button', { name: 'Stop showing this rank and show all species' }).click())
+    expect(onCloseRank).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a family in plain type', async () => {
+    stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1])) }))
+    const family = { rank: 'family', name: 'Turdidae', id: 1, path: TURDUS.path.slice(0, 5) }
+    render(<HexMap overview={OVERVIEW} species={null} rank={family} rankId="Turdidae|family" />)
+    await settle()
+    expect(document.querySelector('.rank-showing').textContent).toBe('Showing family Turdidae×')
+    expect(document.querySelector('.legend-caption').textContent).toBe('Species of Turdidae per hexagon')
+    expect(document.querySelector('.rank-showing i')).toBeNull()
+  })
+
+  it('maps the rank for a year range, with the no-date note', async () => {
+    const urls = stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1]), [2000, 2020]) }))
+    renderRank({ years: { from: 2000, to: 2020 } })
+    await settle()
+    expect(urls()).toEqual([`/api/ranks/genus/hexes?res=4&year_from=2000&year_to=2020&${TURDUS_PATH}`])
+    expect(visibleLayers()).toEqual([`rank-${TURDUS_ID}-2000-2020-r4`])
+    expect(document.querySelector('.legend-summary').textContent).toBe('965,537 records in 2 hexagons, 2000 to 2020')
+    expect(document.querySelector('.legend-left-out').textContent).toBe('18 records with no date are not shown.')
+  })
+
+  it('moves the map to the rank once per opening, but not while a hexagon is open', async () => {
+    stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1])) }))
+    const { rerender } = renderRank()
+    await settle()
+    expect(mapState.fitBounds).toHaveBeenCalledTimes(1)
+    expect(mapState.fitBounds.mock.calls[0][1]).toMatchObject({ maxZoom: 8 })
+    rerender(<HexMap overview={OVERVIEW} species={null} rank={{ ...TURDUS }} rankId={TURDUS_ID} />)
+    await settle()
+    expect(mapState.fitBounds).toHaveBeenCalledTimes(1)
+    rerender(<HexMap overview={OVERVIEW} species={null} rank={{ ...TURDUS, id: 2 }} rankId={TURDUS_ID}
+      selectedCell="8428c9bffffffff" />)
+    await settle()
+    expect(mapState.fitBounds).toHaveBeenCalledTimes(1)
+  })
+
+  it('goes back to the overview when the rank closes', async () => {
+    stubHexes((url) => ({ body: rankAnswer(Number(url.match(/res=(\d)/)[1])) }))
+    const { rerender } = renderRank()
+    await settle()
+    rerender(<HexMap overview={OVERVIEW} species={null} rank={null} rankId={null} />)
+    expect(visibleLayers()).toEqual(['bc-hexagons-r4'])
+    expect(document.querySelector('.rank-showing')).toBeNull()
+    expect(screen.getByText('Distinct species per hexagon')).toBeTruthy()
+  })
+
+  it('says clearly when the rank\'s map cannot be loaded', async () => {
+    stubHexes(() => ({ status: 500, body: { detail: 'boom' } }))
+    renderRank()
+    await settle()
+    expect(document.querySelector('.legend-status.error').textContent).toMatch(/the map of this genus/)
+    expect(document.querySelector('.status-message')).toBeNull()
+  })
+})
+
 describe('the zoom for a resolution', () => {
   it('is inside that resolution\'s tier', () => {
     for (const res of [4, 5, 6, 7]) {

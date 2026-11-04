@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, MIN_SEARCH_CHARACTERS, fetchCell, fetchDataset, fetchDatasets, searchSpecies, searchWords, searchableLength }
-  from './api'
+import {
+  ApiError, MIN_SEARCH_CHARACTERS, fetchCell, fetchDataset, fetchDatasets, fetchRank, fetchRankHexes, searchSpecies,
+  searchWords, searchableLength,
+} from './api'
 
 // Each case is a search and the number of letters and digits the API counts
 // in it. The numbers were taken from the API itself (the search_norm macro in
@@ -119,6 +121,13 @@ describe('searchSpecies', () => {
     const params = new URLSearchParams(url.split('?')[1])
     expect(params.get('q')).toBe('Dahlia × pinnata')
     expect(params.get('limit')).toBe('5')
+    expect(params.has('rank_limit')).toBe(false)
+  })
+
+  it('asks for the ranks too when given how many', async () => {
+    const fetchMock = stubFetch(fakeResponse(200, { results: [], ranks: [] }))
+    await searchSpecies('robin', { limit: 20, rankLimit: 5 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/search?q=robin&limit=20&rank_limit=5')
   })
 
   it('returns the answer when the API answers', async () => {
@@ -221,5 +230,40 @@ describe('fetchCell', () => {
     await fetchCell('872800b30ffffff', { years: { from: 2000, to: null }, q: ' robin ', species: '59PMB', offset: 50 })
     expect(fetchMock.mock.calls[1][0]).toBe(
       '/api/hexes/872800b30ffffff?offset=50&limit=50&year_from=2000&q=robin&species=59PMB')
+  })
+
+  it('asks for the species of a rank in one hexagon with the rank and its path', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({ cell: '872800b30ffffff' }) })
+    await fetchCell('872800b30ffffff', { rank: APIDAE })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/hexes/872800b30ffffff?offset=0&limit=50&rank=family'
+      + '&kingdom=Animalia&phylum=Arthropoda&class=Insecta&family=Apidae')
+  })
+})
+
+// A bee family GBIF files with no order.
+const APIDAE = { rank: 'family', name: 'Apidae', path: [
+  { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Arthropoda' }, { rank: 'class', name: 'Insecta' },
+  { rank: 'order', name: null }, { rank: 'family', name: 'Apidae' },
+] }
+
+describe('the rank requests', () => {
+  it('asks for the card of a rank with its path, a missing rank left out, and the page', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
+    await fetchRank(APIDAE)
+    await fetchRank(APIDAE, { offset: 50, limit: 25 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae&offset=0&limit=50')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae&offset=50&limit=25')
+  })
+
+  it('asks for the map of a rank at one resolution, with the years only when given', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
+    await fetchRankHexes(APIDAE, 6)
+    await fetchRankHexes(APIDAE, 7, { years: { from: null, to: 1999 } })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/ranks/family/hexes?res=6&kingdom=Animalia&phylum=Arthropoda'
+      + '&class=Insecta&family=Apidae')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/ranks/family/hexes?res=7&year_to=1999&kingdom=Animalia'
+      + '&phylum=Arthropoda&class=Insecta&family=Apidae')
   })
 })

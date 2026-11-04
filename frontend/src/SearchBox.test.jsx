@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import SearchBox from './SearchBox'
+import SearchBox, { ranksFirst } from './SearchBox'
 
 const COL = 'Catalogue of Life, via GBIF'
 const BCSEE = 'BC Species and Ecosystems Explorer (BCSEE)'
@@ -51,10 +51,27 @@ function answer(status, body) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
 }
 
-// Replaces fetch with one that answers every search with these results.
-function stubSearch(results) {
+// Two ranks in the shape the API sends: a genus a common word finds, and a
+// family.
+const ROBINIA = {
+  rank: 'genus', name: 'Robinia', label: 'Genus Robinia (Fabaceae)', species_count: 2, record_count: 640,
+  path: [{ rank: 'kingdom', name: 'Plantae' }, { rank: 'phylum', name: 'Tracheophyta' },
+    { rank: 'class', name: 'Magnoliopsida' }, { rank: 'order', name: 'Fabales' }, { rank: 'family', name: 'Fabaceae' },
+    { rank: 'genus', name: 'Robinia' }],
+  match: { kind: 'word_start' },
+}
+const TURDIDAE = {
+  rank: 'family', name: 'Turdidae', label: 'Family Turdidae (Passeriformes)', species_count: 1, record_count: 1,
+  path: [{ rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+    { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }],
+  match: { kind: 'exact' },
+}
+
+// Replaces fetch with one that answers every search with these results
+// (and these ranks, if any).
+function stubSearch(results, ranks = []) {
   const fetchMock = vi.fn(async (url) => answer(200, {
-    query: new URLSearchParams(url.split('?')[1]).get('q'), results,
+    query: new URLSearchParams(url.split('?')[1]).get('q'), results, ranks,
   }))
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
@@ -74,11 +91,17 @@ async function wait(ms) {
 }
 
 // Puts the search box on the page and returns its text field and the
-// function it calls when a species is picked.
+// functions it calls when a species or a rank is picked.
 function renderBox() {
   const onSelect = vi.fn()
-  render(<SearchBox onSelect={onSelect} />)
-  return { input: screen.getByRole('combobox'), onSelect }
+  const onSelectRank = vi.fn()
+  render(<SearchBox onSelect={onSelect} onSelectRank={onSelectRank} />)
+  return { input: screen.getByRole('combobox'), onSelect, onSelectRank }
+}
+
+// The group headings in the open list, in order.
+function groupHeadings() {
+  return [...document.querySelectorAll('.search-group')].map((heading) => heading.textContent)
 }
 
 // Types text into the search field (replacing what was there).
@@ -301,6 +324,112 @@ describe('what each result shows', () => {
     const panel = screen.getByRole('listbox').parentElement.textContent
     expect(panel).not.toMatch(/English/)
     expect(panel).toContain('Scientific names from Catalogue of Life, via GBIF.')
+  })
+})
+
+describe('ranks in the list', () => {
+  it('asks for 5 ranks, and lists them after the species under their own heading', async () => {
+    const fetchMock = stubSearch([ROBIN, LOCUST], [ROBINIA, TURDIDAE])
+    const { input } = renderBox()
+    type(input, 'robin')
+    await wait(250)
+    expect(new URLSearchParams(fetchMock.mock.calls[0][0].split('?')[1]).get('rank_limit')).toBe('5')
+    expect(groupHeadings()).toEqual(['Species', 'Genera, families and higher ranks'])
+    const texts = listedTexts()
+    expect(texts).toHaveLength(4)
+    expect(texts[0]).toContain('Turdus migratorius')
+    expect(texts[1]).toContain('Robinia pseudoacacia')
+    expect(texts[2]).toBe('Genus Robinia (Fabaceae)2 species · 640 records')
+    expect(texts[3]).toBe('Family Turdidae (Passeriformes)1 species · 1 record')
+    // The headings are not options, and the genus is in italics.
+    const options = screen.getAllByRole('option')
+    expect(options[2].previousElementSibling.textContent).toBe('Genera, families and higher ranks')
+    expect(options[2].querySelector('i').textContent).toBe('Robinia')
+    expect(options[3].querySelector('i')).toBeNull()
+    expect(document.querySelector('.search-sources').textContent).toContain('Ranks from the GBIF classification.')
+  })
+
+  it('shows no headings when only species are found', async () => {
+    stubSearch([ROBIN, LOCUST])
+    const { input } = renderBox()
+    type(input, 'robin')
+    await wait(250)
+    expect(groupHeadings()).toEqual([])
+    expect(document.querySelector('.search-sources').textContent).not.toContain('Ranks')
+  })
+
+  it('shows the ranks alone, under their heading, when no species is found', async () => {
+    stubSearch([], [TURDIDAE])
+    const { input } = renderBox()
+    type(input, 'turdidae')
+    await wait(250)
+    expect(groupHeadings()).toEqual(['Genera, families and higher ranks'])
+    expect(listedTexts()).toEqual(['Family Turdidae (Passeriformes)1 species · 1 record'])
+  })
+
+  it('moves from the species to the ranks with the arrow keys, and picks a rank with Enter or a click', async () => {
+    stubSearch([ROBIN], [ROBINIA, TURDIDAE])
+    const { input, onSelect, onSelectRank } = renderBox()
+    type(input, 'robin')
+    await wait(250)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(screen.getAllByRole('option')[1].getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelectRank).toHaveBeenCalledWith({ rank: 'genus', name: 'Robinia', path: ROBINIA.path })
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox')).toBeNull()
+
+    fireEvent.focus(input)
+    fireEvent.click(screen.getAllByRole('option')[2])
+    expect(onSelectRank).toHaveBeenLastCalledWith({ rank: 'family', name: 'Turdidae', path: TURDIDAE.path })
+  })
+
+  it('lists the ranks first when a rank\'s name is the query, ignoring case, so Enter opens that rank', async () => {
+    const TURDUS = {
+      rank: 'genus', name: 'Turdus', label: 'Genus Turdus (Turdidae)', species_count: 5, record_count: 965555,
+      path: [...TURDIDAE.path, { rank: 'genus', name: 'Turdus' }], match: { kind: 'exact' },
+    }
+    stubSearch([ROBIN], [TURDUS, TURDIDAE])
+    const { input, onSelect, onSelectRank } = renderBox()
+    type(input, ' turdus ')
+    await wait(250)
+    expect(groupHeadings()).toEqual(['Genera, families and higher ranks', 'Species'])
+    const texts = listedTexts()
+    expect(texts[0]).toBe('Genus Turdus (Turdidae)5 species · 965,555 records')
+    expect(texts[1]).toBe('Family Turdidae (Passeriformes)1 species · 1 record')
+    expect(texts[2]).toContain('Turdus migratorius')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelectRank).toHaveBeenCalledWith({ rank: 'genus', name: 'Turdus', path: TURDUS.path })
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('keeps the species first when no rank\'s name is the query, even when a rank starts with it', async () => {
+    stubSearch([ROBIN, LOCUST], [ROBINIA])
+    const { input, onSelect } = renderBox()
+    type(input, 'Robin')
+    await wait(250)
+    expect(groupHeadings()).toEqual(['Species', 'Genera, families and higher ranks'])
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith(ROBIN)
+  })
+
+  it('decides the order from the rank names alone', () => {
+    const named = (...names) => names.map((name) => ({ name }))
+    expect(ranksFirst(named('Aves'), 'aves')).toBe(true)
+    expect(ranksFirst(named('Aves'), '  AVES ')).toBe(true)
+    expect(ranksFirst(named('Turdidae', 'Turdus'), 'Turdus')).toBe(true)
+    expect(ranksFirst(named('Robinia'), 'robin')).toBe(false)
+    expect(ranksFirst(named('Turdidae'), 'turd')).toBe(false)
+    expect(ranksFirst([], 'aves')).toBe(false)
+  })
+
+  it('works with an API that sends no ranks', async () => {
+    const fetchMock = vi.fn(async () => answer(200, { query: 'robin', results: [ROBIN] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { input } = renderBox()
+    type(input, 'robin')
+    await wait(250)
+    expect(listedTexts()).toHaveLength(1)
   })
 })
 

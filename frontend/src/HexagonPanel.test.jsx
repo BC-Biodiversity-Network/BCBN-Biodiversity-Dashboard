@@ -216,6 +216,51 @@ describe('the hexagon panel on a species map', () => {
   })
 })
 
+describe('the hexagon panel on a rank map', () => {
+  const TURDUS = { rank: 'genus', name: 'Turdus', path: [
+    { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+    { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
+  ] }
+
+  it('lists only the rank\'s species, asked for with the rank\'s path, under a title naming the rank', async () => {
+    const urls = stubCell(() => answer({ records: 5, species: 1, matching: 1, results: answer().results.slice(0, 1) }))
+    const onOpenSpecies = vi.fn()
+    const { container } = show({ rank: TURDUS, onOpenSpecies })
+    await screen.findByText('5 records of 1 species, all years')
+    expect(urls()[0]).toBe(`/api/hexes/${CELL}?offset=0&limit=50&rank=genus&kingdom=Animalia&phylum=Chordata`
+      + '&class=Aves&order=Passeriformes&family=Turdidae&genus=Turdus')
+    const title = container.querySelector('.hexagon-title')
+    expect(title.textContent).toBe('Genus Turdus in this hexagon')
+    expect(title.querySelector('i').textContent).toBe('Turdus')
+    fireEvent.click(screen.getByText('Turdus migratorius'))
+    expect(onOpenSpecies).toHaveBeenCalledWith('59PMB')
+  })
+
+  it('links to every species in the hexagon, in place of following the link', async () => {
+    stubCell(() => answer())
+    const onShowAllSpecies = vi.fn()
+    show({ rank: TURDUS, onShowAllSpecies })
+    const link = await screen.findByText('Show all species in this hexagon')
+    expect(link.getAttribute('href')).toBe(`?cell=${CELL}`)
+    fireEvent.click(link)
+    expect(onShowAllSpecies).toHaveBeenCalled()
+  })
+
+  it('says plainly when none of the rank\'s species is in the hexagon', async () => {
+    stubCell(() => answer({ records: 0, species: 0, matching: 0, results: [], years_counted: [2018, 2020] }))
+    show({ rank: TURDUS, years: { from: 2018, to: 2020 } })
+    expect(await screen.findByText('No species of this genus in this hexagon for these years.')).toBeTruthy()
+    expect(screen.queryByRole('searchbox')).toBeNull()
+  })
+
+  it('has no link to every species on the overview', async () => {
+    stubCell(() => answer())
+    show()
+    await screen.findByText('6 records of 2 species, all years')
+    expect(screen.queryByText('Show all species in this hexagon')).toBeNull()
+  })
+})
+
 describe('the chart of records per year', () => {
   it('fills the years with none between the first and last, or across a range asked for', () => {
     const perYear = [{ year: 2019, records: 2 }, { year: 2021, records: 3 }]

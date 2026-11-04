@@ -11,7 +11,8 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
-import { useOverviewHexes, useSpeciesHexes } from './speciesHexes'
+import RankName from './RankName'
+import { useOverviewHexes, useRankHexes, useSpeciesHexes } from './speciesHexes'
 import YearFilter from './YearFilter'
 import { yearsLabel } from './yearRange'
 import {
@@ -64,6 +65,11 @@ export function speciesLayerId(speciesKey, resolution) {
 // range and resolution, for the same reason.
 export function filteredOverviewLayerId(yearsCounted, resolution) {
   return `overview-${yearsCounted.join('-')}-r${resolution}`
+}
+// A rank's map gets its own id for each rank, year range and resolution,
+// for the same reason. rankId is rankKey(rank) (route.js).
+export function rankLayerId(rankId, yearsCounted, resolution) {
+  return `rank-${rankId}-${yearsCounted ? yearsCounted.join('-') : 'all'}-r${resolution}`
 }
 
 // Builds one hexagon layer: rows of { h3Cell, ... } coloured by a scale.
@@ -152,20 +158,30 @@ export function selectedCellLayer(cell) {
 // id. Holding on to an old layer object and handing the same one back is what
 // caused hexagons from one zoom tier to show up under another. The outline of
 // the clicked hexagon (selectedCell, or null) comes last, above the rest.
+//
+// A rank's map (rankOpen, with rankData its map data from the API, or null
+// while none has arrived; rankId names the rank) takes the overview's place:
+// the same two views, colours and bins, for the rank's species only.
 export function buildLayers({
   overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
   overviewFiltered = false, filteredOverview = null, selectedCell = null,
+  rankOpen = false, rankData = null, rankId = null,
 }) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
     if (!rows || rows.length === 0) {
       return null
     }
-    const visible = !speciesOpen && !overviewFiltered && r === resolution
+    const visible = !speciesOpen && !rankOpen && !overviewFiltered && r === resolution
     return buildHexagonLayer(overviewLayerId(r), rows, visible, schemeName, outline)
   })
 
-  if (!speciesOpen && overviewFiltered && filteredOverview) {
+  if (!speciesOpen && rankOpen && rankData) {
+    layers.push(buildHexagonLayer(
+      rankLayerId(rankId, rankData.yearsCounted, rankData.resolution), rankData.rows, true, schemeName, outline))
+  }
+
+  if (!speciesOpen && !rankOpen && overviewFiltered && filteredOverview) {
     layers.push(buildHexagonLayer(
       filteredOverviewLayerId(filteredOverview.yearsCounted, filteredOverview.resolution),
       filteredOverview.rows, true, schemeName, outline))
@@ -183,6 +199,10 @@ export function buildLayers({
 
   return layers.filter((layer) => layer !== null)
 }
+
+// The first word of a rank map's legend title, for each view: "Species of
+// Turdus per hexagon", "Records of Turdus per hexagon".
+const RANK_CAPTION_WORDS = { species: 'Species', records: 'Records' }
 
 // The hover box for whichever map the pointer is over.
 function tooltipFor(info) {
@@ -301,10 +321,17 @@ function apiStatus(hexes, what) {
 //
 // selectedCell is the H3 id of the hexagon whose panel is open (null for
 // none), outlined on the map, and onCellClick(cell) is called when a
-// hexagon is clicked, on either map.
+// hexagon is clicked, on any map.
+//
+// rank is null, or { rank, name, path, id } for the rank whose page is open
+// (never with a species): the map is then the overview restricted to the
+// rank's species, with the same toggle, colours and bins, the legend titles
+// naming the rank, and a label above the map ("Showing genus Turdus") whose
+// x calls onCloseRank. rankId is rankKey(rank) (route.js). id changes every
+// time a rank is opened, so the map moves to it again.
 export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
-  onCellClick = () => {},
+  onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
 }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
@@ -315,8 +342,12 @@ export default function HexMap({
     () => outlineOpacity(hexagonWidthPixels(resolution, INITIAL_VIEW_STATE.zoom)))
   const speciesHexes = useSpeciesHexes(species?.key ?? null, years, resolution)
   const speciesData = species ? speciesHexes.data : null
-  // The overview for a year range, only asked for while no species is open.
-  const overviewHexes = useOverviewHexes(species ? null : years, resolution)
+  // The rank's map, only asked for while a rank (and no species) is open.
+  const rankOpen = Boolean(rank) && !species
+  const rankHexes = useRankHexes(rankOpen ? rank : null, years, resolution)
+  const rankData = rankOpen ? rankHexes.data : null
+  // The overview for a year range, only asked for while no species or rank is open.
+  const overviewHexes = useOverviewHexes(species || rankOpen ? null : years, resolution)
   const overviewFiltered = years !== null
   // The id of the species the map was last moved to.
   const fittedFor = useRef(null)
@@ -324,10 +355,10 @@ export default function HexMap({
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
-      overviewFiltered, filteredOverview: overviewHexes.data, selectedCell,
+      overviewFiltered, filteredOverview: overviewHexes.data, selectedCell, rankOpen, rankData, rankId,
     }),
     [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data,
-      selectedCell],
+      selectedCell, rankOpen, rankData, rankId],
   )
 
   // Moves the map to a newly picked species once its first hexagons arrive:
@@ -353,6 +384,26 @@ export default function HexMap({
       duration: 900,
     })
   }, [species, speciesData, selectedCell])
+
+  // Moves the map to a newly opened rank once its first hexagons arrive, the
+  // same way as for a species (and not while a hexagon's panel is open).
+  const rankFittedFor = useRef(null)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!rankOpen || !rankData || rankData.rows.length === 0 || !map || rankFittedFor.current === rank.id) {
+      return
+    }
+    rankFittedFor.current = rank.id
+    if (selectedCell) {
+      return
+    }
+    const container = map.getContainer()
+    map.fitBounds(boundsOfCells(rankData.rows), {
+      padding: fitPadding(container.clientWidth, container.clientHeight),
+      maxZoom: FIT_MAX_ZOOM,
+      duration: 900,
+    })
+  }, [rankOpen, rank, rankData, selectedCell])
 
   // Brings the open hexagon into view when it is not on screen, for example
   // after the back button returns to its panel from another species' map.
@@ -405,7 +456,18 @@ export default function HexMap({
   const overviewReady = !overview.loading && !overview.error
 
   let legend = null
-  if (species) {
+  if (rankOpen) {
+    legend = (
+      <Legend
+        scheme={COLOUR_SCHEMES[schemeName]}
+        caption={<>{RANK_CAPTION_WORDS[schemeName]} of <RankName rank={rank.rank} name={rank.name} /> per hexagon</>}
+        summary={rankData ? hexesSummary(rankData) : null}
+        leftOut={noDateNote(rankData)}
+        status={apiStatus(rankHexes, `the map of this ${rank.rank}`)}
+        statusIsError={Boolean(rankHexes.error)}
+      />
+    )
+  } else if (species) {
     legend = (
       <Legend
         scheme={COLOUR_SCHEMES.speciesMap}
@@ -438,13 +500,22 @@ export default function HexMap({
 
   return (
     <>
-      {!species && overview.error && (
+      {!species && !rankOpen && overview.error && (
         <div className="status-message">Could not load the data: {overview.error}</div>
       )}
-      {!species && overview.loading && <div className="status-message">Loading hexagons...</div>}
+      {!species && !rankOpen && overview.loading && <div className="status-message">Loading hexagons...</div>}
 
-      {(species || overviewReady) && (
+      {(species || rankOpen || overviewReady) && (
         <div className="top-left-controls">
+          {rankOpen && (
+            <div className="rank-showing">
+              <span>Showing {rank.rank} <RankName rank={rank.rank} name={rank.name} /></span>
+              <button type="button" className="rank-showing-close" onClick={onCloseRank}
+                aria-label="Stop showing this rank and show all species">
+                ×
+              </button>
+            </div>
+          )}
           <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />

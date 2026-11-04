@@ -51,6 +51,7 @@ matched if it is neither of those, each with where it comes from.
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
+from api.rank_search import DEFAULT_RANK_LIMIT, prepare_rank_search, search_ranks
 from api.species import english_name
 
 # Shortest query, after it is written the search way, that is searched.
@@ -166,11 +167,13 @@ class QueryTooShort(ValueError):
 
 def prepare_search(data):
     """Build what search needs, once, when the API starts: the search_norm
-    macro and the search_names table (on data's connection), and a lookup
-    from each key in lower case to (card key, merged_from) for typed keys."""
+    macro, the search_names table and the rank_names table (see
+    rank_search.py) on data's connection, and a lookup from each key in
+    lower case to (card key, merged_from) for typed keys."""
     con = data.connection
     con.execute(SEARCH_NORM_MACRO)
     con.execute(SEARCH_INDEX_SQL)
+    prepare_rank_search(data)
 
     keys = {}
     for (key,) in con.execute("SELECT specieskey FROM species_card").fetchall():
@@ -231,11 +234,12 @@ def build_result(details, match, merged_from, status_source):
     }
 
 
-def search(data, query, limit=DEFAULT_LIMIT):
+def search(data, query, limit=DEFAULT_LIMIT, rank_limit=DEFAULT_RANK_LIMIT):
     """Search the species for query and return the response: the query,
-    the query written the search way, and up to limit results, best first.
-    Raises QueryTooShort if the query has fewer than MIN_QUERY_LENGTH
-    letters or digits."""
+    the query written the search way, up to limit species, best first
+    (results), and up to rank_limit ranks, best first (ranks; see
+    rank_search.py). Raises QueryTooShort if the query has fewer than
+    MIN_QUERY_LENGTH letters or digits."""
     cursor = data.cursor()
     normalised = normalise(cursor, query)
     if len(normalised.replace(" ", "")) < MIN_QUERY_LENGTH:
@@ -270,4 +274,5 @@ def search(data, query, limit=DEFAULT_LIMIT):
         "normalised_query": normalised,
         "results": [build_result(details[key], match, merged_from, status_source)
                     for key, match, merged_from in found],
+        "ranks": search_ranks(cursor, query, rank_limit),
     }

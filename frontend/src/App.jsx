@@ -4,7 +4,12 @@ import { fetchMeta } from './api'
 import HexagonPanel from './HexagonPanel'
 import HexMap from './HexMap'
 import { loadHexData } from './loadHexData'
-import { PANEL_FROM_CLICK, readCell, readSpeciesKey, speciesDatasetsSearch, speciesMapSearch } from './route'
+import RankCard from './RankCard'
+import RankName from './RankName'
+import {
+  PANEL_FROM_CLICK, isPlainMap, mapSearch, rankKey, readCell, readRank, readSpeciesKey, speciesDatasetsSearch,
+  speciesMapSearch,
+} from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
 import SpeciesCard from './SpeciesCard'
@@ -34,10 +39,13 @@ const HEX_DATA_URLS = {
 // The side panel under the search box shows one thing at a time:
 //   - the hexagon panel when the address has a cell: on the overview, every
 //     species in the hexagon; on a species map, that species alone in the
-//     hexagon, with a link to show every species (which switches to the
-//     overview for the same hexagon); the species card is then only covered,
-//     not closed;
+//     hexagon; on a rank map, that rank's species in the hexagon; on both of
+//     these, with a link to show every species (which switches to the
+//     overview for the same hexagon); a card is then only covered, not
+//     closed;
 //   - else the species card when the address has a species;
+//   - else the rank card when the address has a rank (?rank=...&<path>, see
+//     route.js); its map is the overview restricted to the rank's species;
 //   - else nothing (the plain overview).
 // History: the first hexagon click (no cell in the address yet) adds an
 // address entry, so Back closes the panel and returns to what was there
@@ -53,6 +61,16 @@ const HEX_DATA_URLS = {
 // panel adds an entry (not marked), so Back returns to the species panel and
 // the x then closes the overview's panel in place. Picking a species in the
 // search box replaces the entry, as before, which closes the panel.
+//
+// Ranks: opening a rank (picked in the search box, or from a card's
+// classification line or a rank card's next rank down) adds an entry, which
+// remembers the address it came from, so Back returns there; so does
+// opening a species from a rank card (whose card then offers the way back).
+// Opening the rank already shown only moves the map to it again. Closing a
+// rank (the x on its card or on the map's "Showing ..." label) returns to
+// all species: like Back when the rank was opened in this visit from the
+// plain map, so no dead entry is left; else in place, keeping an open
+// hexagon.
 //
 // historyState reads the current history entry's state (the browser's
 // window.history.state; the tests give their own).
@@ -71,6 +89,8 @@ export default function App({
   // the same species is picked twice.
   const addressKey = readSpeciesKey(search)
   const addressCell = readCell(search)
+  const addressRank = readRank(search)
+  const addressRankKey = rankKey(addressRank)
   const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
   // What the data is and where it comes from (/api/meta), for the GBIF
@@ -81,9 +101,13 @@ export default function App({
   // { from, to } (see yearRange.js). It lives here rather than in the map,
   // so it stays the same when a species card is opened or closed.
   const [years, setYears] = useState(null)
-  // The species last opened from a hexagon's list ({ key }), so its card can
-  // offer the way back to that list; null when none was.
-  const [openedFromCell, setOpenedFromCell] = useState(null)
+  // The species last opened from a hexagon's list or a rank card ({ key,
+  // rank }: rank null for a hexagon's list), so its card can offer the way
+  // back; null when none was.
+  const [openedFrom, setOpenedFrom] = useState(null)
+  // The rank whose page is open, or null: { rank, name, path, id }, from the
+  // address; id changes every time a rank is opened, so the map moves to it.
+  const [rankOpen, setRankOpen] = useState(() => (addressRank ? { ...addressRank, id: 0 } : null))
 
   // Fetches /api/meta once, when the page first appears. If the API is not
   // there, the overview still works and the card says the citation is loading.
@@ -123,6 +147,21 @@ export default function App({
     })
   }, [addressKey])
 
+  // When the address names another rank than the open one (the back or
+  // forward button, or a link), opens that one, or closes it when it names
+  // none.
+  useEffect(() => {
+    const id = picks.current + 1
+    setRankOpen((open) => {
+      if (rankKey(open) === addressRankKey) {
+        return open
+      }
+      picks.current = id
+      return addressRank ? { ...addressRank, id } : null
+    })
+    // addressRankKey stands for addressRank, which is a new object each time.
+  }, [addressRankKey])
+
   // Opens the card and the map of a species picked in the search box, and
   // puts it in the address in place of the current entry, so picking species
   // one after another does not fill the back button's history.
@@ -147,10 +186,11 @@ export default function App({
     if (cell === addressCell) {
       return
     }
+    const target = mapSearch({ species: addressKey, rank: addressRank, cell })
     if (addressCell) {
-      navigate(speciesMapSearch(addressKey, cell), { replace: true, state: historyState() })
+      navigate(target, { replace: true, state: historyState() })
     } else {
-      navigate(speciesMapSearch(addressKey, cell), { state: PANEL_FROM_CLICK })
+      navigate(target, { state: PANEL_FROM_CLICK })
     }
   }
 
@@ -161,7 +201,7 @@ export default function App({
     if (historyState()?.panelFromClick) {
       goBack()
     } else {
-      navigate(speciesMapSearch(addressKey), { replace: true })
+      navigate(mapSearch({ species: addressKey, rank: addressRank }), { replace: true })
     }
   }
 
@@ -174,13 +214,37 @@ export default function App({
     navigate(speciesMapSearch(null, addressCell))
   }
 
-  // Opens a species picked from a hexagon's list: its card and map, as a new
-  // address entry, so Back returns to the list.
-  function openSpeciesFromCell(key) {
+  // Opens a species picked from a hexagon's list or a rank card (from, the
+  // rank, or null for a hexagon's list): its card and map, as a new address
+  // entry, so Back returns to the list or the card.
+  function openSpeciesFrom(key, from = null) {
     picks.current += 1
     setSpecies({ key, name: null, id: picks.current })
-    setOpenedFromCell({ key })
+    setOpenedFrom({ key, rank: from })
     navigate(speciesMapSearch(key))
+  }
+
+  // Opens a rank's page (see the top of this component), as a new address
+  // entry that remembers the address it came from; for the rank already
+  // shown, only moves the map to it again.
+  function openRank(rankRef) {
+    if (rankKey(rankRef) === addressRankKey && !addressCell) {
+      picks.current += 1
+      const id = picks.current
+      setRankOpen((open) => ({ ...open, id }))
+      return
+    }
+    navigate(mapSearch({ rank: rankRef }), { state: { rankOpenedFrom: search } })
+  }
+
+  // Closes the rank, back to all species (see the top of this component).
+  function closeRank() {
+    const from = historyState()?.rankOpenedFrom
+    if (from !== undefined && isPlainMap(from) && !addressCell) {
+      goBack()
+    } else {
+      navigate(mapSearch({ cell: addressCell }), { replace: true })
+    }
   }
 
   // Keeps the scientific name of a species opened from the address, for the
@@ -213,25 +277,41 @@ export default function App({
           onYearsChange={setYears}
           selectedCell={addressCell}
           onCellClick={openCell}
+          rank={species ? null : rankOpen}
+          rankId={species ? null : rankKey(rankOpen)}
+          onCloseRank={closeRank}
         />
 
         <div className="top-right-controls">
-          <SearchBox onSelect={pickSpecies} />
+          <SearchBox onSelect={pickSpecies} onSelectRank={openRank} />
           {addressCell && (
             <HexagonPanel
               key={addressCell}
               cell={addressCell}
               years={years}
               species={species}
+              rank={species ? null : rankOpen}
               onClose={closeCell}
-              onOpenSpecies={openSpeciesFromCell}
+              onOpenSpecies={(key) => openSpeciesFrom(key)}
               onShowAllSpecies={showAllSpecies}
             />
           )}
-          {species && !addressCell && openedFromCell?.key === species.key && (
+          {species && !addressCell && openedFrom?.key === species.key && (
             <button type="button" className="text-button panel-back" onClick={goBack}>
-              Back to this hexagon&apos;s species
+              {openedFrom.rank
+                ? <>Back to {openedFrom.rank.rank} <RankName rank={openedFrom.rank.rank} name={openedFrom.rank.name} /></>
+                : <>Back to this hexagon&apos;s species</>}
             </button>
+          )}
+          {!species && rankOpen && (
+            <div className="card-holder" hidden={Boolean(addressCell)}>
+              <RankCard
+                rankRef={rankOpen}
+                onClose={closeRank}
+                onOpenSpecies={(key) => openSpeciesFrom(key, rankOpen)}
+                onOpenRank={openRank}
+              />
+            </div>
           )}
           {species && (
             <div className="card-holder" hidden={Boolean(addressCell)}>
@@ -241,6 +321,7 @@ export default function App({
                 onClose={closeCard}
                 onLoaded={cardLoaded}
                 onOpenDatasets={(key) => navigate(speciesDatasetsSearch(key))}
+                onOpenRank={openRank}
               />
             </div>
           )}

@@ -130,8 +130,11 @@ async function fetchJson(path, signal) {
 
 // Searches the species. Returns the API's answer: { query, normalised_query,
 // results }, best match first.
-export function searchSpecies(query, { limit = 20, signal } = {}) {
+export function searchSpecies(query, { limit = 20, rankLimit = null, signal } = {}) {
   const params = new URLSearchParams({ q: query, limit: String(limit) })
+  if (rankLimit !== null) {
+    params.set('rank_limit', String(rankLimit))
+  }
   return fetchJson(`/search?${params}`, signal)
 }
 
@@ -231,10 +234,17 @@ export function fetchOverviewHexes(resolution, { signal, years = null } = {}) {
 // species for the years (null for all years, else { from, to }, either end
 // possibly null, as for the maps), and one page of its species, most
 // records first. q filters them by name (sent only when it is not empty),
-// species asks for that species' own records in the hexagon, and offset and
-// limit choose the page.
-export function fetchCell(cell, { years = null, q = '', species = null, offset = 0, limit = 50, signal } = {}) {
+// species asks for that species' own records in the hexagon, rank
+// ({ rank, path }) keeps that rank's species only, and offset and limit
+// choose the page.
+export function fetchCell(cell, {
+  years = null, q = '', species = null, rank = null, offset = 0, limit = 50, signal,
+} = {}) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (rank) {
+    params.set('rank', rank.rank)
+    addRankPath(params, rank)
+  }
   if (years?.from != null) {
     params.set('year_from', String(years.from))
   }
@@ -248,4 +258,33 @@ export function fetchCell(cell, { years = null, q = '', species = null, offset =
     params.set('species', species)
   }
   return fetchJson(`/hexes/${encodeURIComponent(cell)}?${params}`, signal)
+}
+
+// Adds a rank's path to a query string: one parameter per rank with a name,
+// from the kingdom down (a missing rank is left out, which the API reads as
+// missing).
+function addRankPath(params, rank) {
+  for (const step of rank.path) {
+    if (step.name) {
+      params.set(step.rank, step.name)
+    }
+  }
+  return params
+}
+
+// Fetches a rank's card (/api/ranks/{rank}): rank is { rank, path }, and
+// offset and limit choose the page of its species.
+export function fetchRank(rank, { offset = 0, limit = 50, signal } = {}) {
+  const params = addRankPath(new URLSearchParams(), rank)
+  params.set('offset', String(offset))
+  params.set('limit', String(limit))
+  return fetchJson(`/ranks/${encodeURIComponent(rank.rank)}?${params}`, signal)
+}
+
+// Fetches a rank's map at one resolution (/api/ranks/{rank}/hexes), for a
+// range of years if years is set (see mapParams): the overview restricted to
+// the rank's species.
+export function fetchRankHexes(rank, resolution, { signal, years = null } = {}) {
+  const params = addRankPath(mapParams(resolution, years), rank)
+  return fetchJson(`/ranks/${encodeURIComponent(rank.rank)}/hexes?${params}`, signal)
 }

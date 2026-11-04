@@ -3,8 +3,9 @@ import { Fragment, useEffect, useState } from 'react'
 import { fetchSpecies } from './api'
 import { BCSEE_LIST_HELP_URL, bcseeDefinition } from './bcseeDefinitions'
 import InfoTip from './InfoTip'
+import { ClassificationLine } from './RankCard'
 import OglBcStatement from './OglBcStatement'
-import { speciesDatasetsSearch } from './route'
+import { RANKS, speciesDatasetsSearch } from './route'
 import { BCSEE_URL, bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
 
 // The BCSEE values that are conservation statuses, each with its own chip
@@ -46,7 +47,10 @@ function AuthorshipHelp({ name }) {
 // citation. onClose returns to the plain overview. onLoaded(card), if
 // given, is called when the card arrives. onOpenDatasets(key), if given,
 // opens the Datasets page for the species, in place of following the link.
-export default function SpeciesCard({ requestedKey, meta, onClose, onLoaded, onOpenDatasets }) {
+// onOpenRank(rankRef) opens a rank of the classification line.
+export default function SpeciesCard({
+  requestedKey, meta, onClose, onLoaded, onOpenDatasets, onOpenRank = () => {},
+}) {
   // The card as { key, card } once it arrives, or { key, error } if it fails.
   // Keeping the key with it means a card is only ever shown for the species
   // that was asked for, never a previous one.
@@ -80,7 +84,9 @@ export default function SpeciesCard({ requestedKey, meta, onClose, onLoaded, onO
       </button>
       {!current && <p className="card-message">Loading the species card...</p>}
       {current?.error && <CardError error={current.error} requestedKey={requestedKey} />}
-      {current?.card && <CardBody card={current.card} meta={meta} onOpenDatasets={onOpenDatasets} />}
+      {current?.card && (
+        <CardBody card={current.card} meta={meta} onOpenDatasets={onOpenDatasets} onOpenRank={onOpenRank} />
+      )}
     </aside>
   )
 }
@@ -98,10 +104,10 @@ function CardError({ error, requestedKey }) {
 }
 
 // Everything on a loaded card, top to bottom.
-function CardBody({ card, meta, onOpenDatasets }) {
+function CardBody({ card, meta, onOpenDatasets, onOpenRank }) {
   return (
     <>
-      <CardTitle card={card} />
+      <CardTitle card={card} onOpenRank={onOpenRank} />
       {card.merged_from && <MergedKeyNote card={card} />}
       <SpeciesImage image={card.image} name={card.name.col_name} />
       <BcseeSection bcsee={card.bcsee} />
@@ -184,10 +190,11 @@ function MergedKeyNote({ card }) {
 // and a "?" explaining what the authorship is (no "?" when the card has no
 // authorship, as 454 of 38,992 cards had in October 2026, since there is
 // then nothing to explain); the classification from
-// kingdom to genus; and the species' own common name from BCSEE when there
+// kingdom to genus, each rank opening its page (onOpenRank); and the
+// species' own common name from BCSEE when there
 // is one. When BCSEE lists separate species on this key, the API sends no
 // common name, so none is shown here; each BCSEE entry shows its own.
-function CardTitle({ card }) {
+function CardTitle({ card, onOpenRank }) {
   const { name } = card
   return (
     <header className="card-title">
@@ -209,7 +216,7 @@ function CardTitle({ card }) {
           Previously known as: <NameWithAuthor name={merged} />
         </p>
       ))}
-      <TaxonomyLine taxonomy={card.taxonomy} />
+      <ClassificationLine path={taxonomyPath(card.taxonomy)} onOpenRank={onOpenRank} />
       {card.english_name && (
         <p className="card-common-name">
           {card.english_name}
@@ -220,31 +227,10 @@ function CardTitle({ card }) {
   )
 }
 
-// The ranks of the classification line, in order, with how each is named
-// when its name is hovered, focused or tapped.
-const RANKS = [
-  ['kingdom', 'Kingdom'], ['phylum', 'Phylum'], ['class', 'Class'],
-  ['order', 'Order'], ['family', 'Family'], ['genus', 'Genus'],
-]
-
-// The classification from kingdom to genus on one line. Each name opens its
-// rank (Kingdom, Phylum, ...) on hover, with the keyboard and on a tap, the
-// same way as the status chips.
-function TaxonomyLine({ taxonomy }) {
-  const present = RANKS.filter(([rank]) => taxonomy[rank])
-  return (
-    <p className="card-taxonomy" aria-label="Classification">
-      {present.map(([rank, rankName], index) => (
-        <Fragment key={rank}>
-          {index > 0 && ' › '}
-          <InfoTip label={taxonomy[rank]} className="rank-button"
-            ariaLabel={`${rankName}: ${taxonomy[rank]}`}>
-            {rankName}
-          </InfoTip>
-        </Fragment>
-      ))}
-    </p>
-  )
+// The card's classification as a rank path, kingdom to genus, a rank GBIF
+// leaves out as null (see ClassificationLine).
+function taxonomyPath(taxonomy) {
+  return RANKS.map((rank) => ({ rank, name: taxonomy[rank] || null }))
 }
 
 // The species photo with its full credit: creator, licence with its link,

@@ -1,14 +1,24 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 
 import { MIN_SEARCH_CHARACTERS, searchSpecies, searchableLength } from './api'
+import RankName, { rankTitle } from './RankName'
+import { rankKey } from './route'
 
 // How long to wait after the last key press before searching, in
 // milliseconds. Long enough that typing "robin" sends one request, not five;
 // short enough that the list still feels immediate.
 const SEARCH_DELAY_MS = 250
 
-// How many results to ask the API for.
+// How many species, and how many ranks, to ask the API for.
 const RESULT_LIMIT = 20
+const RANK_LIMIT = 5
+
+// The heading of each group in the list. The ranks come after the species,
+// under their own heading, so a rank found by a common word ("robin" finds
+// the genus Robinia) is not taken for a species; they come first only when
+// a rank's name is the query itself (see ranksFirst).
+const SPECIES_HEADING = 'Species'
+const RANKS_HEADING = 'Genera, families and higher ranks'
 
 // The id of the results list, so the input can point screen readers at it.
 const LIST_ID = 'species-search-results'
@@ -23,15 +33,19 @@ const ENTRY_NAME_LABELS = {
   merged_name: 'Earlier name (Catalogue of Life synonym)',
 }
 
-// The search box: a text field with a list of matching species under it.
-// Calls onSelect(result) when a species is picked, with the result as the API
+// The search box: a text field with a list of matching species under it,
+// then the matching ranks (genus to kingdom) as their own group. Calls
+// onSelect(result) when a species is picked, with the result as the API
 // sent it (its specieskey is always the kept key; merged_from says which old
-// key was typed, if any).
-export default function SearchBox({ onSelect }) {
+// key was typed, if any), and onSelectRank({ rank, name, path }) when a rank
+// is picked.
+export default function SearchBox({ onSelect, onSelectRank = () => {} }) {
   const [query, setQuery] = useState('')
   // What the box is doing: 'idle' (empty), 'too_short', 'loading', 'results',
   // 'empty' (nothing found) or 'error'.
   const [status, setStatus] = useState('idle')
+  // The species found, then the ranks, as one list for the keyboard:
+  // [{ kind: 'species' or 'rank', result }].
   const [results, setResults] = useState([])
   const [errorMessage, setErrorMessage] = useState('')
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -55,7 +69,7 @@ export default function SearchBox({ onSelect }) {
     const controller = new AbortController()
     const timer = setTimeout(() => {
       setStatus('loading')
-      searchSpecies(query, { limit: RESULT_LIMIT, signal: controller.signal })
+      searchSpecies(query, { limit: RESULT_LIMIT, rankLimit: RANK_LIMIT, signal: controller.signal })
         .then((answer) => {
           // An answer to a search that has since been replaced is ignored.
           // fetch already stops a cancelled request, so this is a second
@@ -63,9 +77,12 @@ export default function SearchBox({ onSelect }) {
           if (controller.signal.aborted) {
             return
           }
-          setResults(answer.results)
-          setActiveIndex(answer.results.length > 0 ? 0 : -1)
-          setStatus(answer.results.length > 0 ? 'results' : 'empty')
+          const species = answer.results.map((result) => ({ kind: 'species', result }))
+          const ranks = (answer.ranks ?? []).map((result) => ({ kind: 'rank', result }))
+          const found = ranksFirst(answer.ranks ?? [], query) ? [...ranks, ...species] : [...species, ...ranks]
+          setResults(found)
+          setActiveIndex(found.length > 0 ? 0 : -1)
+          setStatus(found.length > 0 ? 'results' : 'empty')
         })
         .catch((error) => {
           if (error.name === 'AbortError') {
@@ -89,8 +106,12 @@ export default function SearchBox({ onSelect }) {
   }, [query])
 
   // Picks one result: tells the page, and closes the list.
-  function choose(result) {
-    onSelect(result)
+  function choose({ kind, result }) {
+    if (kind === 'rank') {
+      onSelectRank({ rank: result.rank, name: result.name, path: result.path })
+    } else {
+      onSelect(result)
+    }
     setListOpen(false)
   }
 
@@ -154,21 +175,23 @@ export default function SearchBox({ onSelect }) {
           {status === 'results' && (
             <>
               <ul id={LIST_ID} className="search-results" role="listbox">
-                {results.map((result, index) => (
-                  <li
-                    key={result.specieskey}
-                    id={`${LIST_ID}-${index}`}
-                    role="option"
-                    aria-selected={index === activeIndex}
-                    className={index === activeIndex ? 'search-result active' : 'search-result'}
-                    // Keeps the focus in the text field, so the list does not
-                    // close before the click lands.
-                    onMouseDown={(event) => event.preventDefault()}
-                    onMouseEnter={() => setActiveIndex(index)}
-                    onClick={() => choose(result)}
-                  >
-                    <SearchResult result={result} />
-                  </li>
+                {results.map((item, index) => (
+                  <Fragment key={item.kind === 'rank' ? `rank:${rankKey(item.result)}` : item.result.specieskey}>
+                    <GroupHeading results={results} index={index} />
+                    <li
+                      id={`${LIST_ID}-${index}`}
+                      role="option"
+                      aria-selected={index === activeIndex}
+                      className={index === activeIndex ? 'search-result active' : 'search-result'}
+                      // Keeps the focus in the text field, so the list does
+                      // not close before the click lands.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onClick={() => choose(item)}
+                    >
+                      {item.kind === 'rank' ? <RankResult result={item.result} /> : <SearchResult result={item.result} />}
+                    </li>
+                  </Fragment>
                 ))}
               </ul>
               <SourceNote results={results} />
@@ -177,6 +200,57 @@ export default function SearchBox({ onSelect }) {
         </div>
       )}
     </div>
+  )
+}
+
+// Whether the ranks go above the species: when a rank's name is exactly
+// the query, ignoring case and the spaces around it ("Turdus", "aves"), so
+// the rank someone typed comes first and Enter opens it. Otherwise ("robin",
+// which finds the genus Robinia) the species come first.
+export function ranksFirst(ranks, query) {
+  const typed = query.trim().toLowerCase()
+  return ranks.some((rank) => rank.name.toLowerCase() === typed)
+}
+
+// The heading before the result at index, when it starts a group: none
+// when only species were found (as before ranks were searched); "Species"
+// and the ranks' heading when both groups are there; only the ranks'
+// heading when no species was found. Screen readers skip it (the options
+// say what they are), so it does not count as an option.
+function GroupHeading({ results, index }) {
+  const kind = results[index].kind
+  if (index > 0 && results[index - 1].kind === kind) {
+    return null
+  }
+  const anyRank = results.some((item) => item.kind === 'rank')
+  if (kind === 'species' && !anyRank) {
+    return null
+  }
+  return (
+    <li role="presentation" className="search-group">
+      {kind === 'rank' ? RANKS_HEADING : SPECIES_HEADING}
+    </li>
+  )
+}
+
+// One rank in the list: its label from the API ("Genus Robinia (Fabaceae)",
+// the parent telling apart ranks of the same name), the genus in italics,
+// then its species and records in BC.
+function RankResult({ result }) {
+  const start = `${rankTitle(result.rank)} ${result.name}`
+  const rest = result.label.startsWith(start) ? result.label.slice(start.length) : null
+  return (
+    <>
+      <div className="result-name">
+        {rest === null
+          ? result.label
+          : <>{rankTitle(result.rank)} <RankName rank={result.rank} name={result.name} />{rest}</>}
+      </div>
+      <div className="result-details">
+        {`${result.species_count.toLocaleString()} species · ${result.record_count.toLocaleString()} `
+          + `${result.record_count === 1 ? 'record' : 'records'}`}
+      </div>
+    </>
   )
 }
 
@@ -253,15 +327,18 @@ function SearchResult({ result }) {
 // The line under the list saying where the names come from, taken from the
 // results themselves so it always matches what the API sent.
 function SourceNote({ results }) {
-  const nameSource = results[0]?.name_source
-  const bcseeSource = results
+  const species = results.filter((item) => item.kind === 'species').map((item) => item.result)
+  const nameSource = species[0]?.name_source
+  const bcseeSource = species
     .flatMap((result) => result.display_names)
     .find((name) => name.field !== 'col_name' && name.field !== 'merged_name')?.source
+  const anyRank = results.some((item) => item.kind === 'rank')
 
   return (
     <div className="search-sources">
       {nameSource && `Scientific names from ${nameSource}.`}
       {bcseeSource && ` Common names and BCSEE names from ${bcseeSource}.`}
+      {anyRank && ' Ranks from the GBIF classification.'}
     </div>
   )
 }

@@ -84,6 +84,35 @@ body {
   gap: 6px;
 }
 
+/* "Showing genus Turdus" over a rank's map, with an x back to all species.
+   Same look as the hexagon size label above it. */
+.rank-showing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+  white-space: nowrap;
+}
+
+.rank-showing-close {
+  border: 0;
+  padding: 0 4px;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  color: #777;
+  cursor: pointer;
+}
+
+.rank-showing-close:hover {
+  color: #1a1a1a;
+}
+
 /* The two buttons that choose what the colour means. They sit side by side in
    one rounded box, so they read as two settings of one control rather than as
    two separate buttons. */
@@ -336,6 +365,27 @@ body {
 }
 
 .search-result:first-child {
+  border-top: 0;
+}
+
+/* The heading of a group in the list ("Species", "Genera, families and
+   higher ranks"), only shown when ranks were found. */
+.search-group {
+  padding: 8px 10px 4px;
+  border-top: 1px solid #ddd;
+  background: #f6f7f9;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #555;
+  text-transform: uppercase;
+}
+
+.search-group:first-child {
+  border-top: 0;
+}
+
+.search-group + .search-result {
   border-top: 0;
 }
 
@@ -802,23 +852,11 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* Each name in the classification line is a button that opens its rank;
-   it looks like plain text with a dotted underline. */
-.rank-button {
-  border: 0;
-  margin: 0;
-  padding: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-decoration: underline dotted #aaa;
+/* Each name in the classification line is a link that opens its rank's
+   page; a rank GBIF leaves out is grey text (.rank-missing). */
+.card-taxonomy a {
+  color: #184f95;
   text-underline-offset: 2px;
-  cursor: help;
-}
-
-.rank-button:focus-visible {
-  outline: 2px solid #3987e5;
-  outline-offset: 1px;
 }
 
 /* The "?" next to the name and authorship. */
@@ -1573,4 +1611,25 @@ body {
   .top-bar-name {
     display: none;
   }
+}
+
+/* The rank card: its totals, and the next rank down as a short list of
+   links with their species. A rank missing in GBIF is in grey, not a link. */
+.rank-totals {
+  margin: 8px 0 6px;
+}
+
+.rank-children {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.rank-children li {
+  padding: 2px 0;
+}
+
+.rank-child-count,
+.rank-missing {
+  color: #666;
 }

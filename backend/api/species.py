@@ -194,6 +194,26 @@ def species_labels(cursor, keys):
             for key, col_name, entries in rows}
 
 
+def species_details(cursor, keys):
+    """Return {specieskey: {col_name, name_source, english_name, statuses}}
+    for the keys that have a card, the shown BCSEE statuses in the site's
+    order (Red, Blue, Yellow, Exotic)."""
+    if not keys:
+        return {}
+    rows = cursor.execute(
+        """SELECT c.specieskey, c.col_name, c.name_source, b.entries, b.statuses
+           FROM species_card AS c LEFT JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey
+           WHERE list_contains(CAST(? AS VARCHAR[]), c.specieskey)""", [list(keys)]).fetchall()
+    return {key: {"col_name": col_name, "name_source": name_source, "english_name": english_name(entries),
+                  "statuses": [status for status in SHOWN_STATUSES if status in (statuses or [])]}
+            for key, col_name, name_source, entries, statuses in rows}
+
+
+# What a result shows for a key with no card (the API's checks make every
+# key in species_hex have one, so this is only a guard).
+NO_CARD = {"col_name": None, "name_source": None, "english_name": None, "statuses": []}
+
+
 def build_species_card(data, key):
     """Return the species card for a requested key, or None if the key is
     neither a card key nor a key merged into one. data is the ApiData."""

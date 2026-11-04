@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  readCell, speciesDatasetsSearch, speciesMapSearch,
+  isPlainMap, mapSearch, rankKey, readCell, readRank, speciesDatasetsSearch, speciesMapSearch,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -69,6 +69,56 @@ describe('the page state in the address', () => {
     for (const bad of ['', '?cell=', '?cell=abc', '?cell=882800b30ffffff', '?cell=832800bffffffff']) {
       expect(readCell(bad)).toBeNull()
     }
+  })
+
+  it('puts a rank in the address as its full path, a missing rank left out', () => {
+    const turdus = readRank('?rank=genus&kingdom=Animalia&phylum=Chordata&class=Aves&order=Passeriformes'
+      + '&family=Turdidae&genus=Turdus')
+    expect(turdus).toEqual({ rank: 'genus', name: 'Turdus', path: [
+      { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+      { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
+    ] })
+    expect(mapSearch({ rank: turdus })).toBe('?rank=genus&kingdom=Animalia&phylum=Chordata&class=Aves'
+      + '&order=Passeriformes&family=Turdidae&genus=Turdus')
+    expect(readRank(mapSearch({ rank: turdus, cell: '872800b30ffffff' }))).toEqual(turdus)
+    expect(readCell(mapSearch({ rank: turdus, cell: '872800b30ffffff' }))).toBe('872800b30ffffff')
+    // A bee family GBIF files with no order: the order is left out, and read
+    // back as missing.
+    const apidae = readRank('?rank=family&kingdom=Animalia&phylum=Arthropoda&class=Insecta&family=Apidae')
+    expect(apidae.path[3]).toEqual({ rank: 'order', name: null })
+    expect(mapSearch({ rank: apidae })).toBe('?rank=family&kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae')
+    // Ranks below the rank are ignored; a species wins over a rank.
+    expect(readRank('?rank=kingdom&kingdom=Plantae&genus=Turdus')).toEqual({ rank: 'kingdom', name: 'Plantae',
+      path: [{ rank: 'kingdom', name: 'Plantae' }] })
+    expect(mapSearch({ species: '59PMB', rank: turdus })).toBe('?species=59PMB')
+    for (const bad of ['', '?rank=genus', '?rank=species&genus=Turdus', '?rank=genus&genus=',
+      '?rank=genus&genus=Turdus&species=59PMB']) {
+      expect(readRank(bad)).toBeNull()
+    }
+  })
+
+  it('tells two ranks of the same name apart by their path', () => {
+    const plant = readRank('?rank=genus&kingdom=Plantae&phylum=Tracheophyta&class=Magnoliopsida&order=Lamiales'
+      + '&family=Lamiaceae&genus=Prunella')
+    const bird = readRank('?rank=genus&kingdom=Animalia&phylum=Chordata&class=Aves&order=Passeriformes'
+      + '&family=Prunellidae&genus=Prunella')
+    expect(rankKey(plant)).not.toBe(rankKey(bird))
+    expect(rankKey(plant)).toBe(rankKey(readRank(mapSearch({ rank: plant, cell: '872800b30ffffff' }))))
+    expect(rankKey(null)).toBeNull()
+    // A family named like an order is not the order.
+    const missing = readRank('?rank=family&kingdom=A&phylum=B&class=C&family=D')
+    const named = readRank('?rank=family&kingdom=A&phylum=B&class=C&order=D')
+    expect(named).toBeNull()
+    expect(rankKey(missing)).not.toBe(rankKey(readRank('?rank=order&kingdom=A&phylum=B&class=C&order=D')))
+  })
+
+  it('knows the plain map: no species, rank or hexagon', () => {
+    expect(isPlainMap('')).toBe(true)
+    expect(isPlainMap('?')).toBe(true)
+    expect(isPlainMap('?species=59PMB')).toBe(false)
+    expect(isPlainMap('?cell=872800b30ffffff')).toBe(false)
+    expect(isPlainMap('?rank=kingdom&kingdom=Plantae')).toBe(false)
   })
 
   it('counts each filter in use once, and clears them all', () => {

@@ -22,10 +22,12 @@ Endpoints so far:
                     BC data datasets mention the species. An old key that
                     was merged gives the kept key's card with
                     merged_from set; an unknown key gives 404.
-    GET /api/search?q=&limit=
+    GET /api/search?q=&limit=&rank_limit=
                     species whose names (or key) match q, best first (see
-                    search.py). A query with fewer than 2 letters or
-                    digits gives 400.
+                    search.py), and ranks (kingdom to genus) whose name
+                    matches q, each labelled with its parent so homonyms
+                    can be told apart (see rank_search.py). A query with
+                    fewer than 2 letters or digits gives 400.
     GET /api/species/{key}/hexes?res=&year_from=&year_to=
                     the species map: records per H3 hexagon at res (4 to
                     7), optionally for a year range (see hexes.py). A bad
@@ -43,6 +45,21 @@ Endpoints so far:
                     sensitive setting hides are left out (none for now;
                     see sensitive.py). A bad cell, year range or filter
                     gives 400, an unknown species 404.
+    GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&offset=&limit=
+                    one kingdom, phylum, class, order, family or genus,
+                    named by its full path (one parameter per rank down to
+                    it; a rank not given is missing in the path): its
+                    species in BC, records and years, the next rank down,
+                    and one page of its species, most records first (see
+                    ranks.py). Species the sensitive setting hides are left
+                    out (none for now). A request that does not name a rank
+                    gives 400; a path no species has, 404.
+    GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=
+                    the rank map: the overview map restricted to the rank's
+                    species (records and distinct species per hexagon at
+                    res 4 to 7, for a year range), in the overview's shape.
+                    /api/hexes/{cell} also takes rank= and the same path, to
+                    list that rank's species in one hexagon.
     GET /api/datasets?q=&sort=&catalogue=&final_class=&frontend_group=&year_from=
                      &year_to=&organism=&access=&mappable=&species=&page=&page_size=
                     Lunaris datasets matching the keyword q (title,
@@ -78,7 +95,11 @@ from api.datasets import (DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, DatasetsRequestError
                           list_datasets, prepare_datasets)
 from api.db import open_data
 from api.hexes import HexesRequestError, species_hexes
+from api.ranks import DEFAULT_PAGE_SIZE as RANK_PAGE_SIZE
+from api.ranks import MAX_PAGE_SIZE as RANK_MAX_PAGE_SIZE
+from api.ranks import RANKS, RankRequestError, UnknownRank, rank_card, rank_hexes
 from api.overview import overview_hexes
+from api.rank_search import DEFAULT_RANK_LIMIT, MAX_RANK_LIMIT
 from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
 from api.settings import load_settings
 from api.species import build_species_card
@@ -92,6 +113,16 @@ def unknown_key(key):
         status_code=404,
         detail=f"No species with key {key!r} in the BC data: it is not a "
                "species key with records in BC, nor a key merged into one.")
+
+
+def unknown_rank(rank, given):
+    """The 404 error for a rank path no species in the BC data has (or whose
+    species are all hidden), spelling out the path asked for."""
+    return HTTPException(
+        status_code=404,
+        detail=f"No species in the BC data has this classification down to {rank}: "
+               + " > ".join(f"{name}={given.get(name) or '(missing)'}"
+                            for name in RANKS[:RANKS.index(rank) + 1]))
 
 
 def create_app(settings=None):
@@ -163,29 +194,67 @@ def create_app(settings=None):
     @app.get("/api/hexes/{cell}")
     def hexagon(cell: str, request: Request, year_from: int | None = None, year_to: int | None = None,
                 q: str | None = Query(None, max_length=200), species: str | None = Query(None, max_length=50),
+                rank: str | None = Query(None, max_length=20),
                 offset: int = Query(0, ge=0),
                 limit: int = Query(CELL_PAGE_SIZE, ge=1, le=CELL_MAX_PAGE_SIZE)):
         """Return the species in one hexagon, most records first, a page at
         a time, for the years year_from to year_to if either is given (see
         cells.py). species is a species key whose records in the hexagon
-        are given on their own."""
+        are given on their own; rank, with the rank's path (one parameter
+        per rank, as for /api/ranks/{rank}), keeps that rank's species
+        only."""
+        given = {name: request.query_params.get(name) for name in RANKS}
         try:
             return cell_species(request.app.state.data, cell, year_from, year_to, q, species,
-                                offset, limit)
-        except (HexesRequestError, QueryTooShort) as error:
+                                offset, limit, rank, given)
+        except (HexesRequestError, QueryTooShort, RankRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
         except UnknownSpecies:
             raise unknown_key(species)
+        except UnknownRank:
+            raise unknown_rank(rank, given)
+
+    @app.get("/api/ranks/{rank}/hexes")
+    def rank_map(rank: str, request: Request, res: int = Query(...),
+                 year_from: int | None = None, year_to: int | None = None):
+        """Return the rank map at resolution res: the records and distinct
+        species of the rank's species per hexagon, for the years year_from
+        to year_to if either is given (see ranks.py). The rank's path is
+        read from the query string, as for the rank card."""
+        given = {name: request.query_params.get(name) for name in RANKS}
+        try:
+            return rank_hexes(request.app.state.data, rank, given, res, year_from, year_to)
+        except (HexesRequestError, RankRequestError) as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except UnknownRank:
+            raise unknown_rank(rank, given)
+
+    @app.get("/api/ranks/{rank}")
+    def rank(rank: str, request: Request, offset: int = Query(0, ge=0),
+             limit: int = Query(RANK_PAGE_SIZE, ge=1, le=RANK_MAX_PAGE_SIZE)):
+        """Return the card for one rank, named by its full path: one query
+        parameter per rank from kingdom down to it (see ranks.py). The rank
+        names are read from the query string directly, since "class" and
+        "order" cannot be Python parameter names."""
+        given = {name: request.query_params.get(name) for name in RANKS}
+        try:
+            return rank_card(request.app.state.data, rank, given, offset, limit)
+        except RankRequestError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except UnknownRank:
+            raise unknown_rank(rank, given)
 
     @app.get("/api/search")
     def species_search(request: Request, q: str = Query(..., max_length=200),
-                       limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)):
+                       limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+                       rank_limit: int = Query(DEFAULT_RANK_LIMIT, ge=0, le=MAX_RANK_LIMIT)):
         """Return the species matching q, best first: a typed species key,
         then names equal to q, then names with a word starting with q, then
         names holding q anywhere; ties go to the species with more
-        records."""
+        records. Also up to rank_limit ranks (kingdom to genus) whose name
+        matches q, each labelled with its parent (see rank_search.py)."""
         try:
-            return search(request.app.state.data, q, limit)
+            return search(request.app.state.data, q, limit, rank_limit)
         except QueryTooShort as error:
             raise HTTPException(status_code=400, detail=str(error))
 

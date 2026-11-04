@@ -894,6 +894,25 @@ whole species is marked `bcsee_entry_english_name`. Species BCSEE lists but
 with no records in BC have no card and are never found. A query with fewer
 than 2 letters or digits gives 400.
 
+The same search also finds ranks (`ranks` in the answer, up to `rank_limit`,
+default 5, at most 20, 0 for none; `backend/api/rank_search.py`): kingdoms,
+phyla, classes, orders, families and genera whose name matches, compared and
+ranked in the same way (exact, start of a word, anywhere; ties to the rank
+with more records, then the higher rank). Each has its full path (as for the
+rank card), its species and records, and a `label` with its nearest named
+parent, so homonyms can be told apart: "Genus Prunella (Lamiaceae)" and
+"Genus Prunella (Prunellidae)". When the parent does not tell two apart
+(GBIF files a few genera under two orders, or once with no order), the label
+walks up the path until it does, naming a missing rank: "Genus Lachesilla
+(Lachesillidae, Psocodea)" and "Genus Lachesilla (Lachesillidae, no
+order)"; 13 genera in the real data need this. A kingdom has no parent
+("Kingdom Animalia"). The ranks are built once, when the API starts, into
+`rank_names` (19,617 paths), from the species `backend/api/sensitive.py`
+does not hide in lists with no location, so a rank whose species are all
+hidden is never found and no count includes a hidden species. A search
+takes about 20 ms on the real data. A common name can also find a rank
+whose name holds it ("robin" finds the genus Robinia).
+
 `GET /api/species/{key}/hexes?res=&year_from=&year_to=` gives the species map
 (`backend/api/hexes.py`): the records of one species per H3 hexagon at `res`
 (required, 4 to 7), from `species_hex.parquet`, counted by specieskey after the
@@ -972,6 +991,55 @@ to 7, a bad year range, or a filter with fewer than 2 letters or digits gives
 the Mac with the real data, best of three: 29 to 78 ms, including the
 busiest resolution 7 hexagon (3,293 species) and the busiest resolution 4
 hexagon (10,846 species); a page of 50 is about 8.5 KB.
+
+`GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&offset=&limit=`
+gives the card of one kingdom, phylum, class, order, family or genus
+(`backend/api/ranks.py`). A rank is named by its full path, never by its
+name alone, since names repeat (Prunella is a genus of plants in Lamiaceae
+and of birds in Prunellidae): one parameter per rank from kingdom down to
+it, for example `/api/ranks/genus?kingdom=Plantae&phylum=Tracheophyta&class=Magnoliopsida&order=Lamiales&family=Lamiaceae&genus=Prunella`.
+A rank above it that is not given (or given empty) is missing in the path, so
+a family GBIF gives no order for is not the same family as one with an
+order; the rank's own name must be given, a rank below it must not be, and
+names are compared exactly. The classification is GBIF's (as it came with
+the records) and the species names are the Catalogue of Life's; the card
+says so (`classification_source`, `name_source`). A species with a missing
+rank still counts at the ranks it has; a key merged into a card counts
+under the card's classification. The card gives the `path` (each rank and
+its name, null when missing), `species_count`, `record_count`,
+`records_no_year`, `first_year` and `last_year` of its species, the next
+rank down (`children_rank` and `children`, each name with its species and
+records, null for species missing that rank; none for a genus), and one page
+of its species (`members`, most records first, with names, BCSEE statuses
+and records; `limit` default 50, at most 200, from `offset`). Species the
+sensitive-species setting hides are left out of the list, the totals and
+the children: the card asks `backend/api/sensitive.py` with no resolution,
+as it has no location, so a rule decided later (for example for a genus with
+one species) covers cards too; a rank whose species are all hidden is not
+found. A request that does not name a rank gives 400, a path no species has
+404. On the real data a card takes 5 to 32 ms (Animalia, 20,753 species, is
+the largest).
+
+`GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=`
+gives the rank map (`rank_hexes` in `backend/api/ranks.py`): the overview map
+restricted to the rank's species. For every hexagon at `res` (4 to 7) it
+gives the records and the distinct species of the rank's species, in the
+overview's shape (`cells`, `occurrences`, `distinct_species`, with
+`hexagon_count`, `records_shown`, `records_total`, `records_no_year_left_out`
+and `records_outside_years`), and follows the overview's year rules, so the
+front end can draw it as the overview's two views. It names its rank
+(`rank`, `name`, `path`). With no years, its records at every resolution add
+up to the card's `record_count`. `/api/hexes/{cell}` also takes `rank=` with
+the same path parameters: the hexagon's list, totals and no-date counts are
+then about that rank's species only (`rank` in the answer names it; a
+species and a rank cannot both be asked for), and its totals are the rank
+map's for that hexagon. Whether a rank exists is decided as for its card, so
+card, map and hexagon lists are found or not found together; the map and the
+hexagon list then ask `backend/api/sensitive.py` with their resolution and
+leave the species it hides out of every count. Measured on the Mac with the
+real data, best of three: genus Turdus 18 ms at resolution 4 and 64 ms at 7,
+family Asteraceae 46 and 97 ms, kingdom Animalia 95 and 326 ms (about the
+overview's own cost); a hexagon's list for a rank 13 to 46 ms.
 
 ### The Lunaris datasets API
 
@@ -1187,7 +1255,7 @@ without our snapshot's cleaning, so its count may differ a little. The side
 panel shows one thing
 at a time: the hexagon panel when the address has `?cell=<H3 id>` (on a
 species map the card is only covered, and comes back when the panel
-closes), else the species card. History: the first click (no `cell` in the
+closes), else the species card, else a rank's card (see below). History: the first click (no `cell` in the
 address yet) adds an address entry, so Back closes the panel and returns to
 what was there before; further clicks while the panel is open replace that
 entry, so clicking hexagon after hexagon does not fill the history; opening
@@ -1215,6 +1283,39 @@ legend gives the species name, the colours, the records and hexagons at the
 current resolution ("964,801 records in 17,412 hexagons"), and the note that
 the maps show recording effort. The hover box gives the number of records of
 that species in the hexagon.
+
+A rank (kingdom, phylum, class, order, family or genus) has its own page on
+the species map, named by its full path in the address, one parameter per
+rank and a missing rank left out:
+`?rank=genus&kingdom=Animalia&phylum=Chordata&class=Aves&order=Passeriformes&family=Turdidae&genus=Turdus`
+(`readRank` and `mapSearch` in `frontend/src/route.js`), so it can be
+shared, and Prunella the plant and Prunella the bird are two pages. Its
+card (`frontend/src/RankCard.jsx`, from `GET /api/ranks/{rank}`) sits where
+the species card goes: the rank and the ranks above it, each a link to its page ("no order" for one
+GBIF leaves out, not a link), its species, records and years in BC, the
+next rank down with each name's species and records (most records first, 10
+shown, "Show all" for the rest; each opens that rank; species missing that
+rank are counted, not linked), its species, most records first, 50 at a
+time (each opens its card), and a note that the classification comes from
+GBIF and the species names from the Catalogue of Life. Its map is the
+overview restricted to the rank's species (`GET /api/ranks/{rank}/hexes`),
+with the overview's Species and Records toggle, colours and bins, a legend
+that names the rank ("Species of *Turdus* per hexagon"), and a "Showing
+genus *Turdus*" label at the top left whose x returns to all species. A
+genus is written in italics, the other ranks in plain type
+(`frontend/src/RankName.jsx`). Clicking a hexagon on a rank map lists that
+rank's species in it ("Genus *Turdus* in this hexagon"), each opening its
+card, with a link to every species in the hexagon. History, as on the
+species map: opening a rank (picked in the search box, from a card's
+classification line, or the next rank down), or a species from the rank
+card, adds an entry, so Back returns to the card (the species card then shows a
+"Back to genus *Turdus*" link that does the same); the rank's x (on the card
+or the label) acts like Back when the rank was opened in this visit from
+the plain map, else returns to all species in place, keeping an open
+hexagon; hexagon clicks work as on the overview, with the rank kept in the
+address. The tests are in `frontend/src/RankCard.test.jsx`,
+`frontend/src/AppHexagon.test.jsx` and the rank parts of the map, panel,
+route and API tests.
 
 One year control, under the scale toggle (`frontend/src/YearFilter.jsx`),
 applies to whichever map is shown. It starts on all years, so the site looks
@@ -1297,7 +1398,21 @@ first, with its authorship, then the BCSEE English name (labelled as BCSEE),
 then any BCSEE entry name that matched (labelled as an entry name, never as the
 species' English name), then the family and record count, which tell apart two
 cards with the same scientific name. No conservation status is shown in the
-list. Picking a species opens its card.
+list. Picking a species opens its card. The search also finds ranks (up to
+5, from `GET /api/search`), listed after the species under their own
+heading, "Genera, families and higher ranks" (with a "Species" heading
+over the species), so a rank a common word finds ("robin" finds the genus
+*Robinia*) is never taken for a species; with no rank found the list looks
+as before. The ranks come first only when a rank's name is the query itself,
+ignoring case and the spaces around it ("Turdus", "aves"), so Enter opens
+that rank (`ranksFirst` in `SearchBox.jsx`); the whole group moves up, with
+the exact match at its top. Each rank shows the API's label ("Genus *Robinia* (Fabaceae)",
+the parent telling apart ranks of the same name, the genus in italics) and
+its species and records in BC, and the arrow keys move from the species
+into the ranks. Picking a rank opens its page as a new address entry,
+unlike a species (which replaces the entry), so Back returns to what was
+there and the rank's x acts like Back when it was picked on the plain
+map.
 
 The species card (`frontend/src/SpeciesCard.jsx`, from `GET /api/species/{key}`)
 shows, top to bottom:
@@ -1309,8 +1424,10 @@ shows, top to bottom:
   them (cards with no authorship, 454 of 38,992, show no "?"); under it,
   for a key merged in under another name, "Previously known as:" with that
   name and authorship (placeholder wording, to be decided); the
-  classification from kingdom to genus; and the common name labelled "Common name from
-  BCSEE". When BCSEE lists separate species on the key, no common name is
+  classification from kingdom to genus, each name a link to its rank's page
+  (named on hover, "Class Aves"; a new address entry, so Back returns to
+  the card) and a rank GBIF leaves out shown as "no order", not a link; and
+  the common name labelled "Common name from BCSEE". When BCSEE lists separate species on the key, no common name is
   shown here; each BCSEE entry shows its own.
 - the photo, only when the API sends one, always whole (never cropped, as ND
   licences require), with creator, the copyright holder for CC BY licences,

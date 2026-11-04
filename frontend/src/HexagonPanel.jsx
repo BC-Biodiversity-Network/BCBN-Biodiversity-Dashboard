@@ -3,7 +3,8 @@ import { cellArea, getResolution } from 'h3-js'
 
 import { MIN_SEARCH_CHARACTERS, fetchCell, searchableLength } from './api'
 import { gbifCellSearchUrl } from './gbifLinks'
-import { speciesMapSearch } from './route'
+import RankName, { rankTitle } from './RankName'
+import { mapSearch, rankKey, speciesMapSearch } from './route'
 import YearBars from './YearBars'
 import { yearsLabel } from './yearRange'
 
@@ -58,10 +59,12 @@ function SpeciesNameText({ item }) {
 }
 
 // A link that calls onFollow() in place of following it (a plain click
-// only; with a modifier key it opens as a normal link).
-function InPageLink({ href, onFollow, children }) {
+// only; with a modifier key it opens as a normal link). Other props (a
+// title, an aria-label) go on the link.
+export function InPageLink({ href, onFollow, children, ...rest }) {
   return (
     <a
+      {...rest}
       href={href}
       onClick={(event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
@@ -119,7 +122,7 @@ function LoadError({ error }) {
 // One species in the all-species list: its names (a link that opens its
 // card and map), its BCSEE status chips and its records in the hexagon.
 // onOpen(key) opens it in place of following the link.
-function SpeciesRow({ item, onOpen }) {
+export function SpeciesRow({ item, onOpen }) {
   return (
     <li className="hexagon-row">
       <div className="hexagon-row-line">
@@ -144,7 +147,7 @@ function SpeciesRow({ item, onOpen }) {
 
 // The line under the list when it holds more than one page: which species
 // are shown, and buttons for the page before and after.
-function Pager({ data, onPage }) {
+export function Pager({ data, onPage }) {
   if (data.matching <= data.limit) {
     return null
   }
@@ -169,14 +172,18 @@ function Pager({ data, onPage }) {
 // The panel on the overview: the hexagon's records and species for the
 // chosen years, and its species, most records first, a page of PAGE_SIZE at
 // a time, with a box to filter them by name. onOpenSpecies(key) opens a
-// species' card and map.
-function AllSpeciesPanel({ cell, years, onClose, onOpenSpecies }) {
+// species' card and map. On a rank map (rank is { rank, name, path }), only
+// the rank's species, with a link to every species in the hexagon
+// (onShowAllSpecies).
+function AllSpeciesPanel({ cell, years, rank = null, onClose, onOpenSpecies, onShowAllSpecies }) {
   const [typed, setTyped] = useState('')
   // The filter in use: what was typed, once it is long enough and the
   // typing has paused, else ''.
   const [filter, setFilter] = useState('')
   const [offset, setOffset] = useState(0)
-  const { current, data } = useCellAnswer(cell, { years, q: filter, offset, limit: PAGE_SIZE })
+  const { current, data } = useCellAnswer(cell, {
+    years, q: filter, offset, limit: PAGE_SIZE, rank: rank ? { rank: rank.rank, path: rank.path } : null,
+  })
 
   // Filters a moment after the user stops typing; a filter too short to
   // search is not used.
@@ -199,7 +206,10 @@ function AllSpeciesPanel({ cell, years, onClose, onOpenSpecies }) {
       <button type="button" className="card-close" onClick={onClose} aria-label="Close the list of species in this hexagon">
         ×
       </button>
-      <h2 className="hexagon-title">Species in this hexagon</h2>
+      <h2 className="hexagon-title">
+        {rank ? <>{rankTitle(rank.rank)} <RankName rank={rank.rank} name={rank.name} /> in this hexagon</>
+          : 'Species in this hexagon'}
+      </h2>
       <p className="hexagon-size">{hexagonSizeText(cell)}</p>
       {current?.error && <LoadError error={current.error} />}
       {!data && !current?.error && <p className="card-message">Loading the species in this hexagon...</p>}
@@ -229,6 +239,18 @@ function AllSpeciesPanel({ cell, years, onClose, onOpenSpecies }) {
                 )}
               <Pager data={data} onPage={setOffset} />
             </>
+          )}
+          {rank && data.species === 0 && (
+            <p className="hexagon-note">
+              No species of this {rank.rank} in this hexagon{data.years_counted ? ' for these years' : ''}.
+            </p>
+          )}
+          {rank && (
+            <p className="hexagon-show-all">
+              <InPageLink href={mapSearch({ cell })} onFollow={onShowAllSpecies}>
+                Show all species in this hexagon
+              </InPageLink>
+            </p>
           )}
           <p className="hexagon-sources">
             Scientific names from the Catalogue of Life, via GBIF; English names and statuses
@@ -332,15 +354,20 @@ function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies }) {
 }
 
 // The panel for one clicked hexagon, in the side panel where the species
-// card goes. On the overview (species null) it lists every species in the
-// hexagon (see AllSpeciesPanel); on a species map (species is { key, name,
-// ... }) it is about that species alone (see SpeciesPanel). onOpenSpecies
-// (key) opens a species' card and map, onShowAllSpecies switches to the
-// overview's panel for the same hexagon, and onClose closes the panel. The
-// page gives the panel the hexagon id as its React key, so each hexagon
-// starts afresh.
-export default function HexagonPanel({ cell, years, species, onClose, onOpenSpecies, onShowAllSpecies }) {
-  return species
-    ? <SpeciesPanel cell={cell} years={years} species={species} onClose={onClose} onShowAllSpecies={onShowAllSpecies} />
-    : <AllSpeciesPanel cell={cell} years={years} onClose={onClose} onOpenSpecies={onOpenSpecies} />
+// card goes. On the overview (species and rank null) it lists every species
+// in the hexagon (see AllSpeciesPanel); on a species map (species is { key,
+// name, ... }) it is about that species alone (see SpeciesPanel); on a rank
+// map (rank is { rank, name, path }) it lists that rank's species in the
+// hexagon, with a link to every species there. onOpenSpecies(key) opens a
+// species' card and map, onShowAllSpecies switches to the overview's panel
+// for the same hexagon, and onClose closes the panel. The page gives the
+// panel the hexagon id as its React key, so each hexagon starts afresh.
+export default function HexagonPanel({ cell, years, species, rank = null, onClose, onOpenSpecies, onShowAllSpecies }) {
+  if (species) {
+    return <SpeciesPanel cell={cell} years={years} species={species} onClose={onClose} onShowAllSpecies={onShowAllSpecies} />
+  }
+  return (
+    <AllSpeciesPanel key={rank ? rankKey(rank) : 'all'} cell={cell} years={years} rank={rank} onClose={onClose}
+      onOpenSpecies={onOpenSpecies} onShowAllSpecies={onShowAllSpecies} />
+  )
 }

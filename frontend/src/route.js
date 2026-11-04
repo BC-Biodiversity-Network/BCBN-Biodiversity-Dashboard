@@ -9,7 +9,12 @@ import { useCallback, useEffect, useState } from 'react'
 //   ?cell=<H3 id>                     the species map with that hexagon's
 //                                     panel open (the species in it)
 //   ?species=<key>&cell=<H3 id>       that species' map with the hexagon's
-//                                     panel open, leading with the species
+//                                     panel open, about that species
+//   ?rank=genus&kingdom=Animalia&phylum=Chordata&class=Aves
+//       &order=Passeriformes&family=Turdidae&genus=Turdus
+//                                     a rank's page: its card and its map (the
+//                                     overview restricted to its species);
+//                                     with &cell=<H3 id>, its hexagon panel
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
 //       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
@@ -49,18 +54,66 @@ export function readCell(search) {
 // App.jsx).
 export const PANEL_FROM_CLICK = { panelFromClick: true }
 
-// The query string for the species map with a species' card open (key, or
-// null for none) and a hexagon's panel open (cell, or null for none).
-export function speciesMapSearch(key, cell = null) {
+// Whether a query string is the plain species map: no species, rank or
+// hexagon open.
+export function isPlainMap(search) {
+  return !readSpeciesKey(search) && !readRank(search) && !readCell(search)
+}
+
+// The ranks a rank page can be about, highest first (the same list as
+// RANKS in backend/api/ranks.py).
+export const RANKS = ['kingdom', 'phylum', 'class', 'order', 'family', 'genus']
+
+// The rank whose page is open on the species map, from a query string:
+// { rank, name, path }, where path is [{ rank, name }] from the kingdom down
+// to the rank (name null for a missing rank), or null for none. A rank is
+// named by its full path, one parameter per rank, as the API takes it
+// (?rank=genus&kingdom=Animalia&...&genus=Turdus). An address that also
+// names a species, names no rank, or gives no name for the rank itself
+// opens no rank.
+export function readRank(search) {
+  const params = new URLSearchParams(search)
+  const rank = params.get('rank')
+  if (!RANKS.includes(rank) || params.get('species')) {
+    return null
+  }
+  const path = RANKS.slice(0, RANKS.indexOf(rank) + 1).map((name) => ({ rank: name, name: params.get(name) || null }))
+  const own = path[path.length - 1].name
+  return own ? { rank, name: own, path } : null
+}
+
+// A short text that is the same for the same rank path and different for
+// any other, to compare ranks and to file their maps under.
+export function rankKey(rankRef) {
+  return rankRef ? rankRef.path.map((step) => step.name ?? '').join('|') + `|${rankRef.rank}` : null
+}
+
+// The query string for the species map: with a species' card open (species,
+// a key), or a rank's page (rank, { rank, path }), never both, and a
+// hexagon's panel open (cell); each null for none.
+export function mapSearch({ species = null, rank = null, cell = null } = {}) {
   const params = new URLSearchParams()
-  if (key) {
-    params.set('species', key)
+  if (species) {
+    params.set('species', species)
+  } else if (rank) {
+    params.set('rank', rank.rank)
+    for (const step of rank.path) {
+      if (step.name) {
+        params.set(step.rank, step.name)
+      }
+    }
   }
   if (cell) {
     params.set('cell', cell)
   }
   const text = params.toString()
   return text ? `?${text}` : '?'
+}
+
+// The query string for the species map with a species' card open (key, or
+// null for none) and a hexagon's panel open (cell, or null for none).
+export function speciesMapSearch(key, cell = null) {
+  return mapSearch({ species: key, cell })
 }
 
 // The orders the list can be sorted in. Relevance only makes sense with a

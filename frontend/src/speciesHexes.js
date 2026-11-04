@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { fetchOverviewHexes, fetchSpeciesHexes } from './api'
+import { fetchOverviewHexes, fetchRankHexes, fetchSpeciesHexes } from './api'
+import { rankKey } from './route'
 import { yearsKey } from './yearRange'
 
 // Turns the API's species map answer (two lists, cells and occurrences) into
@@ -146,4 +147,25 @@ export function useSpeciesHexes(speciesKey, years, resolution) {
 // then and nothing is fetched.
 export function useOverviewHexes(years, resolution) {
   return useHexesFromApi(years ? 'overview' : null, years, resolution, fetchOverviewAt, toOverviewData)
+}
+
+// The rank fetchers made so far, one per rank path, so each stays the same
+// function between renders and does not restart the request.
+const rankFetchers = new Map()
+
+// The fetcher for one rank ({ rank, path }), made once per path.
+function rankFetcher(rankRef) {
+  const key = rankKey(rankRef)
+  if (!rankFetchers.has(key)) {
+    rankFetchers.set(key, (resolution, years, signal) => fetchRankHexes(rankRef, resolution, { signal, years }))
+  }
+  return rankFetchers.get(key)
+}
+
+// The map of a rank for the year range and resolution being shown: the
+// overview restricted to the rank's species, in the overview's shape (see
+// useHexesFromApi and toOverviewData). rankRef is { rank, path }, or null.
+export function useRankHexes(rankRef, years, resolution) {
+  return useHexesFromApi(rankKey(rankRef), years, resolution, rankRef ? rankFetcher(rankRef) : fetchNothing,
+    toOverviewData)
 }

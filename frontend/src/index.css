@@ -1687,6 +1687,16 @@ body {
   margin: 8px 0 6px;
 }
 
+/* The line on a rank card saying that its numbers count only the years
+   chosen in the year boxes. */
+.rank-years {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: #f3f6fa;
+  color: #333;
+}
+
 .rank-children {
   margin: 0 0 6px;
   padding: 0;

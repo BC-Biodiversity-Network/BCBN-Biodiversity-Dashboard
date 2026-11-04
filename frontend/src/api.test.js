@@ -266,6 +266,16 @@ describe('the rank requests', () => {
       + '&family=Apidae&offset=50&limit=25')
   })
 
+  it('sends the year range of a card, leaving out an open end', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
+    await fetchRank(APIDAE, { years: { from: 2000, to: 2020 } })
+    await fetchRank(APIDAE, { years: { from: null, to: 1999 } })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae&year_from=2000&year_to=2020&offset=0&limit=50')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae&year_to=1999&offset=0&limit=50')
+  })
+
   it('sends the card\'s list options: name filter, statuses and order', async () => {
     const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
     await fetchRank(APIDAE, { list: { q: ' bee ', status: ['exotic'], sort: 'scientific', page: 2 }, offset: 50 })

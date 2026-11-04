@@ -49,16 +49,19 @@ Endpoints so far:
                     for now; see sensitive.py). A bad cell, year range,
                     filter, status or sort gives 400, an unknown species
                     404.
-    GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&q=&status=&sort=&offset=&limit=
+    GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&year_from=&year_to=&q=&status=&sort=&offset=&limit=
                     one kingdom, phylum, class, order, family or genus,
                     named by its full path (one parameter per rank down to
                     it; a rank not given is missing in the path): its
                     species in BC, records and years, the next rank down,
                     and one page of its species, filtered and ordered as
-                    for /api/hexes/{cell} (see ranks.py). Species the
+                    for /api/hexes/{cell} (see ranks.py). With a year
+                    range, every number on the card counts only those
+                    years, as the maps do. Species the
                     sensitive setting hides are left out (none for now). A
-                    request that does not name a rank, or a bad filter,
-                    status or sort, gives 400; a path no species has, 404.
+                    request that does not name a rank, or a bad year
+                    range, filter, status or sort, gives 400; a path no
+                    species has, 404.
     GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=
                     the rank map: the overview map restricted to the rank's
                     species (records and distinct species per hexagon at
@@ -102,7 +105,7 @@ from api.db import open_data
 from api.hexes import HexesRequestError, species_hexes
 from api.ranks import DEFAULT_PAGE_SIZE as RANK_PAGE_SIZE
 from api.ranks import MAX_PAGE_SIZE as RANK_MAX_PAGE_SIZE
-from api.ranks import RANKS, RankRequestError, UnknownRank, rank_card, rank_hexes
+from api.ranks import RANKS, RankRequestError, UnknownRank, prepare_rank_cards, rank_card, rank_hexes
 from api.overview import overview_hexes
 from api.rank_search import DEFAULT_RANK_LIMIT, MAX_RANK_LIMIT
 from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
@@ -144,6 +147,7 @@ def create_app(settings=None):
         app.state.data = open_data(settings or load_settings())
         try:
             prepare_search(app.state.data)
+            prepare_rank_cards(app.state.data)
             prepare_datasets(app.state.data)
             yield
         finally:
@@ -237,7 +241,8 @@ def create_app(settings=None):
             raise unknown_rank(rank, given)
 
     @app.get("/api/ranks/{rank}")
-    def rank(rank: str, request: Request, q: str | None = Query(None, max_length=200),
+    def rank(rank: str, request: Request, year_from: int | None = None, year_to: int | None = None,
+             q: str | None = Query(None, max_length=200),
              status: list[str] = Query([], max_length=20), sort: str | None = Query(None, max_length=20),
              offset: int = Query(0, ge=0),
              limit: int = Query(RANK_PAGE_SIZE, ge=1, le=RANK_MAX_PAGE_SIZE)):
@@ -245,11 +250,13 @@ def create_app(settings=None):
         parameter per rank from kingdom down to it (see ranks.py). The rank
         names are read from the query string directly, since "class" and
         "order" cannot be Python parameter names. Its species list takes
-        the same filters and order as a hexagon's (q, status, sort)."""
+        the same filters and order as a hexagon's (q, status, sort), and
+        year_from and year_to make every number count only those years."""
         given = {name: request.query_params.get(name) for name in RANKS}
         try:
-            return rank_card(request.app.state.data, rank, given, offset, limit, q, status, sort)
-        except (RankRequestError, QueryTooShort, ListRequestError) as error:
+            return rank_card(request.app.state.data, rank, given, offset, limit, q, status, sort,
+                             year_from, year_to)
+        except (RankRequestError, QueryTooShort, ListRequestError, HexesRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
         except UnknownRank:
             raise unknown_rank(rank, given)

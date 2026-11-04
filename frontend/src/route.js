@@ -24,6 +24,11 @@ import { useCallback, useEffect, useState } from 'react'
 //                                     same options with cell_ in front, as
 //                                     both lists can be open at once (the
 //                                     panel covers the card)
+//   ...&year_from=2000&year_to=2020   the year range of whichever map is
+//                                     shown (either end can be left out for
+//                                     an open end), on any species map
+//                                     address, so a shared link or the back
+//                                     button keeps the years
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
 //       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
@@ -153,12 +158,48 @@ export function keptListChoices(list) {
   return { ...NO_LIST, sort: list.sort, status: list.status }
 }
 
+// The year range of the species map, from a query string: null for all
+// years, or { from, to } with either end null for an open end (the year
+// boxes' own shape, see yearRange.js). A value that is not a year from 1000
+// to 9999 counts as left out.
+export function readMapYears(search) {
+  const params = new URLSearchParams(search)
+  const from = readYear(params.get('year_from'))
+  const to = readYear(params.get('year_to'))
+  return from === null && to === null ? null : { from, to }
+}
+
+// Adds a year range ({ from, to }, or null for all years) to a query
+// string's parameters, leaving out an open end.
+function addYears(params, years) {
+  if (years?.from != null) {
+    params.set('year_from', String(years.from))
+  }
+  if (years?.to != null) {
+    params.set('year_to', String(years.to))
+  }
+}
+
+// A species map query string with its year range replaced by years (null
+// for all years), everything else kept as it is.
+export function withYears(search, years) {
+  const params = new URLSearchParams(search)
+  params.delete('year_from')
+  params.delete('year_to')
+  addYears(params, years)
+  const text = params.toString()
+  return text ? `?${text}` : '?'
+}
+
 // The query string for the species map: with a species' card open (species,
 // a key), or a rank's page (rank, { rank, path }), never both, and a
 // hexagon's panel open (cell); each null for none. rankList and cellList
 // are the options of the rank card's and the hexagon panel's species lists
-// (see readList), left out when null or the defaults.
-export function mapSearch({ species = null, rank = null, cell = null, rankList = null, cellList = null } = {}) {
+// (see readList), left out when null or the defaults. years is the year
+// range of the map (null for all years).
+export function mapSearch({
+  species = null, rank = null, cell = null, rankList = null, cellList = null, years = null,
+} = {}) {
   const params = new URLSearchParams()
   if (species) {
     params.set('species', species)
@@ -175,6 +216,7 @@ export function mapSearch({ species = null, rank = null, cell = null, rankList =
     params.set('cell', cell)
     addList(params, cellList, CELL_LIST)
   }
+  addYears(params, years)
   const text = params.toString()
   return text ? `?${text}` : '?'
 }

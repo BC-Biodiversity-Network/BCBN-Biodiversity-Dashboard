@@ -68,7 +68,7 @@ vi.mock('./HexagonPanel', () => ({
 vi.mock('./RankCard', () => ({
   // A stand-in rank card: its rank, its x, the genus Turdus as the next
   // rank down, and the robin in its list.
-  default: function RankCard({ rankRef, list, onListChange, onClose, onOpenSpecies, onOpenRank }) {
+  default: function RankCard({ rankRef, years, list, onListChange, onClose, onOpenSpecies, onOpenRank }) {
     return (
       <div className="stand-in-rank-card">
         <p>Card of {rankRef.rank} {rankRef.name}</p>
@@ -77,6 +77,7 @@ vi.mock('./RankCard', () => ({
         <button type="button" onClick={() => onOpenSpecies('59PMB')}>Open the robin from the rank</button>
         <button type="button" onClick={() => onListChange(CARD_LIST)}>Filter the rank's list</button>
         <p className="stand-in-card-list">{JSON.stringify(list)}</p>
+        <p className="stand-in-card-years">{JSON.stringify(years)}</p>
       </div>
     )
   },
@@ -674,4 +675,62 @@ describe('the species lists and the address', () => {
       await act(async () => {})
       expect(window.location.search).toBe('')
     })
+})
+
+describe('the year range and the address', () => {
+  // The years the stand-in rank card was given.
+  function cardYears() {
+    return JSON.parse(document.querySelector('.stand-in-card-years').textContent)
+  }
+
+  it('gives a rank page\'s card the years of its address, and changes them in place', async () => {
+    window.history.replaceState(null, '', '/')
+    window.history.pushState({ rankOpenedFrom: '' }, '', `/${TURDUS_SEARCH}&year_from=2000&year_to=2020`)
+    render(<Page />)
+    await act(async () => {})
+    history.pushes.mockClear()
+    history.replaces.mockClear()
+    expect(cardYears()).toEqual({ from: 2000, to: 2020 })
+    expect(seen.map.years).toEqual({ from: 2000, to: 2020 })
+    act(() => seen.map.onYearsChange({ from: 2010, to: null }))
+    await act(async () => {})
+    expect(window.location.search).toBe(`${TURDUS_SEARCH}&year_from=2010`)
+    expect(calls()).toEqual({ added: 0, replaced: 1 })
+    expect(window.history.state).toEqual({ rankOpenedFrom: '' })
+    expect(cardYears()).toEqual({ from: 2010, to: null })
+    act(() => seen.map.onYearsChange(null))
+    await act(async () => {})
+    expect(window.location.search).toBe(TURDUS_SEARCH)
+    expect(cardYears()).toBeNull()
+  })
+
+  it('keeps the years when opening the next rank down, a species and a hexagon, and Back brings them back',
+    async () => {
+      await openAt(`${TURDIDAE_SEARCH}&year_from=2000&year_to=2020`)
+      fireEvent.click(screen.getByRole('button', { name: 'Open the genus Turdus' }))
+      await act(async () => {})
+      expect(window.location.search).toBe(`${TURDUS_SEARCH}&year_from=2000&year_to=2020`)
+      expect(cardYears()).toEqual({ from: 2000, to: 2020 })
+      clickHexagon(CELL_A)
+      await act(async () => {})
+      expect(window.location.search).toBe(`${TURDUS_SEARCH}&cell=${CELL_A}&year_from=2000&year_to=2020`)
+      await closeWithX(`${TURDUS_SEARCH}&year_from=2000&year_to=2020`)
+      fireEvent.click(screen.getByRole('button', { name: 'Open the robin from the rank' }))
+      await act(async () => {})
+      expect(window.location.search).toBe('?species=59PMB&year_from=2000&year_to=2020')
+      expect(seen.map.years).toEqual({ from: 2000, to: 2020 })
+      await pressBack(`${TURDUS_SEARCH}&year_from=2000&year_to=2020`)
+      expect(cardYears()).toEqual({ from: 2000, to: 2020 })
+      await pressBack(`${TURDIDAE_SEARCH}&year_from=2000&year_to=2020`)
+      expect(cardYears()).toEqual({ from: 2000, to: 2020 })
+    })
+
+  it('keeps the years when the rank closes', async () => {
+    await openAt(`${TURDUS_SEARCH}&year_from=2000`)
+    fireEvent.click(screen.getByRole('button', { name: 'Close the rank' }))
+    await act(async () => {})
+    expect(window.location.search).toBe('?year_from=2000')
+    expect(seen.map.years).toEqual({ from: 2000, to: null })
+    expect(seen.map.rank).toBeNull()
+  })
 })

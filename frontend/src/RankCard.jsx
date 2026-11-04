@@ -4,6 +4,7 @@ import { fetchRank } from './api'
 import { InPageLink, SpeciesRow } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
 import { NO_LIST, mapSearch, rankKey } from './route'
+import { yearsKey, yearsLabel } from './yearRange'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 
 // How many species one page of the card's list holds.
@@ -126,18 +127,20 @@ function CardError({ error }) {
 // from. The ranks above it open as well (onOpenRank). rankRef is { rank,
 // name, path }; list holds the species list's options ({ q, sort, status,
 // page }, from the address) and onListChange(list) changes them; onClose
-// closes the rank.
+// closes the rank. years is the year range of the map ({ from, to }, or
+// null for all years): every number on the card then counts only those
+// years, as the map does, and the card says so.
 export default function RankCard({
-  rankRef, list = NO_LIST, onListChange = () => {}, onClose, onOpenSpecies, onOpenRank,
+  rankRef, years = null, list = NO_LIST, onListChange = () => {}, onClose, onOpenSpecies, onOpenRank,
 }) {
   const [loaded, setLoaded] = useState(null)
   const offset = (list.page - 1) * PAGE_SIZE
-  const request = JSON.stringify([rankKey(rankRef), list.q, list.status, list.sort, offset])
+  const request = JSON.stringify([rankKey(rankRef), yearsKey(years), list.q, list.status, list.sort, offset])
 
-  // Loads the page asked for; a newer request cancels an older one.
+  // Loads the card asked for; a newer request cancels an older one.
   useEffect(() => {
     const controller = new AbortController()
-    fetchRank(rankRef, { list, offset, limit: PAGE_SIZE, signal: controller.signal })
+    fetchRank(rankRef, { years, list, offset, limit: PAGE_SIZE, signal: controller.signal })
       .then((card) => setLoaded({ request, card }))
       .catch((error) => {
         if (error.name !== 'AbortError') {
@@ -151,7 +154,8 @@ export default function RankCard({
   }, [request])
 
   const current = loaded?.request === request ? loaded : null
-  // While another page or filter loads, the last card of this rank stays.
+  // While another page, filter or year range loads, the last card of this
+  // rank stays.
   const sameRank = loaded && JSON.parse(loaded.request)[0] === rankKey(rankRef)
   const card = current?.card ?? (sameRank ? loaded.card : null)
   const shown = card ? shownText(card, list) : null
@@ -170,30 +174,50 @@ export default function RankCard({
       {!card && !current?.error && <p className="card-message">Loading the card...</p>}
       {card && (
         <>
-          <p className="rank-totals">{rankTotalsText(card)}</p>
+          {card.years_counted && (
+            <p className="rank-years">
+              Every number on this card counts only the records from {yearsLabel(card.years_counted)}, as on
+              the map.
+            </p>
+          )}
+          {card.species_count > 0
+            ? <p className="rank-totals">{rankTotalsText(card)}</p>
+            : (
+              <p className="rank-totals">
+                No records of this {rankRef.rank} from {yearsLabel(card.years_counted)}.
+              </p>
+            )}
           {card.records_no_year > 0 && (
             <p className="hexagon-note">
               {card.records_no_year.toLocaleString()} of these records {card.records_no_year === 1 ? 'has' : 'have'} no date.
             </p>
           )}
+          {card.records_no_year_left_out > 0 && (
+            <p className="hexagon-note">
+              {card.records_no_year_left_out.toLocaleString()} {card.records_no_year_left_out === 1
+                ? 'record with no date is' : 'records with no date are'} not counted.
+            </p>
+          )}
           {card.children && card.children.length > 0 && <Children card={card} onOpenRank={onOpenRank} />}
-          <section className="card-section">
-            <h3>Species ({card.species_count.toLocaleString()})</h3>
-            <SpeciesListControls list={list} data={card} onChange={onListChange}
-              filterLabel={`Filter the species of this ${rankRef.rank} by name`} />
-            {shown && <p className="species-list-shown">{shown}</p>}
-            {card.matching === 0
-              ? <p className="hexagon-note">{noMatchText(list)}</p>
-              : (
-                <ol className="hexagon-species" start={card.offset + 1}>
-                  {card.members.map((member) => (
-                    <SpeciesRow key={member.specieskey} item={{ ...member, records: member.record_count }}
-                      onOpen={onOpenSpecies} />
-                  ))}
-                </ol>
-              )}
-            <SpeciesListPaging data={card} list={list} onChange={onListChange} />
-          </section>
+          {card.species_count > 0 && (
+            <section className="card-section">
+              <h3>Species ({card.species_count.toLocaleString()})</h3>
+              <SpeciesListControls list={list} data={card} onChange={onListChange}
+                filterLabel={`Filter the species of this ${rankRef.rank} by name`} />
+              {shown && <p className="species-list-shown">{shown}</p>}
+              {card.matching === 0
+                ? <p className="hexagon-note">{noMatchText(list)}</p>
+                : (
+                  <ol className="hexagon-species" start={card.offset + 1}>
+                    {card.members.map((member) => (
+                      <SpeciesRow key={member.specieskey} item={{ ...member, records: member.record_count }}
+                        onOpen={onOpenSpecies} />
+                    ))}
+                  </ol>
+                )}
+              <SpeciesListPaging data={card} list={list} onChange={onListChange} />
+            </section>
+          )}
           <p className="hexagon-sources">
             The classification (kingdom to genus) comes from {card.classification_source}; the species names
             come from the Catalogue of Life. Records are counted after merging keys, as on the maps.

@@ -18,7 +18,8 @@ const TURDIDAE_URL = '/api/ranks/family?kingdom=Animalia&phylum=Chordata&class=A
 function answer(fields = {}) {
   return {
     rank: 'family', name: 'Turdidae', path: TURDIDAE.path, species_count: 3, record_count: 965600,
-    records_no_year: 18, first_year: 1861, last_year: 2026, children_rank: 'genus',
+    records_no_year: 18, records_no_year_left_out: 0, years_counted: null,
+    first_year: 1861, last_year: 2026, children_rank: 'genus',
     children: [
       { name: 'Turdus', species_count: 2, record_count: 965000 },
       { name: 'Catharus', species_count: 1, record_count: 590 },
@@ -88,6 +89,58 @@ describe('the rank card', () => {
     await screen.findByText('3 species in BC, 965,600 records, 1861 to 2026.')
     expect(screen.getByText('18 of these records have no date.')).toBeTruthy()
     expect(urls()).toEqual([`${TURDIDAE_URL}&offset=0&limit=50`])
+    // With all years, nothing says the numbers are for some years only.
+    expect(container.querySelector('.rank-years')).toBeNull()
+  })
+
+  it('counts only the years of a range, says so, and says how many records with no date are left out',
+    async () => {
+      const urls = stubRank(() => ({ body: answer({
+        year_from: 2000, year_to: 2020, years_counted: [2000, 2020], species_count: 2, record_count: 7,
+        records_no_year: 0, records_no_year_left_out: 18, first_year: 2003, last_year: 2020, matching: 2,
+        children: [{ name: 'Turdus', species_count: 2, record_count: 7 }],
+      }) }))
+      const { container } = show({ years: { from: 2000, to: 2020 } })
+      await screen.findByText('2 species in BC, 7 records, 2003 to 2020.')
+      expect(urls()).toEqual([`${TURDIDAE_URL}&year_from=2000&year_to=2020&offset=0&limit=50`])
+      expect(container.querySelector('.rank-years').textContent.replace(/\s+/g, ' ')).toBe(
+        'Every number on this card counts only the records from 2000 to 2020, as on the map.')
+      expect(screen.getByText('18 records with no date are not counted.')).toBeTruthy()
+      expect(screen.queryByText(/of these records have no date/)).toBeNull()
+      expect(screen.getByText('Species (2)')).toBeTruthy()
+      expect(screen.getByText('Genera (1)')).toBeTruthy()
+    })
+
+  it('asks again when the years change or are cleared, keeping the last card on screen meanwhile', async () => {
+    const urls = stubRank((url) => ({ body: url.includes('year_from')
+      ? answer({ years_counted: [2010, 2026], year_from: 2010, species_count: 1, record_count: 3, matching: 1 })
+      : answer() }))
+    const { rerender } = render(<RankCard rankRef={TURDIDAE} years={null} onClose={vi.fn()}
+      onOpenSpecies={vi.fn()} onOpenRank={vi.fn()} />)
+    await screen.findByText('3 species in BC, 965,600 records, 1861 to 2026.')
+    rerender(<RankCard rankRef={TURDIDAE} years={{ from: 2010, to: null }} onClose={vi.fn()}
+      onOpenSpecies={vi.fn()} onOpenRank={vi.fn()} />)
+    expect(screen.getByText('3 species in BC, 965,600 records, 1861 to 2026.')).toBeTruthy()
+    await screen.findByText(/^1 species in BC, 3 records/)
+    expect(screen.getByText(/counts only the records from 2010 to 2026/)).toBeTruthy()
+    rerender(<RankCard rankRef={TURDIDAE} years={null} onClose={vi.fn()}
+      onOpenSpecies={vi.fn()} onOpenRank={vi.fn()} />)
+    await screen.findByText('3 species in BC, 965,600 records, 1861 to 2026.')
+    expect(screen.queryByText(/counts only the records/)).toBeNull()
+    expect(urls()).toEqual([`${TURDIDAE_URL}&offset=0&limit=50`, `${TURDIDAE_URL}&year_from=2010&offset=0&limit=50`,
+      `${TURDIDAE_URL}&offset=0&limit=50`])
+  })
+
+  it('says when the rank has no record in the years, with no list', async () => {
+    stubRank(() => ({ body: answer({
+      years_counted: [1901, 1905], species_count: 0, record_count: 0, records_no_year: 0,
+      first_year: null, last_year: null, children: [], members: [], matching: 0,
+      status_counts: { red: 0, blue: 0, yellow: 0, exotic: 0, none: 0 },
+    }) }))
+    const { container } = show({ years: { from: 1901, to: 1905 } })
+    expect(await screen.findByText('No records of this family from 1901 to 1905.')).toBeTruthy()
+    expect(container.querySelector('.species-list-controls')).toBeNull()
+    expect(container.querySelector('.rank-children')).toBeNull()
   })
 
   it('links each rank above it to that rank, and shows a rank missing in GBIF as such, not as a link', async () => {

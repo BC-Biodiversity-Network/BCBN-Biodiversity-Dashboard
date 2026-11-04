@@ -40,6 +40,14 @@ vi.mock('./loadHexData', () => ({
 
 // Imported after the stand-ins above, which vitest puts in place first.
 import App from './App'
+import { useLocationSearch } from './route'
+
+// The page as the site shows it: the address read and changed through the
+// browser's history.
+function Page() {
+  const [search, navigate] = useLocationSearch()
+  return <App search={search} navigate={navigate} />
+}
 
 afterEach(() => {
   cleanup()
@@ -47,23 +55,50 @@ afterEach(() => {
 })
 
 describe('the page', () => {
-  it('starts on all years, takes its year bounds from /api/meta, and keeps a range when a card closes', async () => {
+  it('starts on all years, takes its year bounds from /api/meta, and keeps a range in the address', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true, status: 200, json: async () => ({ first_year: 1784, last_year: 2026 }),
     })))
-    render(<App />)
+    window.history.replaceState(null, '', '/')
+    render(<Page />)
     await act(async () => {})
     expect(seen.map.years).toBeNull()
     expect(seen.map.yearBounds).toEqual({ firstYear: 1784, lastYear: 2026 })
 
+    // A new range goes into the address, in place of the current entry.
+    const before = window.history.length
     act(() => seen.map.onYearsChange({ from: 2000, to: 2020 }))
-    act(() => screen.getByRole('button', { name: 'Pick the robin' }).click())
-    expect(seen.map.species.key).toBe('59PMB')
-    expect(seen.map.years).toEqual({ from: 2000, to: 2020 })
+    expect(window.location.search).toBe('?year_from=2000&year_to=2020')
+    expect(window.history.length).toBe(before)
+    const firstYears = seen.map.years
+    expect(firstYears).toEqual({ from: 2000, to: 2020 })
 
+    // Opening and closing a card keeps the range, as the same object, so
+    // the map does not load it again.
+    act(() => screen.getByRole('button', { name: 'Pick the robin' }).click())
+    expect(window.location.search).toBe('?species=59PMB&year_from=2000&year_to=2020')
+    expect(seen.map.species.key).toBe('59PMB')
+    expect(seen.map.years).toBe(firstYears)
     act(() => screen.getByRole('button', { name: 'Close the card' }).click())
+    expect(window.location.search).toBe('?year_from=2000&year_to=2020')
     expect(seen.map.species).toBeNull()
-    expect(seen.map.years).toEqual({ from: 2000, to: 2020 })
+    expect(seen.map.years).toBe(firstYears)
+
+    // An open end, then all years again.
+    act(() => seen.map.onYearsChange({ from: null, to: 1999 }))
+    expect(window.location.search).toBe('?year_to=1999')
+    expect(seen.map.years).toEqual({ from: null, to: 1999 })
+    act(() => seen.map.onYearsChange(null))
+    expect(window.location.search).toBe('')
+    expect(seen.map.years).toBeNull()
+  })
+
+  it('opens a shared link with its year range', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })))
+    render(<App search="?species=59PMB&year_from=2005" />)
+    await act(async () => {})
+    expect(seen.map.years).toEqual({ from: 2005, to: null })
+    expect(seen.map.species.key).toBe('59PMB')
   })
 
   it('puts the open card in the address, in place of the current entry', async () => {

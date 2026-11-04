@@ -1022,6 +1022,21 @@ found. A request that does not name a rank gives 400, a path no species has
 (Animalia, 20,753 species, the largest), since every species' names and
 statuses are read to filter, sort and count its list.
 
+The card also takes `year_from` and `year_to`, with the maps' rules. Every
+number on it then counts only the records with a year in the range, as the
+rank map does: its species are those with a record in the range, and their
+records, first and last year, the next rank down, the species list and its
+counts are all within the range (`years_counted` gives the years used).
+Records with no year are then left out, and `records_no_year_left_out`
+says how many. A rank with no record in the range is still found, with no
+species. The counts come from `species_year`, records per species and year,
+which the API makes from `species_hex` when it starts (`prepare_rank_cards`
+in `backend/api/ranks.py`, about 370,000 rows, under a second); its sums per
+species are exactly the species cards' totals, so with no range the card is
+unchanged. The sensitive-species rule applies as before. On the real data,
+phylum Chordata for 2000 to 2020 gives 1,159 species and 17,884,960 records
+(9,166 records with no date left out), the same records as its map.
+
 **The species lists.** The rank card and a hexagon's list take the same
 options, worked out in the API (`backend/api/species_list.py`): `q`, a name
 filter using the same names as the species search (the card name, English
@@ -1352,7 +1367,11 @@ card, adds an entry, so Back returns to the card (the species card then shows a
 or the label) acts like Back when the rank was opened in this visit from
 the plain map, else returns to all species in place, keeping an open
 hexagon; hexagon clicks work as on the overview, with the rank kept in the
-address. The tests are in `frontend/src/RankCard.test.jsx`,
+address. With a year range set, every number on the rank card counts only
+those years, as the map does, and the card says so ("Every number on this
+card counts only the records from 2000 to 2020, as on the map."), with how
+many records with no date are not counted. The tests are in
+`frontend/src/RankCard.test.jsx`,
 `frontend/src/AppHexagon.test.jsx` and the rank parts of the map, panel,
 route and API tests.
 
@@ -1370,7 +1389,12 @@ resolution, so going back to a range costs nothing, and a late answer for an
 earlier range is never shown. While a new range loads, the previous map stays
 up with "Loading hexagons...". The legend then gives the range and the totals
 ("467,303 records in 522 hexagons, 2000 to 2020") and how many records with no
-date were left out. The range stays when a species card is opened or closed.
+date were left out. The range is in the address (`year_from` and
+`year_to`, an open end left out), so a shared link or Back shows the same
+years; it stays when a card, a rank or a hexagon is opened or closed, and
+changing it replaces the address entry rather than adding one, like the
+species list options. The hexagon panel and the rank card follow it; the
+species card does not yet (its numbers are for all years).
 The colour bins stay fixed, so maps for different years can be compared.
 
 A note under the year boxes says the most recent years are incomplete,

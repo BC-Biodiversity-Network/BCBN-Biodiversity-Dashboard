@@ -288,11 +288,19 @@ function addRankPath(params, rank) {
   return params
 }
 
-// Fetches a rank's card (/api/ranks/{rank}): rank is { rank, path }, list
-// ({ q, status, sort }, as for fetchCell) filters and orders its species,
-// and offset and limit choose the page of them.
-export function fetchRank(rank, { list = null, offset = 0, limit = 50, signal } = {}) {
+// Fetches a rank's card (/api/ranks/{rank}): rank is { rank, path }, years
+// ({ from, to }, either end possibly null, as for the maps; null for all
+// years) makes every number on it count only those years, list ({ q,
+// status, sort }, as for fetchCell) filters and orders its species, and
+// offset and limit choose the page of them.
+export function fetchRank(rank, { years = null, list = null, offset = 0, limit = 50, signal } = {}) {
   const params = addRankPath(new URLSearchParams(), rank)
+  if (years?.from != null) {
+    params.set('year_from', String(years.from))
+  }
+  if (years?.to != null) {
+    params.set('year_to', String(years.to))
+  }
   addListOptions(params, list)
   params.set('offset', String(offset))
   params.set('limit', String(limit))

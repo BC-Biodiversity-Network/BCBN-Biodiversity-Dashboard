@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
 import HexagonPanel from './HexagonPanel'
@@ -7,12 +7,13 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readRank,
-  readSpeciesKey, speciesDatasetsSearch, speciesMapSearch,
+  CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readMapYears,
+  readRank, readSpeciesKey, speciesDatasetsSearch, withYears,
 } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
 import SpeciesCard from './SpeciesCard'
+import { yearsKey } from './yearRange'
 import { RESOLUTIONS } from './zoomTiers'
 
 // Where the four overview hexagon files live, one per resolution.
@@ -79,6 +80,10 @@ const HEX_DATA_URLS = {
 // work as above. Clicking another hexagon, or opening another rank, keeps
 // the list's order and statuses and starts with no name filter on page 1.
 //
+// Years: the year range is in the address too, and every move between maps,
+// cards and hexagons keeps it. Changing it replaces the entry in the same
+// way, so the map, the hexagon panel and the rank card all follow it.
+//
 // historyState reads the current history entry's state (the browser's
 // window.history.state; the tests give their own).
 export default function App({
@@ -105,11 +110,17 @@ export default function App({
   // What the data is and where it comes from (/api/meta), for the GBIF
   // download citation on the card; null until it arrives or if it fails.
   const [meta, setMeta] = useState(null)
-  // The year range for whichever map is shown: null for all years (the
-  // default, so the site looks as it always has until it is changed), or
-  // { from, to } (see yearRange.js). It lives here rather than in the map,
-  // so it stays the same when a species card is opened or closed.
-  const [years, setYears] = useState(null)
+  // The year range for whichever map is shown, and for the rank card: null
+  // for all years (the default, so the site looks as it always has until it
+  // is changed), or { from, to } (see yearRange.js). It is kept in the
+  // address (year_from and year_to, see route.js), so a shared link or the
+  // back button shows the same years, and it stays the same when a card or
+  // a hexagon is opened or closed. The same range always gives the same
+  // object, so the map and the year boxes only react to a real change.
+  const addressYears = readMapYears(search)
+  const addressYearsKey = yearsKey(addressYears)
+  // addressYearsKey stands for addressYears, which is a new object each time.
+  const years = useMemo(() => addressYears, [addressYearsKey])
   // The species last opened from a hexagon's list or a rank card ({ key,
   // rank }: rank null for a hexagon's list), so its card can offer the way
   // back; null when none was.
@@ -178,13 +189,20 @@ export default function App({
     picks.current += 1
     const key = result.merged_from ?? result.specieskey
     setSpecies({ key, name: result.col_name, id: picks.current })
-    navigate(speciesMapSearch(key), { replace: true })
+    navigate(mapSearch({ species: key, years }), { replace: true })
   }
 
   // Closes the card, back to the plain overview.
   function closeCard() {
     setSpecies(null)
-    navigate(speciesMapSearch(null), { replace: true })
+    navigate(mapSearch({ years }), { replace: true })
+  }
+
+  // Changes the year range (null for all years) in place, keeping
+  // everything else in the address and the entry's history state, so Back
+  // and the x's work as before.
+  function changeYears(next) {
+    navigate(withYears(search, next), { replace: true, state: historyState() })
   }
 
   // Opens the panel of a clicked hexagon, keeping the species map if one is
@@ -197,7 +215,7 @@ export default function App({
     }
     const target = mapSearch({
       species: addressKey, rank: addressRank, rankList: addressRankList, cell,
-      cellList: keptListChoices(addressCellList),
+      cellList: keptListChoices(addressCellList), years,
     })
     if (addressCell) {
       navigate(target, { replace: true, state: historyState() })
@@ -213,7 +231,8 @@ export default function App({
     if (historyState()?.panelFromClick) {
       goBack()
     } else {
-      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList }), { replace: true })
+      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList, years }),
+        { replace: true })
     }
   }
 
@@ -223,18 +242,18 @@ export default function App({
   // overview's panel then closes it in place rather than going back to the
   // species panel.
   function showAllSpecies() {
-    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList) }))
+    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList), years }))
   }
 
   // Changes the options of the rank card's species list, or of the hexagon
   // panel's, in place (see the top of this component).
   function changeRankList(list) {
-    navigate(mapSearch({ rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList }),
+    navigate(mapSearch({ rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList, years }),
       { replace: true, state: historyState() })
   }
   function changeCellList(list) {
     navigate(mapSearch({
-      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list,
+      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list, years,
     }), { replace: true, state: historyState() })
   }
 
@@ -245,7 +264,7 @@ export default function App({
     picks.current += 1
     setSpecies({ key, name: null, id: picks.current })
     setOpenedFrom({ key, rank: from })
-    navigate(speciesMapSearch(key))
+    navigate(mapSearch({ species: key, years }))
   }
 
   // Opens a rank's page (see the top of this component), as a new address
@@ -258,7 +277,7 @@ export default function App({
       setRankOpen((open) => ({ ...open, id }))
       return
     }
-    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList) }),
+    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList), years }),
       { state: { rankOpenedFrom: search } })
   }
 
@@ -268,7 +287,7 @@ export default function App({
     if (from !== undefined && isPlainMap(from) && !addressCell) {
       goBack()
     } else {
-      navigate(mapSearch({ cell: addressCell, cellList: addressCellList }), { replace: true })
+      navigate(mapSearch({ cell: addressCell, cellList: addressCellList, years }), { replace: true })
     }
   }
 
@@ -299,7 +318,7 @@ export default function App({
           species={species}
           years={years}
           yearBounds={yearBounds}
-          onYearsChange={setYears}
+          onYearsChange={changeYears}
           selectedCell={addressCell}
           onCellClick={openCell}
           rank={species ? null : rankOpen}
@@ -334,6 +353,7 @@ export default function App({
             <div className="card-holder" hidden={Boolean(addressCell)}>
               <RankCard
                 rankRef={rankOpen}
+                years={years}
                 list={addressRankList}
                 onListChange={changeRankList}
                 onClose={closeRank}

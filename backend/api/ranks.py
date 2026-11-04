@@ -34,7 +34,20 @@ records, null for species missing that rank; none for a genus); and one
 page of its species (offset, limit), with their names, BCSEE statuses and
 records, filtered by name and BC status and in the order asked for, with
 how many pass and the counts for the status filter (see species_list.py).
-The totals and the next rank down are always the whole rank's.
+The totals and the next rank down are always the whole rank's, whatever the
+list's filters.
+
+Years: the card can be asked for a range of years (year_from, year_to), with
+the maps' rules (see hexes.py). Every number on it then counts only the
+records with a year in the range, as the rank map does: its species are
+those with a record in the range, their records, first and last year are
+within the range, and so are the next rank down and the species list with
+its counts. Records with no year are then left out, and the card says how
+many (records_no_year_left_out). With no range every record counts, and the
+numbers are the species cards' own. The counts come from species_year, a
+small table of records per species and year that the API makes from
+species_hex when it starts (prepare_rank_cards); its sums per species are
+exactly the species cards' totals.
 
 The rank map gives, for every hexagon at one resolution, the records and
 distinct species of the rank's species, for a year range as on the other
@@ -112,12 +125,16 @@ def members_condition(path, hidden):
             [*params, sorted(hidden)])
 
 
-def require_rank(data, cursor, rank, given):
+def require_rank(data, cursor, rank, given, card_hidden=None):
     """Return the path of the rank asked for, if it has species that may be
-    shown on its card (see the top of this file). Raises RankRequestError
-    for a request that does not name a rank, and UnknownRank otherwise."""
+    shown on its card (see the top of this file). card_hidden is the set of
+    species hidden on cards, when the caller has already asked
+    sensitive.hidden_species for it; otherwise it is asked here. Raises
+    RankRequestError for a request that does not name a rank, and
+    UnknownRank otherwise."""
     path = rank_path(rank, given)
-    condition, params = members_condition(path, hidden_species(data.settings, None))
+    hidden = hidden_species(data.settings, None) if card_hidden is None else card_hidden
+    condition, params = members_condition(path, hidden)
     if not cursor.execute(f"SELECT count(*) FROM species_card AS c WHERE {condition}", params).fetchone()[0]:
         raise UnknownRank(rank)
     return path
@@ -129,21 +146,61 @@ def rank_label(path):
             "path": [{"rank": name_rank, "name": name} for name_rank, name in path]}
 
 
-def read_members(cursor, path, child, hidden):
-    """Return the species with this path that are not hidden, most records
-    first: [(key, records, records with no year, first year, last year,
-    child rank's name or None, name, name source, BCSEE entries, BCSEE
-    statuses)]."""
+def prepare_rank_cards(data):
+    """Make the species_year table on data's connection, once, when the API
+    starts: the records of each species in each year (year NULL for records
+    with no year), summed from species_hex, so a rank card can count any
+    range of years quickly (about 370,000 rows, made in well under a
+    second)."""
+    data.connection.execute("""
+        CREATE TABLE species_year AS
+        SELECT specieskey, year, sum(occurrences)::BIGINT AS records
+        FROM species_hex
+        WHERE specieskey IS NOT NULL
+        GROUP BY specieskey, year""")
+
+
+def read_members(cursor, path, child, hidden, years=None):
+    """Return the species with this path that are not hidden and have a
+    record in the years asked for (years is (from, to), or None for every
+    record), most records first: [(key, records, records with no year, first
+    year, last year, child rank's name or None, name, name source, BCSEE
+    entries, BCSEE statuses)]. The records, the first and last year and the
+    records with no year count only the years asked for; with a range, no
+    record without a year is counted."""
     condition, params = members_condition(path, hidden)
     child_column = f'c."{child}"' if child else "NULL"
+    # The years to count: every row of species_year, or only those in the
+    # range (which leaves out the rows with no year).
+    year_filter = "WHERE y.year BETWEEN ? AND ?" if years else ""
     return cursor.execute(
-        f"""SELECT c.specieskey, c.record_count, c.records_no_year, c.first_year, c.last_year,
+        f"""WITH counted AS (
+                SELECT y.specieskey, sum(y.records)::BIGINT AS records,
+                       coalesce(sum(y.records) FILTER (WHERE y.year IS NULL), 0)::BIGINT AS no_year,
+                       min(y.year) AS first_year, max(y.year) AS last_year
+                FROM species_year AS y
+                {year_filter}
+                GROUP BY y.specieskey)
+            SELECT c.specieskey, n.records, n.no_year, n.first_year, n.last_year,
                    {child_column} AS child, c.col_name, c.name_source, b.entries, b.statuses
             FROM species_card AS c
+            JOIN counted AS n ON n.specieskey = c.specieskey
             LEFT JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey
             WHERE {condition}
-            ORDER BY c.record_count DESC, c.col_name, c.specieskey""",
-        params).fetchall()
+            ORDER BY n.records DESC, c.col_name, c.specieskey""",
+        [*(years or []), *params]).fetchall()
+
+
+def undated_records(cursor, path, hidden):
+    """Return how many records of the rank's species (the hidden ones left
+    out) have no year: the records a year range leaves out of the card."""
+    condition, params = members_condition(path, hidden)
+    return cursor.execute(
+        f"""SELECT coalesce(sum(y.records), 0)::BIGINT
+            FROM species_year AS y
+            JOIN species_card AS c ON c.specieskey = y.specieskey
+            WHERE y.year IS NULL AND {condition}""",
+        params).fetchone()[0]
 
 
 def children_of(members):
@@ -158,23 +215,28 @@ def children_of(members):
     return [{"name": name, "species_count": count, "record_count": total} for name, (count, total) in ordered]
 
 
-def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE, q=None, statuses=None, sort=None):
-    """Return the card for one rank (see the top of this file), its species
+def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE, q=None, statuses=None, sort=None,
+              year_from=None, year_to=None):
+    """Return the card for one rank (see the top of this file), counting
+    only the years year_from to year_to if either is given, with its species
     list filtered by name (q) and BC status (statuses) and in the order
     asked for (sort; see species_list.py). Raises RankRequestError for a
-    request that does not name a rank, ListRequestError for an unknown sort
-    or status, QueryTooShort for a name filter too short, and UnknownRank
-    when no species (that may be shown) has this path."""
+    request that does not name a rank, HexesRequestError for a bad year
+    range, ListRequestError for an unknown sort or status, QueryTooShort for
+    a name filter too short, and UnknownRank when no species (that may be
+    shown) has this path. A rank that exists but has no record in the years
+    asked for is found, with no species."""
     sort, statuses = check_list_options(sort, statuses)
-    path = rank_path(rank, given)
-    depth = RANKS.index(rank)
-    child = RANKS[depth + 1] if depth + 1 < len(RANKS) else None
+    years = year_range(year_from, year_to, data.meta["first_year"], data.meta["last_year"])
     hidden = hidden_species(data.settings, None)
 
     cursor = data.cursor()
-    members = read_members(cursor, path, child, hidden)
-    if not members:
-        raise UnknownRank(rank)
+    # Whether the rank exists is decided on every year, as for its map, so
+    # a rank with no record in the years asked for is still found.
+    path = require_rank(data, cursor, rank, given, hidden)
+    depth = RANKS.index(rank)
+    child = RANKS[depth + 1] if depth + 1 < len(RANKS) else None
+    members = read_members(cursor, path, child, hidden, years)
     keep = matching_keys(cursor, q) if q is not None and q.strip() else None
     listed = species_page(list_items([(row[0], row[1], *row[6:]) for row in members]),
                           keep, statuses, sort, offset, limit)
@@ -183,9 +245,17 @@ def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE, q=None, stat
 
     return {
         **rank_label(path),
+        "year_from": year_from,
+        "year_to": year_to,
+        # The years actually counted (a missing bound filled in), or null
+        # when every record is counted.
+        "years_counted": list(years) if years else None,
+        # Every number below counts only those years.
         "species_count": len(members),
         "record_count": sum(row[1] for row in members),
         "records_no_year": sum(row[2] for row in members),
+        # With a year range, the records with no year that were left out.
+        "records_no_year_left_out": undated_records(cursor, path, hidden) if years else 0,
         "first_year": min(first_years) if first_years else None,
         "last_year": max(last_years) if last_years else None,
         "children_rank": child,

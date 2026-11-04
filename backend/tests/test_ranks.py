@@ -373,3 +373,102 @@ def test_the_rank_map_and_hexagon_list_apply_the_sensitive_setting(client, monke
     assert listed(panel) == [("AAAA", 5)]
     assert (panel["records"], panel["species"]) == (5, 1)
     assert asked == [None, 7, None, 5, None, 7, 7, None]
+
+
+# The rank card for a range of years. The records by year (see the top of
+# this file): AAAA 3 in 2020 and 2 with no year, GGGG 3 in 1999 and 4 in
+# 2003, IIII 1 in 2006, FFFF 2 in 2001, HHHH 1 in 2005, CCCC 1 in 2021; the
+# plants BBBB 3 in 2019, DDDD 1 in 2018, EEEE 3 in 2010 and 1 with no year.
+
+def test_a_card_with_no_year_range_counts_every_record(client):
+    """With no year range the card counts every record, as before, and says
+    no years were chosen."""
+    result = card(client, "genus", **TURDUS)
+    assert (result["year_from"], result["year_to"], result["years_counted"]) == (None, None, None)
+    assert (result["species_count"], result["record_count"], result["records_no_year"]) == (2, 12, 2)
+    assert (result["first_year"], result["last_year"], result["records_no_year_left_out"]) == (1999, 2020, 0)
+
+
+def test_a_card_for_a_year_range_counts_only_those_years(client):
+    """Every number follows the years, as on the rank map; the records with
+    no year are left out and counted on their own."""
+    result = card(client, "genus", **TURDUS, year_from=2000, year_to=2020)
+    assert result["years_counted"] == [2000, 2020]
+    assert members(result) == [("GGGG", 4), ("AAAA", 3)]
+    assert (result["species_count"], result["record_count"], result["records_no_year"]) == (2, 7, 0)
+    assert (result["first_year"], result["last_year"]) == (2003, 2020)
+    assert result["records_no_year_left_out"] == 2
+    # One open end: from 2010 to the last year in the data.
+    later = card(client, "genus", **TURDUS, year_from=2010)
+    assert members(later) == [("AAAA", 3)]
+    assert (later["species_count"], later["record_count"], later["first_year"]) == (1, 3, 2020)
+
+
+def test_the_next_rank_down_and_the_list_follow_the_years(client):
+    """The next rank down, the species list and its filters and counts all
+    count only the years asked for."""
+    family = card(client, "family", **THRUSHES, year_from=2000, year_to=2020)
+    assert family["children"] == [
+        {"name": "Turdus", "species_count": 2, "record_count": 7},
+        {"name": None, "species_count": 1, "record_count": 1},
+    ]
+    early = card(client, "family", **THRUSHES, year_from=2005, year_to=2006)
+    assert early["children"] == [{"name": None, "species_count": 1, "record_count": 1}]
+    # The species list's filters and counts work within the years: the
+    # robin (Yellow) has no record from 2000 to 2010.
+    animals = card(client, "kingdom", kingdom="Animalia", year_from=2000, year_to=2010)
+    assert members(animals) == [("GGGG", 4), ("FFFF", 2), ("HHHH", 1), ("IIII", 1)]
+    assert animals["status_counts"] == {"red": 0, "blue": 0, "yellow": 0, "exotic": 0, "none": 4}
+    assert members(card(client, "kingdom", kingdom="Animalia", year_from=2000, year_to=2010, q="turdus")) == [
+        ("GGGG", 4)]
+
+
+def test_a_rank_with_no_record_in_the_years_is_found_and_empty(client):
+    """A rank that exists but has no record in the years is found, with no
+    species, and still says how many records with no date are left out."""
+    result = card(client, "kingdom", kingdom="Plantae", year_from=2001, year_to=2005)
+    assert (result["species_count"], result["record_count"], result["members"], result["children"]) == (
+        0, 0, [], [])
+    assert (result["first_year"], result["last_year"], result["matching"]) == (None, None, 0)
+    # The undated plant record (EEEE) is still said to be left out.
+    assert result["records_no_year_left_out"] == 1
+
+
+@pytest.mark.parametrize("rank, path", [("genus", TURDUS), ("family", THRUSHES), ("kingdom", {"kingdom": "Animalia"})])
+def test_a_card_counts_the_same_records_as_the_rank_map_for_the_same_years(client, rank, path):
+    """For the same years, the card and the rank map count the same records."""
+    for years in ({"year_from": 2000, "year_to": 2020}, {"year_from": 2003}, {}):
+        result = card(client, rank, **path, **years)
+        assert result["record_count"] == rank_map(client, rank, path, res=4, **years)["records_shown"]
+
+
+def test_a_bad_year_range_is_refused(client):
+    """A range that runs backwards or goes outside the data's years gets a
+    clear 400, as on the maps."""
+    for params in ({"year_from": 2020, "year_to": 2000}, {"year_from": 1000}, {"year_to": 3000}):
+        response = client.get("/api/ranks/genus", params={**TURDUS, **params})
+        assert response.status_code == 400, params
+
+
+def test_a_card_for_a_year_range_applies_the_sensitive_setting(client, monkeypatch):
+    """With a year range the card still asks sensitive.hidden_species once,
+    with no resolution, and a hidden species is in no number: here the robin
+    (AAAA) is hidden, so its records, in 2020 and with no year, are not
+    counted, not even among the records left out."""
+    asked = []
+
+    def stand_in_rule(settings, res):
+        """Hide AAAA, and record what was asked."""
+        asked.append(res)
+        return frozenset({"AAAA"})
+
+    monkeypatch.setattr(api.ranks, "hidden_species", stand_in_rule)
+    result = card(client, "genus", **TURDUS, year_from=2000, year_to=2020)
+    assert members(result) == [("GGGG", 4)]
+    assert (result["species_count"], result["record_count"], result["records_no_year_left_out"]) == (1, 4, 0)
+    family = card(client, "family", **THRUSHES, year_from=2000, year_to=2020)
+    assert family["children"] == [
+        {"name": "Turdus", "species_count": 1, "record_count": 4},
+        {"name": None, "species_count": 1, "record_count": 1},
+    ]
+    assert asked == [None, None]

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  CELL_LIST, NO_LIST, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readRank,
-  speciesDatasetsSearch, speciesMapSearch,
+  CELL_LIST, NO_LIST, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readMapYears, readRank,
+  speciesDatasetsSearch, speciesMapSearch, withYears,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -140,6 +140,28 @@ describe('the page state in the address', () => {
   it('carries a list\'s order and statuses to the next one, without its name filter or page', () => {
     expect(keptListChoices({ q: 'bee', sort: 'english', status: ['red'], page: 3 }))
       .toEqual({ q: '', sort: 'english', status: ['red'], page: 1 })
+  })
+
+  it('keeps the map\'s year range in the address, an open end left out', () => {
+    const turdus = readRank('?rank=genus&kingdom=Animalia&genus=Turdus')
+    const search = mapSearch({ rank: turdus, cell: '872800b30ffffff', years: { from: 2000, to: 2020 } })
+    expect(search).toBe('?rank=genus&kingdom=Animalia&genus=Turdus&cell=872800b30ffffff&year_from=2000&year_to=2020')
+    expect(readMapYears(search)).toEqual({ from: 2000, to: 2020 })
+    expect(readRank(search)).toEqual(turdus)
+    expect(mapSearch({ years: { from: null, to: 1999 } })).toBe('?year_to=1999')
+    expect(readMapYears('?year_to=1999')).toEqual({ from: null, to: 1999 })
+    expect(readMapYears('')).toBeNull()
+    expect(readMapYears('?year_from=abc&year_to=')).toBeNull()
+    // A year range alone is still the plain map.
+    expect(isPlainMap('?year_from=2000')).toBe(true)
+  })
+
+  it('changes the year range of an address, keeping everything else', () => {
+    const search = '?rank=genus&kingdom=Animalia&genus=Turdus&q=thrush&year_from=1990'
+    expect(withYears(search, { from: 2000, to: 2020 })).toBe(
+      '?rank=genus&kingdom=Animalia&genus=Turdus&q=thrush&year_from=2000&year_to=2020')
+    expect(withYears(search, null)).toBe('?rank=genus&kingdom=Animalia&genus=Turdus&q=thrush')
+    expect(withYears('?year_from=1990', null)).toBe('?')
   })
 
   it('knows the plain map: no species, rank or hexagon', () => {

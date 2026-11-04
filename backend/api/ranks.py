@@ -31,8 +31,10 @@ The card holds: the path (each rank with its name, null when missing); the
 species, records, records with no year, and first and last year of its
 species; the next rank down (its children: each name with its species and
 records, null for species missing that rank; none for a genus); and one
-page of its species, most records first (offset, limit), with their names,
-BCSEE statuses and records.
+page of its species (offset, limit), with their names, BCSEE statuses and
+records, filtered by name and BC status and in the order asked for, with
+how many pass and the counts for the status filter (see species_list.py).
+The totals and the next rank down are always the whole rank's.
 
 The rank map gives, for every hexagon at one resolution, the records and
 distinct species of the rank's species, for a year range as on the other
@@ -52,12 +54,11 @@ resolution and leave those species out of every count.
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
+from api.db import RANKS
 from api.hexes import check_resolution, year_range
+from api.search import matching_keys
 from api.sensitive import hidden_species
-from api.species import species_details
-
-# The ranks a rank card can be about, highest first.
-RANKS = ("kingdom", "phylum", "class", "order", "family", "genus")
+from api.species_list import check_list_options, list_items, species_page
 
 # How many species one page of the card holds by default, and at most.
 DEFAULT_PAGE_SIZE = 50
@@ -131,13 +132,15 @@ def rank_label(path):
 def read_members(cursor, path, child, hidden):
     """Return the species with this path that are not hidden, most records
     first: [(key, records, records with no year, first year, last year,
-    child rank's name or None)]."""
+    child rank's name or None, name, name source, BCSEE entries, BCSEE
+    statuses)]."""
     condition, params = members_condition(path, hidden)
     child_column = f'c."{child}"' if child else "NULL"
     return cursor.execute(
         f"""SELECT c.specieskey, c.record_count, c.records_no_year, c.first_year, c.last_year,
-                   {child_column} AS child
+                   {child_column} AS child, c.col_name, c.name_source, b.entries, b.statuses
             FROM species_card AS c
+            LEFT JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey
             WHERE {condition}
             ORDER BY c.record_count DESC, c.col_name, c.specieskey""",
         params).fetchall()
@@ -148,17 +151,21 @@ def children_of(members):
     most records first, then by name, the species missing that rank (name
     None) last among equals."""
     groups = {}
-    for _, records, _, _, _, child in members:
+    for _, records, _, _, _, child, *_ in members:
         count, total = groups.get(child, (0, 0))
         groups[child] = (count + 1, total + records)
     ordered = sorted(groups.items(), key=lambda item: (-item[1][1], item[0] is None, item[0] or ""))
     return [{"name": name, "species_count": count, "record_count": total} for name, (count, total) in ordered]
 
 
-def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE):
-    """Return the card for one rank (see the top of this file). Raises
-    RankRequestError for a request that does not name a rank, and
-    UnknownRank when no species (that may be shown) has this path."""
+def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE, q=None, statuses=None, sort=None):
+    """Return the card for one rank (see the top of this file), its species
+    list filtered by name (q) and BC status (statuses) and in the order
+    asked for (sort; see species_list.py). Raises RankRequestError for a
+    request that does not name a rank, ListRequestError for an unknown sort
+    or status, QueryTooShort for a name filter too short, and UnknownRank
+    when no species (that may be shown) has this path."""
+    sort, statuses = check_list_options(sort, statuses)
     path = rank_path(rank, given)
     depth = RANKS.index(rank)
     child = RANKS[depth + 1] if depth + 1 < len(RANKS) else None
@@ -168,8 +175,9 @@ def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE):
     members = read_members(cursor, path, child, hidden)
     if not members:
         raise UnknownRank(rank)
-    page = members[offset:offset + limit]
-    details = species_details(cursor, [row[0] for row in page])
+    keep = matching_keys(cursor, q) if q is not None and q.strip() else None
+    listed = species_page(list_items([(row[0], row[1], *row[6:]) for row in members]),
+                          keep, statuses, sort, offset, limit)
     first_years = [row[3] for row in members if row[3] is not None]
     last_years = [row[4] for row in members if row[4] is not None]
 
@@ -182,10 +190,17 @@ def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE):
         "last_year": max(last_years) if last_years else None,
         "children_rank": child,
         "children": children_of(members) if child else None,
+        # The species list: its filters and order as used, how many species
+        # pass the filters, the status filter's counts, and one page.
+        "q": q,
+        "status": statuses,
+        "sort": sort,
+        "matching": listed["matching"],
+        "status_counts": listed["status_counts"],
         "offset": offset,
         "limit": limit,
-        "members": [{"specieskey": key, **details[key], "record_count": records}
-                    for key, records, *_ in page],
+        "members": [{**{name: value for name, value in result.items() if name != "records"},
+                     "record_count": result["records"]} for result in listed["results"]],
         "classification_source": CLASSIFICATION_SOURCE,
         "name_source": NAME_SOURCE,
         "english_name_source": data.meta["statuses"]["status_source"],

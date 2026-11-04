@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 
 import { fetchRank } from './api'
-import { InPageLink, Pager, SpeciesRow } from './HexagonPanel'
+import { InPageLink, SpeciesRow } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
-import { mapSearch, rankKey } from './route'
+import { NO_LIST, mapSearch, rankKey } from './route'
+import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 
 // How many species one page of the card's list holds.
 export const PAGE_SIZE = 50
@@ -118,25 +119,25 @@ function CardError({ error }) {
 // A rank's card (from /api/ranks/{rank}), in the side panel where the
 // species card goes: the rank and its path (a missing rank shown as such),
 // its species in BC, records and years, the next rank down (each opening
-// that rank: onOpenRank(rankRef)), its species, most records first, a page
-// of PAGE_SIZE at a time (each opening its card: onOpenSpecies(key)), and
-// where the classification and names come from. The ranks above it open
-// as well (onOpenRank). rankRef is { rank, name, path }; onClose closes the
-// rank.
-export default function RankCard({ rankRef, onClose, onOpenSpecies, onOpenRank }) {
-  const [offset, setOffset] = useState(0)
+// that rank: onOpenRank(rankRef)), its species, a page of PAGE_SIZE at a
+// time (each opening its card: onOpenSpecies(key)), with a filter by name
+// and by BC status and a choice of order, as in a hexagon's panel (see
+// SpeciesListControls.jsx), and where the classification and names come
+// from. The ranks above it open as well (onOpenRank). rankRef is { rank,
+// name, path }; list holds the species list's options ({ q, sort, status,
+// page }, from the address) and onListChange(list) changes them; onClose
+// closes the rank.
+export default function RankCard({
+  rankRef, list = NO_LIST, onListChange = () => {}, onClose, onOpenSpecies, onOpenRank,
+}) {
   const [loaded, setLoaded] = useState(null)
-  const request = `${rankKey(rankRef)}|${offset}`
-
-  // Goes back to the first page for another rank.
-  useEffect(() => {
-    setOffset(0)
-  }, [rankKey(rankRef)])
+  const offset = (list.page - 1) * PAGE_SIZE
+  const request = JSON.stringify([rankKey(rankRef), list.q, list.status, list.sort, offset])
 
   // Loads the page asked for; a newer request cancels an older one.
   useEffect(() => {
     const controller = new AbortController()
-    fetchRank(rankRef, { offset, limit: PAGE_SIZE, signal: controller.signal })
+    fetchRank(rankRef, { list, offset, limit: PAGE_SIZE, signal: controller.signal })
       .then((card) => setLoaded({ request, card }))
       .catch((error) => {
         if (error.name !== 'AbortError') {
@@ -150,7 +151,10 @@ export default function RankCard({ rankRef, onClose, onOpenSpecies, onOpenRank }
   }, [request])
 
   const current = loaded?.request === request ? loaded : null
-  const card = current?.card ?? (loaded?.request.startsWith(`${rankKey(rankRef)}|`) ? loaded.card : null)
+  // While another page or filter loads, the last card of this rank stays.
+  const sameRank = loaded && JSON.parse(loaded.request)[0] === rankKey(rankRef)
+  const card = current?.card ?? (sameRank ? loaded.card : null)
+  const shown = card ? shownText(card, list) : null
 
   return (
     <aside className="species-card rank-card" aria-label="Rank card" aria-busy={!current}>
@@ -175,14 +179,20 @@ export default function RankCard({ rankRef, onClose, onOpenSpecies, onOpenRank }
           {card.children && card.children.length > 0 && <Children card={card} onOpenRank={onOpenRank} />}
           <section className="card-section">
             <h3>Species ({card.species_count.toLocaleString()})</h3>
-            <ol className="hexagon-species" start={card.offset + 1}>
-              {card.members.map((member) => (
-                <SpeciesRow key={member.specieskey} item={{ ...member, records: member.record_count }}
-                  onOpen={onOpenSpecies} />
-              ))}
-            </ol>
-            <Pager data={{ matching: card.species_count, limit: card.limit, offset: card.offset,
-              results: card.members }} onPage={setOffset} />
+            <SpeciesListControls list={list} data={card} onChange={onListChange}
+              filterLabel={`Filter the species of this ${rankRef.rank} by name`} />
+            {shown && <p className="species-list-shown">{shown}</p>}
+            {card.matching === 0
+              ? <p className="hexagon-note">{noMatchText(list)}</p>
+              : (
+                <ol className="hexagon-species" start={card.offset + 1}>
+                  {card.members.map((member) => (
+                    <SpeciesRow key={member.specieskey} item={{ ...member, records: member.record_count }}
+                      onOpen={onOpenSpecies} />
+                  ))}
+                </ol>
+              )}
+            <SpeciesListPaging data={card} list={list} onChange={onListChange} />
           </section>
           <p className="hexagon-sources">
             The classification (kingdom to genus) comes from {card.classification_source}; the species names

@@ -194,18 +194,24 @@ def species_labels(cursor, keys):
             for key, col_name, entries in rows}
 
 
+def details_from_row(col_name, name_source, entries, statuses):
+    """Return a species' details as the lists show them: {col_name,
+    name_source, english_name, statuses}, the shown BCSEE statuses in the
+    site's order (Red, Blue, Yellow, Exotic)."""
+    return {"col_name": col_name, "name_source": name_source, "english_name": english_name(entries),
+            "statuses": [status for status in SHOWN_STATUSES if status in (statuses or [])]}
+
+
 def species_details(cursor, keys):
     """Return {specieskey: {col_name, name_source, english_name, statuses}}
-    for the keys that have a card, the shown BCSEE statuses in the site's
-    order (Red, Blue, Yellow, Exotic)."""
+    for the keys that have a card (see details_from_row)."""
     if not keys:
         return {}
     rows = cursor.execute(
         """SELECT c.specieskey, c.col_name, c.name_source, b.entries, b.statuses
            FROM species_card AS c LEFT JOIN bcsee_status AS b ON b.gbif_species_key = c.specieskey
            WHERE list_contains(CAST(? AS VARCHAR[]), c.specieskey)""", [list(keys)]).fetchall()
-    return {key: {"col_name": col_name, "name_source": name_source, "english_name": english_name(entries),
-                  "statuses": [status for status in SHOWN_STATUSES if status in (statuses or [])]}
+    return {key: details_from_row(col_name, name_source, entries, statuses)
             for key, col_name, name_source, entries, statuses in rows}
 
 

@@ -1,19 +1,16 @@
 import { useEffect, useState } from 'react'
 import { cellArea, getResolution } from 'h3-js'
 
-import { MIN_SEARCH_CHARACTERS, fetchCell, searchableLength } from './api'
+import { fetchCell } from './api'
 import { gbifCellSearchUrl } from './gbifLinks'
 import RankName, { rankTitle } from './RankName'
-import { mapSearch, rankKey, speciesMapSearch } from './route'
+import { NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
+import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 import YearBars from './YearBars'
 import { yearsLabel } from './yearRange'
 
 // How many species one page of the all-species list holds.
 export const PAGE_SIZE = 50
-
-// How long to wait after the last key press in the filter box before
-// filtering, in milliseconds (the same as the search box).
-const FILTER_DELAY_MS = 250
 
 // The statuses that get a coloured chip, as on the species card.
 const STATUS_CLASSES = { Red: 'status-red', Blue: 'status-blue', Yellow: 'status-yellow', Exotic: 'status-exotic' }
@@ -145,60 +142,22 @@ export function SpeciesRow({ item, onOpen }) {
   )
 }
 
-// The line under the list when it holds more than one page: which species
-// are shown, and buttons for the page before and after.
-export function Pager({ data, onPage }) {
-  if (data.matching <= data.limit) {
-    return null
-  }
-  const last = Math.min(data.offset + data.results.length, data.matching)
-  return (
-    <p className="hexagon-pager">
-      <button type="button" className="text-button" disabled={data.offset === 0}
-        onClick={() => onPage(Math.max(0, data.offset - data.limit))}>
-        Previous
-      </button>
-      <span>
-        {(data.offset + 1).toLocaleString()} to {last.toLocaleString()} of {data.matching.toLocaleString()}
-      </span>
-      <button type="button" className="text-button" disabled={last >= data.matching}
-        onClick={() => onPage(data.offset + data.limit)}>
-        Next
-      </button>
-    </p>
-  )
-}
-
 // The panel on the overview: the hexagon's records and species for the
-// chosen years, and its species, most records first, a page of PAGE_SIZE at
-// a time, with a box to filter them by name. onOpenSpecies(key) opens a
-// species' card and map. On a rank map (rank is { rank, name, path }), only
-// the rank's species, with a link to every species in the hexagon
-// (onShowAllSpecies).
-function AllSpeciesPanel({ cell, years, rank = null, onClose, onOpenSpecies, onShowAllSpecies }) {
-  const [typed, setTyped] = useState('')
-  // The filter in use: what was typed, once it is long enough and the
-  // typing has paused, else ''.
-  const [filter, setFilter] = useState('')
-  const [offset, setOffset] = useState(0)
+// chosen years, and its species, a page of PAGE_SIZE at a time, with a
+// filter by name and by BC status and a choice of order (see
+// SpeciesListControls.jsx). list holds those options ({ q, sort, status,
+// page }, from the address) and onListChange(list) changes them.
+// onOpenSpecies(key) opens a species' card and map. On a rank map (rank is
+// { rank, name, path }), only the rank's species, with a link to every
+// species in the hexagon (onShowAllSpecies).
+function AllSpeciesPanel({
+  cell, years, rank = null, list, onListChange, onClose, onOpenSpecies, onShowAllSpecies,
+}) {
   const { current, data } = useCellAnswer(cell, {
-    years, q: filter, offset, limit: PAGE_SIZE, rank: rank ? { rank: rank.rank, path: rank.path } : null,
+    years, q: list.q, status: list.status, sort: list.sort, offset: (list.page - 1) * PAGE_SIZE, limit: PAGE_SIZE,
+    rank: rank ? { rank: rank.rank, path: rank.path } : null,
   })
-
-  // Filters a moment after the user stops typing; a filter too short to
-  // search is not used.
-  useEffect(() => {
-    const usable = searchableLength(typed) >= MIN_SEARCH_CHARACTERS ? typed.trim() : ''
-    const timer = setTimeout(() => setFilter(usable), FILTER_DELAY_MS)
-    return () => clearTimeout(timer)
-  }, [typed])
-
-  // Goes back to the first page when the filter or the years change.
-  useEffect(() => {
-    setOffset(0)
-  }, [filter, years])
-
-  const tooShort = typed.trim() !== '' && searchableLength(typed) < MIN_SEARCH_CHARACTERS
+  const shown = data ? shownText(data, list) : null
   const notCounted = data?.years_counted ? notCountedText(data.records_no_year_left_out) : null
 
   return (
@@ -219,17 +178,11 @@ function AllSpeciesPanel({ cell, years, rank = null, onClose, onOpenSpecies, onS
           {notCounted && <p className="hexagon-note">{notCounted}</p>}
           {data.species > 0 && (
             <>
-              <input
-                type="search"
-                className="hexagon-filter"
-                placeholder="Filter the species by name"
-                aria-label="Filter the species in this hexagon by name"
-                value={typed}
-                onChange={(event) => setTyped(event.target.value)}
-              />
-              {tooShort && <p className="hexagon-note">Type at least {MIN_SEARCH_CHARACTERS} letters or digits to filter.</p>}
+              <SpeciesListControls list={list} data={data} onChange={onListChange}
+                filterLabel="Filter the species in this hexagon by name" />
+              {shown && <p className="species-list-shown">{shown}</p>}
               {data.matching === 0
-                ? <p className="hexagon-note">No species here match “{data.q}”.</p>
+                ? <p className="hexagon-note">{noMatchText(list)}</p>
                 : (
                   <ol className="hexagon-species" start={data.offset + 1}>
                     {data.results.map((item) => (
@@ -237,7 +190,7 @@ function AllSpeciesPanel({ cell, years, rank = null, onClose, onOpenSpecies, onS
                     ))}
                   </ol>
                 )}
-              <Pager data={data} onPage={setOffset} />
+              <SpeciesListPaging data={data} list={list} onChange={onListChange} />
             </>
           )}
           {rank && data.species === 0 && (
@@ -360,14 +313,19 @@ function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies }) {
 // map (rank is { rank, name, path }) it lists that rank's species in the
 // hexagon, with a link to every species there. onOpenSpecies(key) opens a
 // species' card and map, onShowAllSpecies switches to the overview's panel
-// for the same hexagon, and onClose closes the panel. The page gives the
-// panel the hexagon id as its React key, so each hexagon starts afresh.
-export default function HexagonPanel({ cell, years, species, rank = null, onClose, onOpenSpecies, onShowAllSpecies }) {
+// for the same hexagon, and onClose closes the panel. list and
+// onListChange are the options of its species list (see AllSpeciesPanel).
+// The page gives the panel the hexagon id as its React key, so each hexagon
+// starts afresh.
+export default function HexagonPanel({
+  cell, years, species, rank = null, list = NO_LIST, onListChange = () => {}, onClose, onOpenSpecies,
+  onShowAllSpecies,
+}) {
   if (species) {
     return <SpeciesPanel cell={cell} years={years} species={species} onClose={onClose} onShowAllSpecies={onShowAllSpecies} />
   }
   return (
-    <AllSpeciesPanel key={rank ? rankKey(rank) : 'all'} cell={cell} years={years} rank={rank} onClose={onClose}
-      onOpenSpecies={onOpenSpecies} onShowAllSpecies={onShowAllSpecies} />
+    <AllSpeciesPanel key={rank ? rankKey(rank) : 'all'} cell={cell} years={years} rank={rank} list={list}
+      onListChange={onListChange} onClose={onClose} onOpenSpecies={onOpenSpecies} onShowAllSpecies={onShowAllSpecies} />
   )
 }

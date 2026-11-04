@@ -15,6 +15,15 @@ import { useCallback, useEffect, useState } from 'react'
 //                                     a rank's page: its card and its map (the
 //                                     overview restricted to its species);
 //                                     with &cell=<H3 id>, its hexagon panel
+//   ...&q=thrush&sort=english&status=red&status=none&page=2
+//                                     a rank card's species list: its name
+//                                     filter, order, BC status filter (any
+//                                     number) and page
+//   ...&cell=<H3 id>&cell_q=thrush&cell_sort=english&cell_status=red
+//       &cell_page=2                  a hexagon panel's species list, the
+//                                     same options with cell_ in front, as
+//                                     both lists can be open at once (the
+//                                     panel covers the card)
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
 //       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
@@ -61,7 +70,7 @@ export function isPlainMap(search) {
 }
 
 // The ranks a rank page can be about, highest first (the same list as
-// RANKS in backend/api/ranks.py).
+// RANKS in backend/api/db.py).
 export const RANKS = ['kingdom', 'phylum', 'class', 'order', 'family', 'genus']
 
 // The rank whose page is open on the species map, from a query string:
@@ -88,10 +97,68 @@ export function rankKey(rankRef) {
   return rankRef ? rankRef.path.map((step) => step.name ?? '').join('|') + `|${rankRef.rank}` : null
 }
 
+// The orders a species list (a rank card's, a hexagon panel's) can be in,
+// the default first, and its BC status filter's options: the same values as
+// SORTS and STATUS_OPTIONS in backend/api/species_list.py.
+export const LIST_SORTS = ['most_records', 'fewest_records', 'scientific', 'english']
+export const LIST_STATUSES = ['red', 'blue', 'yellow', 'exotic', 'none']
+
+// A species list with no filter, in the default order, on its first page.
+export const NO_LIST = { q: '', sort: LIST_SORTS[0], status: [], page: 1 }
+
+// The address prefix of a hexagon panel's list options (see the top of this
+// file); a rank card's have none.
+export const CELL_LIST = 'cell_'
+
+// A species list's options from a query string, their names starting with
+// prefix: { q, sort, status, page }, each its default when missing or not
+// valid; status in LIST_STATUSES order, without repeats.
+export function readList(search, prefix = '') {
+  const params = new URLSearchParams(search)
+  const sort = params.get(`${prefix}sort`)
+  const asked = params.getAll(`${prefix}status`)
+  const page = Number.parseInt(params.get(`${prefix}page`) ?? '', 10)
+  return {
+    q: (params.get(`${prefix}q`) ?? '').trim(),
+    sort: LIST_SORTS.includes(sort) ? sort : NO_LIST.sort,
+    status: LIST_STATUSES.filter((status) => asked.includes(status)),
+    page: Number.isInteger(page) && page > 1 ? page : 1,
+  }
+}
+
+// Adds a species list's options to a query string, their names starting
+// with prefix, leaving the defaults out.
+function addList(params, list, prefix) {
+  if (!list) {
+    return
+  }
+  if (list.q) {
+    params.set(`${prefix}q`, list.q)
+  }
+  if (list.sort && list.sort !== NO_LIST.sort) {
+    params.set(`${prefix}sort`, list.sort)
+  }
+  for (const status of list.status ?? []) {
+    params.append(`${prefix}status`, status)
+  }
+  if (list.page > 1) {
+    params.set(`${prefix}page`, String(list.page))
+  }
+}
+
+// A list's order and status filter, with no name filter, on its first page:
+// what another list of the same kind starts with, so clicking hexagon after
+// hexagon keeps the order and the statuses chosen.
+export function keptListChoices(list) {
+  return { ...NO_LIST, sort: list.sort, status: list.status }
+}
+
 // The query string for the species map: with a species' card open (species,
 // a key), or a rank's page (rank, { rank, path }), never both, and a
-// hexagon's panel open (cell); each null for none.
-export function mapSearch({ species = null, rank = null, cell = null } = {}) {
+// hexagon's panel open (cell); each null for none. rankList and cellList
+// are the options of the rank card's and the hexagon panel's species lists
+// (see readList), left out when null or the defaults.
+export function mapSearch({ species = null, rank = null, cell = null, rankList = null, cellList = null } = {}) {
   const params = new URLSearchParams()
   if (species) {
     params.set('species', species)
@@ -102,9 +169,11 @@ export function mapSearch({ species = null, rank = null, cell = null } = {}) {
         params.set(step.rank, step.name)
       }
     }
+    addList(params, rankList, '')
   }
   if (cell) {
     params.set('cell', cell)
+    addList(params, cellList, CELL_LIST)
   }
   const text = params.toString()
   return text ? `?${text}` : '?'

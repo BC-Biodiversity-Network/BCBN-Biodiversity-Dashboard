@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // records its props, the search box picks the robin, the species card, the
 // rank card and the hexagon panel are a line of text and buttons.
 const seen = vi.hoisted(() => ({ map: null }))
+// The list options the stand-in panel and rank card change to.
+const PANEL_LIST = vi.hoisted(() => ({ q: 'bee', sort: 'english', status: ['red', 'none'], page: 2 }))
+const CARD_LIST = vi.hoisted(() => ({ q: 'thrush', sort: 'scientific', status: ['yellow'], page: 3 }))
 // The genus Turdus, as a rank card opens it.
 const TURDUS = vi.hoisted(() => ({ rank: 'genus', name: 'Turdus', path: [
   { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
@@ -48,7 +51,7 @@ vi.mock('./SpeciesCard', () => ({
 vi.mock('./HexagonPanel', () => ({
   // A stand-in panel: which hexagon on which map, its x, and a species in
   // its list.
-  default: function HexagonPanel({ cell, species, rank, onClose, onOpenSpecies, onShowAllSpecies }) {
+  default: function HexagonPanel({ cell, species, rank, list, onListChange, onClose, onOpenSpecies, onShowAllSpecies }) {
     const map = species ? `the map of ${species.key}` : rank ? `the map of ${rank.rank} ${rank.name}` : 'the overview'
     return (
       <div className="stand-in-panel">
@@ -56,6 +59,8 @@ vi.mock('./HexagonPanel', () => ({
         <button type="button" onClick={onClose}>Close the panel</button>
         <button type="button" onClick={() => onOpenSpecies('CCCC')}>Open the bumble bee from the list</button>
         <button type="button" onClick={onShowAllSpecies}>Show all species</button>
+        <button type="button" onClick={() => onListChange(PANEL_LIST)}>Filter the panel's list</button>
+        <p className="stand-in-panel-list">{JSON.stringify(list)}</p>
       </div>
     )
   },
@@ -63,13 +68,15 @@ vi.mock('./HexagonPanel', () => ({
 vi.mock('./RankCard', () => ({
   // A stand-in rank card: its rank, its x, the genus Turdus as the next
   // rank down, and the robin in its list.
-  default: function RankCard({ rankRef, onClose, onOpenSpecies, onOpenRank }) {
+  default: function RankCard({ rankRef, list, onListChange, onClose, onOpenSpecies, onOpenRank }) {
     return (
       <div className="stand-in-rank-card">
         <p>Card of {rankRef.rank} {rankRef.name}</p>
         <button type="button" onClick={onClose}>Close the rank</button>
         <button type="button" onClick={() => onOpenRank(TURDUS)}>Open the genus Turdus</button>
         <button type="button" onClick={() => onOpenSpecies('59PMB')}>Open the robin from the rank</button>
+        <button type="button" onClick={() => onListChange(CARD_LIST)}>Filter the rank's list</button>
+        <p className="stand-in-card-list">{JSON.stringify(list)}</p>
       </div>
     )
   },
@@ -81,7 +88,7 @@ vi.mock('./loadHexData', () => ({
 
 // Imported after the stand-ins above, which vitest puts in place first.
 import App from './App'
-import { useLocationSearch } from './route'
+import { PANEL_FROM_CLICK, useLocationSearch } from './route'
 
 const CELL_A = '872800b30ffffff'
 const CELL_B = '8728c9b40ffffff'
@@ -595,4 +602,76 @@ describe('a rank and the address', () => {
     expect(seen.map.rank).toBeNull()
     expect(screen.queryByRole('button', { name: 'Back to genus Turdus' })).toBeNull()
   })
+})
+
+describe('the species lists and the address', () => {
+  const PANEL_LIST_SEARCH = 'cell_q=bee&cell_sort=english&cell_status=red&cell_status=none&cell_page=2'
+  const CARD_LIST_SEARCH = 'q=thrush&sort=scientific&status=yellow&page=3'
+
+  // The list options the stand-in panel or card was given.
+  function listGiven(selector) {
+    return JSON.parse(document.querySelector(selector).textContent)
+  }
+
+  it('changes a hexagon panel\'s list in place, keeping the entry\'s mark, so the x still goes back', async () => {
+    await openAt('')
+    clickHexagon(CELL_A)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Filter the panel\'s list' }))
+    await act(async () => {})
+    expect(window.location.search).toBe(`?cell=${CELL_A}&${PANEL_LIST_SEARCH}`)
+    expect(calls()).toEqual({ added: 1, replaced: 1 })
+    expect(window.history.state).toEqual(PANEL_FROM_CLICK)
+    expect(listGiven('.stand-in-panel-list')).toEqual(PANEL_LIST)
+    await closeWithX('')
+    expect(history.backs).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the order and statuses for the next hexagon clicked, without the name filter or page', async () => {
+    await openAt(`?cell=${CELL_A}&${PANEL_LIST_SEARCH}`)
+    clickHexagon(CELL_B)
+    await act(async () => {})
+    expect(window.location.search).toBe(`?cell=${CELL_B}&cell_sort=english&cell_status=red&cell_status=none`)
+    expect(listGiven('.stand-in-panel-list')).toEqual({ q: '', sort: 'english', status: ['red', 'none'], page: 1 })
+  })
+
+  it('opens a shared link to a filtered list with its options', async () => {
+    await openAt(`${TURDUS_SEARCH}&${CARD_LIST_SEARCH}`)
+    expect(listGiven('.stand-in-card-list')).toEqual(CARD_LIST)
+    cleanup()
+    await openAt(`?cell=${CELL_A}&${PANEL_LIST_SEARCH}`)
+    expect(listGiven('.stand-in-panel-list')).toEqual(PANEL_LIST)
+  })
+
+  it('changes a rank card\'s list in place, keeping the rank\'s history state, and keeps it under a hexagon',
+    async () => {
+      window.history.replaceState(null, '', '/')
+      window.history.pushState({ rankOpenedFrom: '' }, '', `/${TURDUS_SEARCH}`)
+      render(<Page />)
+      await act(async () => {})
+      history.pushes.mockClear()
+      history.replaces.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Filter the rank\'s list' }))
+      await act(async () => {})
+      expect(window.location.search).toBe(`${TURDUS_SEARCH}&${CARD_LIST_SEARCH}`)
+      expect(calls()).toEqual({ added: 0, replaced: 1 })
+      expect(window.history.state).toEqual({ rankOpenedFrom: '' })
+
+      clickHexagon(CELL_A)
+      await act(async () => {})
+      expect(window.location.search).toBe(`${TURDUS_SEARCH}&${CARD_LIST_SEARCH}&cell=${CELL_A}`)
+      await closeWithX(`${TURDUS_SEARCH}&${CARD_LIST_SEARCH}`)
+      expect(listGiven('.stand-in-card-list')).toEqual(CARD_LIST)
+    })
+
+  it('opens the next rank down with the card\'s order and statuses, and closes the rank without its list',
+    async () => {
+      await openAt(`${TURDIDAE_SEARCH}&${CARD_LIST_SEARCH}`)
+      fireEvent.click(screen.getByRole('button', { name: 'Open the genus Turdus' }))
+      await act(async () => {})
+      expect(window.location.search).toBe(`${TURDUS_SEARCH}&sort=scientific&status=yellow`)
+      fireEvent.click(screen.getByRole('button', { name: 'Close the rank' }))
+      await act(async () => {})
+      expect(window.location.search).toBe('')
+    })
 })

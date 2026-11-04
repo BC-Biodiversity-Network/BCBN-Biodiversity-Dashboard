@@ -1,8 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { gbifCellSearchUrl } from './gbifLinks'
 import HexagonPanel, { hexagonSizeText, totalsText } from './HexagonPanel'
+import { NO_LIST } from './route'
 import { chartSummary, fillYears } from './YearBars'
 
 const CELL = '872800b30ffffff'
@@ -20,6 +22,7 @@ function answer(fields = {}) {
         english_name: null, statuses: [], records: 1 },
     ],
     species_asked_for: null, sensitive_max_res: null,
+    status: [], sort: 'most_records', status_counts: { red: 0, blue: 0, yellow: 1, exotic: 0, none: 1 },
     ...fields,
   }
 }
@@ -31,9 +34,26 @@ function stubCell(answerFor) {
   return () => fetchMock.mock.calls.map(([url]) => url)
 }
 
+// The list options the page gave the panel last, as the address would hold
+// them (see Controlled).
+let lists = []
+
+// The panel with its list options held as the page holds them in the
+// address: each change is kept, and recorded in lists.
+function Controlled({ list: first = NO_LIST, ...props }) {
+  const [list, setList] = useState(first)
+  return (
+    <HexagonPanel {...props} list={list} onListChange={(next) => {
+      lists.push(next)
+      setList(next)
+    }} />
+  )
+}
+
 // The panel for CELL with these props.
 function show(props = {}) {
-  return render(<HexagonPanel cell={CELL} years={null} species={null} onClose={vi.fn()} onOpenSpecies={vi.fn()}
+  lists = []
+  return render(<Controlled cell={CELL} years={null} species={null} onClose={vi.fn()} onOpenSpecies={vi.fn()}
     {...props} />)
 }
 
@@ -98,13 +118,61 @@ describe('the hexagon panel', () => {
     const urls = stubCell((url) => answer({ records: 120, species: 120, matching: 120, results: many,
       offset: Number(new URLSearchParams(url.split('?')[1]).get('offset')) }))
     show()
-    await screen.findByText('1 to 50 of 120')
-    expect(screen.getByRole('button', { name: 'Previous' }).disabled).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await screen.findByText('51 to 100 of 120')
-    expect(urls()[1]).toBe(`/api/hexes/${CELL}?offset=50&limit=50`)
-    fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
-    await screen.findByText('1 to 50 of 120')
+    await screen.findByText('1 to 50 of 120 species')
+    expect(screen.getByRole('button', { name: 'Previous page' }).disabled).toBe(true)
+    expect(screen.getAllByRole('button', { name: /^Page \d$/ }).map((button) => button.textContent))
+      .toEqual(['1', '2', '3'])
+    fireEvent.click(screen.getByRole('button', { name: 'Page 3' }))
+    await screen.findByText('101 to 120 of 120 species')
+    expect(urls()[1]).toBe(`/api/hexes/${CELL}?offset=100&limit=50`)
+    expect(lists).toEqual([{ ...NO_LIST, page: 3 }])
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    await screen.findByText('51 to 100 of 120 species')
+  })
+
+  it('sorts, and filters by BC status with how many species each status would show', async () => {
+    const urls = stubCell(() => answer())
+    const { container } = show()
+    await screen.findByText('6 records of 2 species, all years')
+    const boxes = [...container.querySelectorAll('.species-list-box')]
+    expect(boxes.map((box) => box.textContent)).toEqual(['Red 0', 'Blue 0', 'Yellow 1', 'Exotic 0', 'No status 1'])
+    expect(container.querySelector('.species-list-note').textContent)
+      .toBe('A species counts if it, or any subspecies or population of it, has the status.')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort' }), { target: { value: 'english' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /No status/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Red/ }))
+    await waitFor(() => expect(urls()).toContain(
+      `/api/hexes/${CELL}?offset=0&limit=50&status=red&status=none&sort=english`))
+    // The statuses stay in their usual order, whatever order they are ticked in.
+    expect(lists.at(-1)).toEqual({ q: '', sort: 'english', status: ['red', 'none'], page: 1 })
+    expect(screen.getByRole('checkbox', { name: /Red/ }).checked).toBe(true)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Red/ }))
+    expect(lists.at(-1).status).toEqual(['none'])
+  })
+
+  it('asks for the list the address gives, and shows its filter in the box', async () => {
+    const urls = stubCell(() => answer({ matching: 120, offset: 50 }))
+    show({ list: { q: 'robin', sort: 'scientific', status: ['red', 'none'], page: 2 } })
+    await screen.findByText('51 to 100 of 120 species that match')
+    expect(urls()[0]).toBe(`/api/hexes/${CELL}?offset=50&limit=50&q=robin&status=red&status=none&sort=scientific`)
+    expect(screen.getByRole('searchbox').value).toBe('robin')
+    expect(screen.getByRole('combobox', { name: 'Sort' }).value).toBe('scientific')
+  })
+
+  it('says when no species passes the filters, and how many do', async () => {
+    stubCell(() => answer({ matching: 0, results: [] }))
+    show({ list: { ...NO_LIST, q: 'eagle', status: ['red'] } })
+    expect(await screen.findByText('No species here match “eagle” with the statuses chosen.')).toBeTruthy()
+    cleanup()
+    stubCell(() => answer({ matching: 2 }))
+    show({ list: { ...NO_LIST, status: ['yellow'] } })
+    expect(await screen.findByText('2 species match.')).toBeTruthy()
+  })
+
+  it('goes back to the first page when the page asked for is past the end', async () => {
+    stubCell(() => answer({ matching: 2 }))
+    show({ list: { ...NO_LIST, page: 4 } })
+    await waitFor(() => expect(lists).toEqual([NO_LIST]))
   })
 
   it('says when the API cannot be reached', async () => {

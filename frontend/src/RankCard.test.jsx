@@ -1,7 +1,9 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import RankCard, { SHOWN_CHILDREN, rankTotalsText } from './RankCard'
+import { NO_LIST } from './route'
 
 // The family Turdidae, as App gives it.
 const TURDIDAE = { rank: 'family', name: 'Turdidae', path: [
@@ -29,6 +31,8 @@ function answer(fields = {}) {
       { specieskey: 'HHHH', col_name: 'Catharus ustulatus', name_source: 'Catalogue of Life, via GBIF',
         english_name: "Swainson's Thrush", statuses: [], record_count: 590 },
     ],
+    q: null, status: [], sort: 'most_records', matching: 3,
+    status_counts: { red: 0, blue: 0, yellow: 1, exotic: 0, none: 2 },
     classification_source: 'GBIF', name_source: 'Catalogue of Life, via GBIF',
     english_name_source: 'BC Species and Ecosystems Explorer (BCSEE)', sensitive_max_res: null,
     ...fields,
@@ -46,9 +50,26 @@ function stubRank(answerFor) {
   return () => fetchMock.mock.calls.map(([url]) => url)
 }
 
+// The list options the page gave the card, as the address would hold them
+// (see Controlled).
+let lists = []
+
+// The card with its list options held as the page holds them in the
+// address: each change is kept, and recorded in lists.
+function Controlled({ list: first = NO_LIST, ...props }) {
+  const [list, setList] = useState(first)
+  return (
+    <RankCard {...props} list={list} onListChange={(next) => {
+      lists.push(next)
+      setList(next)
+    }} />
+  )
+}
+
 // The card for rankRef with these props.
 function show(props = {}) {
-  return render(<RankCard rankRef={TURDIDAE} onClose={vi.fn()} onOpenSpecies={vi.fn()} onOpenRank={vi.fn()}
+  lists = []
+  return render(<Controlled rankRef={TURDIDAE} onClose={vi.fn()} onOpenSpecies={vi.fn()} onOpenRank={vi.fn()}
     {...props} />)
 }
 
@@ -140,12 +161,40 @@ describe('the rank card', () => {
   })
 
   it('pages through a long list of species, 50 at a time', async () => {
-    const urls = stubRank((url) => ({ body: answer({ species_count: 120, offset: url.includes('offset=50') ? 50 : 0 }) }))
+    const urls = stubRank((url) => ({ body: answer({ species_count: 120, matching: 120,
+      offset: url.includes('offset=50') ? 50 : 0 }) }))
     show()
-    await screen.findByText('1 to 2 of 120')
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await screen.findByText('51 to 52 of 120')
+    await screen.findByText('1 to 50 of 120 species')
+    fireEvent.click(screen.getByRole('button', { name: 'Page 2' }))
+    await screen.findByText('51 to 100 of 120 species')
     expect(urls()).toEqual([`${TURDIDAE_URL}&offset=0&limit=50`, `${TURDIDAE_URL}&offset=50&limit=50`])
+    expect(lists).toEqual([{ ...NO_LIST, page: 2 }])
+  })
+
+  it('filters by name and BC status and sorts, with the counts from the API, keeping the totals', async () => {
+    const urls = stubRank(() => ({ body: answer() }))
+    const { container } = show()
+    await screen.findByText('Species (3)')
+    expect([...container.querySelectorAll('.species-list-box')].map((box) => box.textContent))
+      .toEqual(['Red 0', 'Blue 0', 'Yellow 1', 'Exotic 0', 'No status 2'])
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter the species of this family by name' }),
+      { target: { value: 'thrush' } })
+    await waitFor(() => expect(lists).toEqual([{ ...NO_LIST, q: 'thrush' }]))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Yellow/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort' }), { target: { value: 'fewest_records' } })
+    await waitFor(() => expect(urls()).toContain(
+      `${TURDIDAE_URL}&q=thrush&status=yellow&sort=fewest_records&offset=0&limit=50`))
+    // The heading and totals stay the whole rank's.
+    expect(screen.getByText('Species (3)')).toBeTruthy()
+    expect(screen.getByText('3 species in BC, 965,600 records, 1861 to 2026.')).toBeTruthy()
+  })
+
+  it('asks for the list the address gives, and says when nothing passes', async () => {
+    const urls = stubRank(() => ({ body: answer({ matching: 0, members: [] }) }))
+    show({ list: { q: '', sort: 'english', status: ['red'], page: 1 } })
+    expect(await screen.findByText('No species here have the statuses chosen.')).toBeTruthy()
+    expect(urls()[0]).toBe(`${TURDIDAE_URL}&status=red&sort=english&offset=0&limit=50`)
+    expect(screen.getByRole('checkbox', { name: /Red/ }).checked).toBe(true)
   })
 
   it('says where the classification and the names come from', async () => {

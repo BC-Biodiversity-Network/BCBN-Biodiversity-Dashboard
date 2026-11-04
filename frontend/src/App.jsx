@@ -7,8 +7,8 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  PANEL_FROM_CLICK, isPlainMap, mapSearch, rankKey, readCell, readRank, readSpeciesKey, speciesDatasetsSearch,
-  speciesMapSearch,
+  CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readRank,
+  readSpeciesKey, speciesDatasetsSearch, speciesMapSearch,
 } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
@@ -72,6 +72,13 @@ const HEX_DATA_URLS = {
 // plain map, so no dead entry is left; else in place, keeping an open
 // hexagon.
 //
+// Species lists: the rank card's and the hexagon panel's lists keep their
+// options (name filter, order, BC statuses, page) in the address (see
+// readList in route.js), so a filtered list can be shared. Changing them
+// replaces the entry, keeping its history state, so Back and the x's still
+// work as above. Clicking another hexagon, or opening another rank, keeps
+// the list's order and statuses and starts with no name filter on page 1.
+//
 // historyState reads the current history entry's state (the browser's
 // window.history.state; the tests give their own).
 export default function App({
@@ -91,6 +98,8 @@ export default function App({
   const addressCell = readCell(search)
   const addressRank = readRank(search)
   const addressRankKey = rankKey(addressRank)
+  const addressRankList = readList(search)
+  const addressCellList = readList(search, CELL_LIST)
   const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
   // What the data is and where it comes from (/api/meta), for the GBIF
@@ -186,7 +195,10 @@ export default function App({
     if (cell === addressCell) {
       return
     }
-    const target = mapSearch({ species: addressKey, rank: addressRank, cell })
+    const target = mapSearch({
+      species: addressKey, rank: addressRank, rankList: addressRankList, cell,
+      cellList: keptListChoices(addressCellList),
+    })
     if (addressCell) {
       navigate(target, { replace: true, state: historyState() })
     } else {
@@ -201,7 +213,7 @@ export default function App({
     if (historyState()?.panelFromClick) {
       goBack()
     } else {
-      navigate(mapSearch({ species: addressKey, rank: addressRank }), { replace: true })
+      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList }), { replace: true })
     }
   }
 
@@ -211,7 +223,19 @@ export default function App({
   // overview's panel then closes it in place rather than going back to the
   // species panel.
   function showAllSpecies() {
-    navigate(speciesMapSearch(null, addressCell))
+    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList) }))
+  }
+
+  // Changes the options of the rank card's species list, or of the hexagon
+  // panel's, in place (see the top of this component).
+  function changeRankList(list) {
+    navigate(mapSearch({ rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList }),
+      { replace: true, state: historyState() })
+  }
+  function changeCellList(list) {
+    navigate(mapSearch({
+      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list,
+    }), { replace: true, state: historyState() })
   }
 
   // Opens a species picked from a hexagon's list or a rank card (from, the
@@ -234,7 +258,8 @@ export default function App({
       setRankOpen((open) => ({ ...open, id }))
       return
     }
-    navigate(mapSearch({ rank: rankRef }), { state: { rankOpenedFrom: search } })
+    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList) }),
+      { state: { rankOpenedFrom: search } })
   }
 
   // Closes the rank, back to all species (see the top of this component).
@@ -243,7 +268,7 @@ export default function App({
     if (from !== undefined && isPlainMap(from) && !addressCell) {
       goBack()
     } else {
-      navigate(mapSearch({ cell: addressCell }), { replace: true })
+      navigate(mapSearch({ cell: addressCell, cellList: addressCellList }), { replace: true })
     }
   }
 
@@ -291,6 +316,8 @@ export default function App({
               years={years}
               species={species}
               rank={species ? null : rankOpen}
+              list={addressCellList}
+              onListChange={changeCellList}
               onClose={closeCell}
               onOpenSpecies={(key) => openSpeciesFrom(key)}
               onShowAllSpecies={showAllSpecies}
@@ -307,6 +334,8 @@ export default function App({
             <div className="card-holder" hidden={Boolean(addressCell)}>
               <RankCard
                 rankRef={rankOpen}
+                list={addressRankList}
+                onListChange={changeRankList}
                 onClose={closeRank}
                 onOpenSpecies={(key) => openSpeciesFrom(key, rankOpen)}
                 onOpenRank={openRank}

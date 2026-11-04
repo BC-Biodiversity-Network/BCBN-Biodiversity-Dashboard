@@ -598,12 +598,80 @@ body {
   color: #333;
 }
 
-.hexagon-pager {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+/* The controls of a species list (a rank card's, a hexagon panel's): the
+   filter box, the order, and the BC status boxes, each with how many
+   species it would show, and a one-line note under them. */
+.species-list-controls {
   margin: 0 0 6px;
+}
+
+.species-list-sort {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #444;
+}
+
+.species-list-sort select {
+  margin-left: 4px;
+  font: inherit;
+}
+
+.species-list-statuses {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.species-list-statuses legend {
+  padding: 0;
+  margin-bottom: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #444;
+}
+
+.species-list-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.species-list-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.species-list-box input {
+  margin: 0;
+}
+
+.species-list-box .status-chip {
+  cursor: pointer;
+}
+
+.species-list-none {
+  color: #444;
+}
+
+.species-list-count {
+  color: #666;
+}
+
+.species-list-note {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: #666;
+}
+
+.species-list-shown {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: #555;
 }
 
 .hexagon-sources {

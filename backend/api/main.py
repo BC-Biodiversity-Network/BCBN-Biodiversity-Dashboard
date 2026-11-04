@@ -36,24 +36,29 @@ Endpoints so far:
                     the overview map: records and distinct species per H3
                     hexagon at res (4 to 7), optionally for a year range
                     (see overview.py). A bad res or year range gives 400.
-    GET /api/hexes/{cell}?year_from=&year_to=&q=&species=&offset=&limit=
+    GET /api/hexes/{cell}?year_from=&year_to=&q=&status=&sort=&species=&offset=&limit=
                     the species in one H3 hexagon (resolution 4 to 7, read
                     from the id): its records and species for a year
-                    range, and one page of its species, most records
-                    first, optionally filtered by name, with the records
-                    of the species asked for (see cells.py). Species the
-                    sensitive setting hides are left out (none for now;
-                    see sensitive.py). A bad cell, year range or filter
-                    gives 400, an unknown species 404.
-    GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&offset=&limit=
+                    range, and one page of its species, optionally
+                    filtered by name (q) and BC status (status, repeated:
+                    red, blue, yellow, exotic, none), in the order sort
+                    asks for (most_records, the default, fewest_records,
+                    scientific or english; see species_list.py), with the
+                    records of the species asked for (see cells.py).
+                    Species the sensitive setting hides are left out (none
+                    for now; see sensitive.py). A bad cell, year range,
+                    filter, status or sort gives 400, an unknown species
+                    404.
+    GET /api/ranks/{rank}?kingdom=&phylum=&class=&order=&family=&genus=&q=&status=&sort=&offset=&limit=
                     one kingdom, phylum, class, order, family or genus,
                     named by its full path (one parameter per rank down to
                     it; a rank not given is missing in the path): its
                     species in BC, records and years, the next rank down,
-                    and one page of its species, most records first (see
-                    ranks.py). Species the sensitive setting hides are left
-                    out (none for now). A request that does not name a rank
-                    gives 400; a path no species has, 404.
+                    and one page of its species, filtered and ordered as
+                    for /api/hexes/{cell} (see ranks.py). Species the
+                    sensitive setting hides are left out (none for now). A
+                    request that does not name a rank, or a bad filter,
+                    status or sort, gives 400; a path no species has, 404.
     GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=
                     the rank map: the overview map restricted to the rank's
                     species (records and distinct species per hexagon at
@@ -101,6 +106,7 @@ from api.ranks import RANKS, RankRequestError, UnknownRank, rank_card, rank_hexe
 from api.overview import overview_hexes
 from api.rank_search import DEFAULT_RANK_LIMIT, MAX_RANK_LIMIT
 from api.search import DEFAULT_LIMIT, MAX_LIMIT, QueryTooShort, prepare_search, search
+from api.species_list import ListRequestError
 from api.settings import load_settings
 from api.species import build_species_card
 
@@ -195,19 +201,20 @@ def create_app(settings=None):
     def hexagon(cell: str, request: Request, year_from: int | None = None, year_to: int | None = None,
                 q: str | None = Query(None, max_length=200), species: str | None = Query(None, max_length=50),
                 rank: str | None = Query(None, max_length=20),
+                status: list[str] = Query([], max_length=20), sort: str | None = Query(None, max_length=20),
                 offset: int = Query(0, ge=0),
                 limit: int = Query(CELL_PAGE_SIZE, ge=1, le=CELL_MAX_PAGE_SIZE)):
-        """Return the species in one hexagon, most records first, a page at
-        a time, for the years year_from to year_to if either is given (see
-        cells.py). species is a species key whose records in the hexagon
+        """Return the species in one hexagon, a page at a time, filtered by
+        name (q) and BC status (status) and in the order sort asks for, for
+        the years year_from to year_to if either is given (see cells.py). species is a species key whose records in the hexagon
         are given on their own; rank, with the rank's path (one parameter
         per rank, as for /api/ranks/{rank}), keeps that rank's species
         only."""
         given = {name: request.query_params.get(name) for name in RANKS}
         try:
             return cell_species(request.app.state.data, cell, year_from, year_to, q, species,
-                                offset, limit, rank, given)
-        except (HexesRequestError, QueryTooShort, RankRequestError) as error:
+                                offset, limit, rank, given, status, sort)
+        except (HexesRequestError, QueryTooShort, RankRequestError, ListRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
         except UnknownSpecies:
             raise unknown_key(species)
@@ -230,16 +237,19 @@ def create_app(settings=None):
             raise unknown_rank(rank, given)
 
     @app.get("/api/ranks/{rank}")
-    def rank(rank: str, request: Request, offset: int = Query(0, ge=0),
+    def rank(rank: str, request: Request, q: str | None = Query(None, max_length=200),
+             status: list[str] = Query([], max_length=20), sort: str | None = Query(None, max_length=20),
+             offset: int = Query(0, ge=0),
              limit: int = Query(RANK_PAGE_SIZE, ge=1, le=RANK_MAX_PAGE_SIZE)):
         """Return the card for one rank, named by its full path: one query
         parameter per rank from kingdom down to it (see ranks.py). The rank
         names are read from the query string directly, since "class" and
-        "order" cannot be Python parameter names."""
+        "order" cannot be Python parameter names. Its species list takes
+        the same filters and order as a hexagon's (q, status, sort)."""
         given = {name: request.query_params.get(name) for name in RANKS}
         try:
-            return rank_card(request.app.state.data, rank, given, offset, limit)
-        except RankRequestError as error:
+            return rank_card(request.app.state.data, rank, given, offset, limit, q, status, sort)
+        except (RankRequestError, QueryTooShort, ListRequestError) as error:
             raise HTTPException(status_code=400, detail=str(error))
         except UnknownRank:
             raise unknown_rank(rank, given)

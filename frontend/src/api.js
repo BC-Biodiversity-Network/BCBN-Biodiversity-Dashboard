@@ -232,13 +232,14 @@ export function fetchOverviewHexes(resolution, { signal, years = null } = {}) {
 
 // Fetches the species in one hexagon (/api/hexes/{cell}): its records and
 // species for the years (null for all years, else { from, to }, either end
-// possibly null, as for the maps), and one page of its species, most
-// records first. q filters them by name (sent only when it is not empty),
-// species asks for that species' own records in the hexagon, rank
-// ({ rank, path }) keeps that rank's species only, and offset and limit
-// choose the page.
+// possibly null, as for the maps), and one page of its species. q filters
+// them by name (sent only when it is not empty), status by BC status (a
+// list of red, blue, yellow, exotic, none), sort chooses the order (see
+// LIST_SORTS in route.js), species asks for that species' own records in
+// the hexagon, rank ({ rank, path }) keeps that rank's species only, and
+// offset and limit choose the page.
 export function fetchCell(cell, {
-  years = null, q = '', species = null, rank = null, offset = 0, limit = 50, signal,
+  years = null, q = '', status = [], sort = null, species = null, rank = null, offset = 0, limit = 50, signal,
 } = {}) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   if (rank) {
@@ -251,13 +252,28 @@ export function fetchCell(cell, {
   if (years?.to != null) {
     params.set('year_to', String(years.to))
   }
-  if (q.trim()) {
-    params.set('q', q.trim())
-  }
+  addListOptions(params, { q, status, sort })
   if (species) {
     params.set('species', species)
   }
   return fetchJson(`/hexes/${encodeURIComponent(cell)}?${params}`, signal)
+}
+
+// Adds a species list's options to a query string, as the API takes them:
+// the name filter q, each BC status asked for, and the order (left out for
+// the default, most records first). list is { q, status, sort }, or null
+// for none.
+function addListOptions(params, list) {
+  if (list?.q?.trim()) {
+    params.set('q', list.q.trim())
+  }
+  for (const status of list?.status ?? []) {
+    params.append('status', status)
+  }
+  if (list?.sort && list.sort !== 'most_records') {
+    params.set('sort', list.sort)
+  }
+  return params
 }
 
 // Adds a rank's path to a query string: one parameter per rank with a name,
@@ -272,10 +288,12 @@ function addRankPath(params, rank) {
   return params
 }
 
-// Fetches a rank's card (/api/ranks/{rank}): rank is { rank, path }, and
-// offset and limit choose the page of its species.
-export function fetchRank(rank, { offset = 0, limit = 50, signal } = {}) {
+// Fetches a rank's card (/api/ranks/{rank}): rank is { rank, path }, list
+// ({ q, status, sort }, as for fetchCell) filters and orders its species,
+// and offset and limit choose the page of them.
+export function fetchRank(rank, { list = null, offset = 0, limit = 50, signal } = {}) {
   const params = addRankPath(new URLSearchParams(), rank)
+  addListOptions(params, list)
   params.set('offset', String(offset))
   params.set('limit', String(limit))
   return fetchJson(`/ranks/${encodeURIComponent(rank.rank)}?${params}`, signal)

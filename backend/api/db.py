@@ -83,6 +83,11 @@ REQUIRED_DOWNLOAD_FIELDS = ["download_key", "doi", "doi_url", "date"]
 # Accidental, No Status, Extinct, Other) are not shown as a status.
 SHOWN_STATUSES = ["Red", "Blue", "Yellow", "Exotic"]
 
+# The ranks a rank card can be about, highest first (see ranks.py). Kept
+# here, with no imports of its own, so ranks.py and rank_search.py can both
+# use it without importing each other.
+RANKS = ("kingdom", "phylum", "class", "order", "family", "genus")
+
 # The front end groups and classes a Lunaris dataset can have. The export
 # only writes these (the "dropped" group and the elsewhere and unknown
 # classes are left out), and the dataset filters take only these.

@@ -31,7 +31,7 @@ order)". A kingdom has no parent: "Kingdom Animalia".
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
-from api.ranks import RANKS
+from api.db import RANKS
 from api.sensitive import hidden_species
 
 # How many ranks a search returns by default, and at most.

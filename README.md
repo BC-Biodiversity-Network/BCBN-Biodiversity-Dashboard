@@ -961,18 +961,17 @@ in 0.08 to 0.27 s once the file has been read once. So no precomputed table is
 needed. The page still uses the shipped files for all years and calls this
 endpoint only when a year range is set (see "Running the front end").
 
-`GET /api/hexes/{cell}?year_from=&year_to=&q=&species=&offset=&limit=` gives
+`GET /api/hexes/{cell}?year_from=&year_to=&q=&status=&sort=&species=&offset=&limit=` gives
 the species in one hexagon (`backend/api/cells.py`), for the map's side
 panel. The resolution (4 to 7) is read from the H3 id itself ("87..." is
 resolution 7), so no H3 package is needed. It gives the hexagon's `records`
 and `species` for the year range (the same totals as the overview map's
 hover box, including the one record with no specieskey in `records`), with
 `records_no_year_left_out` and `records_outside_years` as above, and one page
-of its species, most records first (`results`: key, Catalogue of Life name
-with its `name_source`, BCSEE English name, shown BCSEE statuses, records),
-`limit` per page (default 50, at most 200) from `offset`. `q` keeps the
-species with any searchable name holding it, as in the species search
-(`matching` says how many, for paging). `species` gives that species on
+of its species (`results`: key, Catalogue of Life name with its
+`name_source`, BCSEE English name, shown BCSEE statuses, records), `limit`
+per page (default 50, at most 200) from `offset`, filtered, ordered and
+counted as described under "The species lists" below. `species` gives that species on
 its own in the hexagon (`species_asked_for`), for the species map's panel:
 its `records` for the years (0 if none), `records_per_year` (each year with
 records in the range, or every year), `first_year` and `last_year`,
@@ -1010,15 +1009,41 @@ its name, null when missing), `species_count`, `record_count`,
 `records_no_year`, `first_year` and `last_year` of its species, the next
 rank down (`children_rank` and `children`, each name with its species and
 records, null for species missing that rank; none for a genus), and one page
-of its species (`members`, most records first, with names, BCSEE statuses
-and records; `limit` default 50, at most 200, from `offset`). Species the
+of its species (`members`, with names, BCSEE statuses and records; `limit`
+default 50, at most 200, from `offset`), filtered, ordered and counted as
+described under "The species lists" below (the totals and the next rank
+down stay the whole rank's). Species the
 sensitive-species setting hides are left out of the list, the totals and
 the children: the card asks `backend/api/sensitive.py` with no resolution,
 as it has no location, so a rule decided later (for example for a genus with
 one species) covers cards too; a rank whose species are all hidden is not
 found. A request that does not name a rank gives 400, a path no species has
-404. On the real data a card takes 5 to 32 ms (Animalia, 20,753 species, is
-the largest).
+404. On the real data a card takes 6 ms (genus Turdus) to about 130 ms
+(Animalia, 20,753 species, the largest), since every species' names and
+statuses are read to filter, sort and count its list.
+
+**The species lists.** The rank card and a hexagon's list take the same
+options, worked out in the API (`backend/api/species_list.py`): `q`, a name
+filter using the same names as the species search (the card name, English
+names, BCSEE labels, merged names; at least 2 letters or digits); `status`,
+any number of `red`, `blue`, `yellow`, `exotic` and `none`, keeping the
+species with any of them among their shown BCSEE statuses, `none` for the
+species with none; and `sort`: `most_records` (the default),
+`fewest_records`, `scientific` (Catalogue of Life name, A to Z) or `english`
+(BCSEE English name, A to Z, the species without one last); names are
+compared ignoring case, and ties go to the scientific name, then the key.
+A species' shown statuses are those of every BCSEE entry on its key, a
+subspecies, variety or population included, so Canada Goose (Yellow, with
+its occidentalis subspecies Red) counts as Red and as Yellow. The answer
+gives the options as used (`q`, `status`, `sort`), `matching` (how many
+species pass both filters, for paging) and `status_counts` (for each status
+option, how many species pass the name filter and have it: they follow the
+name filter, and a hexagon's years, but not the status filter, so a box that
+is not ticked still says what it would show). Hidden species are left out
+before any of this, so `backend/api/sensitive.py` still decides what a list
+can show. An unknown `status` or `sort` gives 400. On the real data Animalia
+(20,753 species) takes about 130 ms with any options, the busiest resolution
+4 hexagon (10,846 species) about 120 ms, and class Aves 14 ms.
 
 `GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=`
 gives the rank map (`rank_hexes` in `backend/api/ranks.py`): the overview map
@@ -1225,8 +1250,22 @@ Clicking a hexagon opens its panel (`frontend/src/HexagonPanel.jsx`, from
 outlines the hexagon on the map. Both kinds give the hexagon's resolution and
 own area (from `h3-js`). On the overview the panel lists every species in
 the hexagon: its records and species for the chosen years, and its species,
-most records first, 50 at a time, with a box to filter them by name and
-each name opening that species' card and map. On a species map the panel is
+50 at a time, each name opening that species' card and map. The list works
+as a rank card's (`frontend/src/SpeciesListControls.jsx`, shared by both): a
+box to filter by name, a Sort menu (most records first, fewest records
+first, scientific name A to Z, English name A to Z), BC status boxes (Red,
+Blue, Yellow, Exotic, No status), each with how many species it would show,
+and the line "A species counts if it, or any subspecies or population of
+it, has the status." under them; "51 to 100 of 2,073 species that match"
+above the list; and the Datasets page's numbered page buttons under it
+(`frontend/src/PageButtons.jsx`, moved out of the Datasets page so both use
+it). The options are in the address, so a filtered list can be shared: `q`,
+`sort`, `status` (repeated) and `page` for a rank card, and the same with
+`cell_` in front for a hexagon's panel, since the panel can cover a rank
+card with its own list. Changing them replaces the address entry (keeping
+its history state, so the x's and Back work as described below); another
+hexagon or rank keeps the order and statuses chosen and starts with no
+name filter, on page 1. On a species map the panel is
 about that species alone ("Turdus migratorius in this hexagon"): its records
 for the chosen years with the first and last year, a small bar chart of
 records per year (`frontend/src/YearBars.jsx`, with the numbers as a table

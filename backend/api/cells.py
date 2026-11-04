@@ -12,8 +12,10 @@ merge, as on the maps. The hexagon's resolution is read from its id: an H3
 cell id is 15 hexadecimal digits starting with "8" and then the
 resolution, so "872800b30ffffff" is at resolution 7. No H3 package is
 needed. Every request reads the whole of species_hex (it is sorted by
-species, not by hexagon): about 10 to 30 ms at resolution 7 on a laptop,
-and about 30 ms for the busiest resolution 4 hexagon (10,846 species).
+species, not by hexagon) and the names and statuses of every species in the
+hexagon, to filter, sort and count the list: on a laptop about 15 ms for a
+quiet resolution 7 hexagon, 56 ms for the busiest (3,282 species), and
+about 120 ms for the busiest resolution 4 hexagon (10,846 species).
 
 Years follow the maps' rules (hexes.py): with no year_from and no year_to,
 every record counts, including records with no year; with either one, only
@@ -25,10 +27,11 @@ record in the data with no specieskey, and species counts distinct
 specieskeys, exactly as the overview map's hover box does for the same
 hexagon and years.
 
-Filter: q keeps the species with any searchable name (the same names as
-the species search: the card name, English names, BCSEE labels, merged
-names) holding q, written the search way (see search.py). matching gives
-how many species pass, for paging.
+The list: filtered by name (q, the same names as the species search) and
+by BC status (status), in the order asked for (sort), one page at a time,
+with matching (how many species pass the filters, for paging) and
+status_counts, as on the rank card (see species_list.py). The totals are
+always the whole hexagon's.
 
 Species asked for (species=): for the species map's panel, which is about
 that species alone: its records in this hexagon for the years (0 if none),
@@ -59,9 +62,10 @@ import re
 
 from api.hexes import HexesRequestError, year_range
 from api.ranks import RankRequestError, path_filter, rank_label, require_rank
-from api.search import MIN_QUERY_LENGTH, QueryTooShort, normalise
+from api.search import matching_keys
 from api.sensitive import hidden_species
-from api.species import NO_CARD, resolve_key, species_details
+from api.species import resolve_key, species_details
+from api.species_list import check_list_options, list_items, species_page
 
 # An H3 cell id at resolution 4 to 7: "8", the resolution, 13 more digits.
 CELL_ID = re.compile(r"^8([4-7])[0-9a-f]{13}$")
@@ -87,9 +91,10 @@ def cell_resolution(cell):
 
 
 def cell_counts(cursor, column, cell, years, hidden, members=None):
-    """Return, for one hexagon, [(specieskey, records)] for the years asked
-    for (most records first, then by name), and (records with no year,
-    records with a year outside the range) left out by the year filter.
+    """Return, for one hexagon, [(specieskey, records, name, name source,
+    BCSEE entries, BCSEE statuses)] for the years asked for (most records
+    first, then by name), and (records with no year, records with a year
+    outside the range) left out by the year filter.
     Hidden species are left out of all of them, and so is every species not
     in members, when given: (SQL selecting species keys, its parameters),
     the species of a rank. column is h3_r4 to h3_r7, checked by the caller."""
@@ -99,9 +104,11 @@ def cell_counts(cursor, column, cell, years, hidden, members=None):
     hidden_list = sorted(hidden)
     rows = cursor.execute(
         f"""SELECT h.specieskey, sum(h.occurrences)::BIGINT AS records,
-                   any_value(c.col_name) AS col_name
+                   any_value(c.col_name) AS col_name, any_value(c.name_source),
+                   any_value(b.entries), any_value(b.statuses)
             FROM species_hex AS h
             LEFT JOIN species_card AS c USING (specieskey)
+            LEFT JOIN bcsee_status AS b ON b.gbif_species_key = h.specieskey
             WHERE h.{column} = ? {year_filter}
               AND NOT list_contains(CAST(? AS VARCHAR[]), coalesce(h.specieskey, ''))
               {member_filter}
@@ -109,7 +116,7 @@ def cell_counts(cursor, column, cell, years, hidden, members=None):
             ORDER BY records DESC, col_name, h.specieskey""",
         [cell, *(years or []), hidden_list, *member_params]).fetchall()
     if years is None:
-        return [(key, records) for key, records, _ in rows], (0, 0)
+        return rows, (0, 0)
     no_year, outside = cursor.execute(
         f"""SELECT coalesce(sum(h.occurrences) FILTER (WHERE h.year IS NULL), 0),
                    coalesce(sum(h.occurrences) FILTER (
@@ -119,19 +126,7 @@ def cell_counts(cursor, column, cell, years, hidden, members=None):
               AND NOT list_contains(CAST(? AS VARCHAR[]), coalesce(h.specieskey, ''))
               {member_filter}""",
         [years[0], years[1], cell, hidden_list, *member_params]).fetchone()
-    return [(key, records) for key, records, _ in rows], (no_year, outside)
-
-
-def matching_keys(cursor, q):
-    """Return the species keys with a searchable name holding q, written the
-    search way. Stops with QueryTooShort if q has fewer than
-    MIN_QUERY_LENGTH letters or digits."""
-    normalised = normalise(cursor, q)
-    if len(normalised.replace(" ", "")) < MIN_QUERY_LENGTH:
-        raise QueryTooShort(f"The filter needs at least {MIN_QUERY_LENGTH} letters or digits; got {q!r}.")
-    return {key for (key,) in cursor.execute(
-        "SELECT DISTINCT specieskey FROM search_names WHERE norm LIKE '%' || ? || '%'",
-        [normalised]).fetchall()}
+    return rows, (no_year, outside)
 
 
 # What the block for the species asked for holds about its records, all
@@ -185,14 +180,17 @@ def asked_species(data, cursor, key, column, cell, years, counts, hidden):
 
 
 def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None, offset=0,
-                 limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None):
-    """Return the answer for one hexagon (see the top of this file). With a
-    rank (and its path in rank_given, as for the rank card), the answer is
-    about that rank's species only. Raises HexesRequestError for a bad cell
-    or year range, QueryTooShort for a filter too short, UnknownSpecies for
-    an unknown species key, RankRequestError for a request that does not
-    name a rank or names a species too, and UnknownRank for a rank with no
-    species."""
+                 limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None, statuses=None, sort=None):
+    """Return the answer for one hexagon (see the top of this file), its
+    list filtered by name (q) and BC status (statuses) and in the order
+    asked for (sort). With a rank (and its path in rank_given, as for the
+    rank card), the answer is about that rank's species only. Raises
+    HexesRequestError for a bad cell or year range, ListRequestError for an
+    unknown sort or status, QueryTooShort for a filter too short,
+    UnknownSpecies for an unknown species key, RankRequestError for a
+    request that does not name a rank or names a species too, and
+    UnknownRank for a rank with no species."""
+    sort, statuses = check_list_options(sort, statuses)
     cell = cell.strip().lower()
     res = cell_resolution(cell)
     years = year_range(year_from, year_to, data.meta["first_year"], data.meta["last_year"])
@@ -206,13 +204,11 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
         path = require_rank(data, cursor, rank, rank_given or {})
         condition, params = path_filter(path)
         members = (f"SELECT c.specieskey FROM species_card AS c WHERE {condition}", params)
-    counts, (no_year, outside) = cell_counts(cursor, f"h3_r{res}", cell, years, hidden, members)
-    listed = [(key, records) for key, records in counts if key is not None]
-    if q is not None and q.strip():
-        keep = matching_keys(cursor, q)
-        listed = [(key, records) for key, records in listed if key in keep]
-    page = listed[offset:offset + limit]
-    details = species_details(cursor, [key for key, _ in page])
+    rows, (no_year, outside) = cell_counts(cursor, f"h3_r{res}", cell, years, hidden, members)
+    counts = [(key, records) for key, records, *_ in rows]
+    keep = matching_keys(cursor, q) if q is not None and q.strip() else None
+    listed = species_page(list_items([row for row in rows if row[0] is not None]),
+                          keep, statuses, sort, offset, limit)
     status_source = data.meta["statuses"]["status_source"]
 
     return {
@@ -228,14 +224,16 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
         "records_no_year_left_out": no_year,
         "records_outside_years": outside,
         "q": q,
-        "matching": len(listed),
+        "status": statuses,
+        "sort": sort,
+        "matching": listed["matching"],
+        "status_counts": listed["status_counts"],
         "offset": offset,
         "limit": limit,
         # Where the English names and statuses come from (BCSEE); each
         # result's scientific name says its own source (name_source).
         "english_name_source": status_source,
-        "results": [{"specieskey": key, **details.get(key, NO_CARD), "records": records}
-                    for key, records in page],
+        "results": listed["results"],
         "species_asked_for": (asked_species(data, cursor, species, f"h3_r{res}", cell, years, counts, hidden)
                               if species else None),
         # The rank the answer is restricted to (its name and path), or null.

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  isPlainMap, mapSearch, rankKey, readCell, readRank, speciesDatasetsSearch, speciesMapSearch,
+  CELL_LIST, NO_LIST, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readRank,
+  speciesDatasetsSearch, speciesMapSearch,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -111,6 +112,34 @@ describe('the page state in the address', () => {
     const named = readRank('?rank=family&kingdom=A&phylum=B&class=C&order=D')
     expect(named).toBeNull()
     expect(rankKey(missing)).not.toBe(rankKey(readRank('?rank=order&kingdom=A&phylum=B&class=C&order=D')))
+  })
+
+  it('keeps the options of a rank card\'s and a hexagon panel\'s species lists, the defaults left out', () => {
+    const turdus = readRank('?rank=genus&kingdom=Animalia&genus=Turdus')
+    const search = mapSearch({
+      rank: turdus, rankList: { q: 'thrush', sort: 'english', status: ['red', 'none'], page: 2 },
+      cell: '872800b30ffffff', cellList: { q: '', sort: 'most_records', status: ['blue'], page: 1 },
+    })
+    expect(search).toBe('?rank=genus&kingdom=Animalia&genus=Turdus&q=thrush&sort=english&status=red&status=none'
+      + '&page=2&cell=872800b30ffffff&cell_status=blue')
+    expect(readList(search)).toEqual({ q: 'thrush', sort: 'english', status: ['red', 'none'], page: 2 })
+    expect(readList(search, CELL_LIST)).toEqual({ ...NO_LIST, status: ['blue'] })
+    expect(readRank(search)).toEqual(turdus)
+    expect(mapSearch({ rank: turdus, rankList: NO_LIST })).toBe('?rank=genus&kingdom=Animalia&genus=Turdus')
+    // A list goes with its rank or its hexagon only.
+    expect(mapSearch({ rankList: { ...NO_LIST, q: 'x' }, cellList: { ...NO_LIST, q: 'y' } })).toBe('?')
+  })
+
+  it('reads a list\'s options leniently: unknown values are the defaults, statuses in their usual order', () => {
+    expect(readList('')).toEqual(NO_LIST)
+    expect(readList('?sort=newest&status=purple&status=none&status=red&status=red&page=0&q=%20bee%20'))
+      .toEqual({ q: 'bee', sort: 'most_records', status: ['red', 'none'], page: 1 })
+    expect(readList('?cell_page=x&cell_sort=scientific', CELL_LIST)).toEqual({ ...NO_LIST, sort: 'scientific' })
+  })
+
+  it('carries a list\'s order and statuses to the next one, without its name filter or page', () => {
+    expect(keptListChoices({ q: 'bee', sort: 'english', status: ['red'], page: 3 }))
+      .toEqual({ q: '', sort: 'english', status: ['red'], page: 1 })
   })
 
   it('knows the plain map: no species, rank or hexagon', () => {

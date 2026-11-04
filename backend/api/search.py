@@ -188,6 +188,19 @@ def normalise(cursor, query):
     return cursor.execute("SELECT search_norm(?)", [query]).fetchone()[0]
 
 
+def matching_keys(cursor, q):
+    """Return the species keys with a searchable name holding q, written the
+    search way: the same names as the species search (search_names). Used
+    by the name filters of the rank card and a hexagon's list. Stops with
+    QueryTooShort if q has fewer than MIN_QUERY_LENGTH letters or digits."""
+    normalised = normalise(cursor, q)
+    if len(normalised.replace(" ", "")) < MIN_QUERY_LENGTH:
+        raise QueryTooShort(f"The filter needs at least {MIN_QUERY_LENGTH} letters or digits; got {q!r}.")
+    return {key for (key,) in cursor.execute(
+        "SELECT DISTINCT specieskey FROM search_names WHERE norm LIKE '%' || ? || '%'",
+        [normalised]).fetchall()}
+
+
 def display_names(details, match, name_source, status_source):
     """The names to show for a result, in the agreed order: the card name,
     the English name, then the merged name or BCSEE name that matched if

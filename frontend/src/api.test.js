@@ -238,6 +238,15 @@ describe('fetchCell', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/hexes/872800b30ffffff?offset=0&limit=50&rank=family'
       + '&kingdom=Animalia&phylum=Arthropoda&class=Insecta&family=Apidae')
   })
+
+  it('sends the BC statuses and the order, leaving the default order out', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
+    await fetchCell('872800b30ffffff', { status: ['red', 'none'], sort: 'english' })
+    await fetchCell('872800b30ffffff', { status: [], sort: 'most_records' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/hexes/872800b30ffffff?offset=0&limit=50&status=red&status=none'
+      + '&sort=english')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/hexes/872800b30ffffff?offset=0&limit=50')
+  })
 })
 
 // A bee family GBIF files with no order.
@@ -255,6 +264,13 @@ describe('the rank requests', () => {
       + '&family=Apidae&offset=0&limit=50')
     expect(fetchMock.mock.calls[1][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
       + '&family=Apidae&offset=50&limit=25')
+  })
+
+  it('sends the card\'s list options: name filter, statuses and order', async () => {
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({}) })
+    await fetchRank(APIDAE, { list: { q: ' bee ', status: ['exotic'], sort: 'scientific', page: 2 }, offset: 50 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/ranks/family?kingdom=Animalia&phylum=Arthropoda&class=Insecta'
+      + '&family=Apidae&q=bee&status=exotic&sort=scientific&offset=50&limit=50')
   })
 
   it('asks for the map of a rank at one resolution, with the years only when given', async () => {

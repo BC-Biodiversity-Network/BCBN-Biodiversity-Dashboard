@@ -582,7 +582,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, adds the BCSEE entries listed in `bcsee_extra_keys.csv` (next to the script) to their extra keys, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search, `hexes.py` builds the species map, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search (`rank_search.py` the ranks), `hexes.py` builds the species map, `overview.py` the overview map, `cells.py` a hexagon's species, `ranks.py` the rank card and map, `species_list.py` the filters, order and pages of those species lists, `sensitive.py` says which species they hide, `datasets.py` lists and shows the Lunaris datasets, `export.py` makes the CSV downloads of the Datasets list and the species lists, `gbif_links.py` builds the hexagon's GBIF search link exactly as `frontend/src/gbifLinks.js` does, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/shared/` | Code used by both the API and the pipeline. `image_credit.py` is the one definition of when a species image can be shown (image URL, link to the original, creator, readable licence), in Python for the API and as SQL for `build_species_image.py`. |
 | `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
@@ -1199,6 +1199,70 @@ start of the abstract (`abstract_preview`).
 `GET /api/datasets/{id}` returns one dataset with every column, including
 its location. The id of another copy gives the copy shown, with
 `requested_copy` set. Any other id gives 404.
+
+`GET /api/export/datasets` gives the same list as a CSV file (see "The CSV
+downloads" below).
+
+### The CSV downloads
+
+At the November 4, 2026 meeting Diane and Evan asked for search results as
+a table to read into R. Three endpoints give them as CSV files
+(`backend/api/export.py`). Only what comes from the sources goes in, as it
+is: no record counts, years, abstracts or anything else BCBN worked out.
+
+| Endpoint | Options | Columns |
+| --- | --- | --- |
+| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `creators`, `published`, `catalogue`, `doi`, `link` |
+| `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status` |
+| `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` |
+
+- **Rows.** Every row the list keeps for the same options, in the order the
+  list shows; paging options are ignored. The rows come from the lists' own
+  code (`dataset_request` and `ordered_datasets` in `datasets.py`,
+  `rank_card` and `cell_species` with no page limit), so a download always
+  matches its list, leaves out the species `sensitive.py` hides (none for
+  now), and gets the list's 400 or 404 answer for a bad request.
+- **Columns.** `title` and `creators` as harvested (creators joined with
+  `; `); `published` is the issued date as stored; `catalogue` the
+  catalogue name the Datasets page shows; `doi` the DOI when the record's
+  identifier is one (from the `https://doi.org/` link), else empty, never
+  another kind of id; `link` the link to the original catalogue the page
+  uses. `scientific_name` is the card's Catalogue of Life name without
+  authorship, `english_name` the English name the card shows, and
+  `bcsee_status` the statuses the list chips show (Red, Blue, Yellow,
+  Exotic) joined with `; `. `gbif_link` is the GBIF search the hexagon
+  panel links to for that species: its card key and every key merged into
+  it, the hexagon, and the years counted.
+- **The file.** UTF-8 with a byte order mark (BOM) at the very start, so
+  Excel on Windows shows accented letters correctly; standard CSV quoting
+  (a value with a comma, a quote mark or a line break is quoted); lines
+  ending in CR LF. It is sent as an
+  attachment named for example `bcbn_datasets_salmon_2026-11-09.csv`,
+  `bcbn_species_Chordata_2000-2020_2026-11-09.csv` or
+  `bcbn_species_hexagon_872800b30ffffff_2026-11-09.csv` (letters, digits,
+  `-` and `_` only; the date is the export date in Vancouver). It always
+  starts (after the BOM) with exactly 4 lines starting with `# `: what the file is and the
+  export date; how the list was made (the search words, filters, years,
+  rank path or hexagon, and order used); the sources (for datasets the
+  Lunaris records, for species the GBIF download DOI, the Catalogue of
+  Life release and the BCSEE export date, from `/api/meta`); and
+  `# To read in R: read.csv(file, skip = 4)`. Line breaks in anything a
+  visitor typed are turned into spaces, so they never add a line. The BOM
+  sits at the start of the first of those lines, which `skip = 4` skips,
+  so R's `read.csv(file, skip = 4)` and Python (pandas
+  `read_csv(file, skiprows=4)`, or the `csv` module after 4 lines) read the
+  column names and rows without it; `backend/tests/test_export.py` checks
+  all three, R when `Rscript` is installed.
+- **The GBIF link** (`backend/api/gbif_links.py`) is built exactly as
+  `frontend/src/gbifLinks.js` builds it, with the `h3` package (in
+  `requirements-api.txt`; the same H3 library as the front end's `h3-js`)
+  for the hexagon's corners, six decimals rounded as JavaScript's
+  `toFixed` rounds, and the parameters written as the browser writes them.
+  On 2026-11-09 it gave the same text as `gbifLinks.js` (run with node) for
+  56,541 hexagons: every hexagon at resolutions 4 to 6 in the data and
+  30,000 at resolution 7. `backend/tests/test_export.py` checks the
+  front end's robin example and, when node and the front end's packages
+  are installed, runs `gbifLinks.js` itself.
 
 ### The place lookup (tried, not used)
 

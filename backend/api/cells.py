@@ -146,11 +146,20 @@ def records_by_year(cursor, column, cell, card_key):
             ORDER BY year NULLS LAST""", [cell, card_key]).fetchall()
 
 
+def cards_gbif_keys(cursor, card_keys):
+    """Return, for each card key given, the card's own key and every key
+    merged into it, in that order, as {card key: [keys]}, read in one query,
+    so a CSV download of thousands of species does not ask once per
+    species. A key with no card is left out."""
+    rows = cursor.execute(
+        """SELECT specieskey, merged_keys FROM species_card
+           WHERE list_contains(CAST(? AS VARCHAR[]), specieskey)""", [list(card_keys)]).fetchall()
+    return {key: [key, *(merged or [])] for key, merged in rows}
+
+
 def card_gbif_keys(cursor, card_key):
     """Return the card's own key and every key merged into it, in that order."""
-    merged = cursor.execute("SELECT merged_keys FROM species_card WHERE specieskey = ?",
-                            [card_key]).fetchone()[0]
-    return [card_key, *(merged or [])]
+    return cards_gbif_keys(cursor, [card_key])[card_key]
 
 
 def asked_species(data, cursor, key, column, cell, years, counts, hidden):
@@ -189,7 +198,8 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
     unknown sort or status, QueryTooShort for a filter too short,
     UnknownSpecies for an unknown species key, RankRequestError for a
     request that does not name a rank or names a species too, and
-    UnknownRank for a rank with no species."""
+    UnknownRank for a rank with no species. limit None lists every species
+    from offset on, for the CSV download (export.py)."""
     sort, statuses = check_list_options(sort, statuses)
     cell = cell.strip().lower()
     res = cell_resolution(cell)

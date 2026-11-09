@@ -87,13 +87,23 @@ Endpoints so far:
                     gives the copy shown, with requested_copy set; an
                     unknown id gives 404.
 
+    GET /api/export/datasets?q=&sort=&catalogue=&final_class=&frontend_group=
+                            &year_from=&year_to=&organism=&access=&mappable=&species=
+    GET /api/export/ranks/{rank}?kingdom=...&genus=&year_from=&year_to=&q=&status=&sort=
+    GET /api/export/hexes/{cell}?year_from=&year_to=&q=&status=&sort=&rank=&kingdom=...&genus=
+                    CSV downloads of the Datasets list, a rank card's species
+                    list and a hexagon's species list: every row the list
+                    keeps for the same options (no paging), in the same
+                    order, with the same 400 and 404 answers (see
+                    export.py). The hexagon download refuses species= (400).
+
 Responses larger than 1 KB are gzipped for clients that accept it (the
 species map of the robin at res 7 is about 355 KB, about 60 KB gzipped).
 """
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 
 from api.cells import DEFAULT_PAGE_SIZE as CELL_PAGE_SIZE
@@ -102,6 +112,7 @@ from api.cells import UnknownSpecies, cell_species
 from api.datasets import (DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, DatasetsRequestError, get_dataset,
                           list_datasets, prepare_datasets)
 from api.db import open_data
+from api.export import csv_file, export_datasets, export_date, export_hexagon, export_rank
 from api.hexes import HexesRequestError, species_hexes
 from api.ranks import DEFAULT_PAGE_SIZE as RANK_PAGE_SIZE
 from api.ranks import MAX_PAGE_SIZE as RANK_MAX_PAGE_SIZE
@@ -132,6 +143,51 @@ def unknown_rank(rank, given):
         detail=f"No species in the BC data has this classification down to {rank}: "
                + " > ".join(f"{name}={given.get(name) or '(missing)'}"
                             for name in RANKS[:RANKS.index(rank) + 1]))
+
+
+def answer_datasets(work):
+    """Return work(), a datasets list or its CSV download, with a bad
+    request turned into the API's 400 answer, so both answer alike."""
+    try:
+        return work()
+    except (QueryTooShort, DatasetsRequestError) as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+def answer_rank(rank, given, work):
+    """Return work(), a rank card or its CSV download, with a bad request
+    turned into the API's 400 answer and a rank no species has into its
+    404, so both answer alike."""
+    try:
+        return work()
+    except (RankRequestError, QueryTooShort, ListRequestError, HexesRequestError) as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except UnknownRank:
+        raise unknown_rank(rank, given)
+
+
+def answer_hexagon(rank, given, species, work):
+    """Return work(), a hexagon's species or its CSV download, with a bad
+    request turned into the API's 400 answer and an unknown species or
+    rank into its 404, so both answer alike."""
+    try:
+        return work()
+    except (HexesRequestError, QueryTooShort, RankRequestError, ListRequestError) as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except UnknownSpecies:
+        raise unknown_key(species)
+    except UnknownRank:
+        raise unknown_rank(rank, given)
+
+
+def csv_download(file_and_text):
+    """Return a CSV download from (file name, CSV text): UTF-8 starting with
+    a byte order mark (csv_file in export.py), saved by the browser under
+    that name. The name only holds letters, digits, "-", "_" and ".", so it
+    needs no quoting rules of its own."""
+    name, text = file_and_text
+    return Response(content=csv_file(text), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 def create_app(settings=None):
@@ -215,15 +271,9 @@ def create_app(settings=None):
         per rank, as for /api/ranks/{rank}), keeps that rank's species
         only."""
         given = {name: request.query_params.get(name) for name in RANKS}
-        try:
-            return cell_species(request.app.state.data, cell, year_from, year_to, q, species,
-                                offset, limit, rank, given, status, sort)
-        except (HexesRequestError, QueryTooShort, RankRequestError, ListRequestError) as error:
-            raise HTTPException(status_code=400, detail=str(error))
-        except UnknownSpecies:
-            raise unknown_key(species)
-        except UnknownRank:
-            raise unknown_rank(rank, given)
+        return answer_hexagon(rank, given, species, lambda: cell_species(
+            request.app.state.data, cell, year_from, year_to, q, species, offset, limit, rank, given,
+            status, sort))
 
     @app.get("/api/ranks/{rank}/hexes")
     def rank_map(rank: str, request: Request, res: int = Query(...),
@@ -253,13 +303,8 @@ def create_app(settings=None):
         the same filters and order as a hexagon's (q, status, sort), and
         year_from and year_to make every number count only those years."""
         given = {name: request.query_params.get(name) for name in RANKS}
-        try:
-            return rank_card(request.app.state.data, rank, given, offset, limit, q, status, sort,
-                             year_from, year_to)
-        except (RankRequestError, QueryTooShort, ListRequestError, HexesRequestError) as error:
-            raise HTTPException(status_code=400, detail=str(error))
-        except UnknownRank:
-            raise unknown_rank(rank, given)
+        return answer_rank(rank, given, lambda: rank_card(
+            request.app.state.data, rank, given, offset, limit, q, status, sort, year_from, year_to))
 
     @app.get("/api/search")
     def species_search(request: Request, q: str = Query(..., max_length=200),
@@ -294,12 +339,57 @@ def create_app(settings=None):
         see datasets.py). catalogue, final_class, frontend_group and access
         can each be given more than once; frontend_group defaults to
         bc_data. species is a species key."""
-        try:
-            return list_datasets(request.app.state.data, q, catalogue, final_class, frontend_group,
-                                 page, page_size, sort=sort, year_from=year_from, year_to=year_to,
-                                 organism=organism, access=access, mappable=mappable, species=species)
-        except (QueryTooShort, DatasetsRequestError) as error:
-            raise HTTPException(status_code=400, detail=str(error))
+        return answer_datasets(lambda: list_datasets(
+            request.app.state.data, q, catalogue, final_class, frontend_group, page, page_size, sort=sort,
+            year_from=year_from, year_to=year_to, organism=organism, access=access, mappable=mappable,
+            species=species))
+
+    # The CSV downloads (see export.py). They live under /api/export/, so
+    # no path of theirs can be taken for a dataset id below.
+    @app.get("/api/export/datasets")
+    def datasets_export(request: Request, q: str | None = Query(None, max_length=200),
+                        catalogue: list[str] | None = Query(None),
+                        final_class: list[str] | None = Query(None),
+                        frontend_group: list[str] | None = Query(None),
+                        sort: str | None = Query(None),
+                        year_from: int | None = Query(None, ge=1000, le=9999),
+                        year_to: int | None = Query(None, ge=1000, le=9999),
+                        organism: str | None = Query(None, max_length=200),
+                        access: list[str] | None = Query(None),
+                        mappable: bool = Query(False),
+                        species: str | None = Query(None, max_length=50)):
+        """Return every Lunaris dataset /api/datasets would list for the
+        same options, in the same order, as a CSV download (no paging)."""
+        return csv_download(answer_datasets(lambda: export_datasets(
+            request.app.state.data, export_date(), q, catalogue, final_class, frontend_group, sort,
+            year_from, year_to, organism, access, mappable, species)))
+
+    @app.get("/api/export/ranks/{rank}")
+    def rank_export(rank: str, request: Request, year_from: int | None = None, year_to: int | None = None,
+                    q: str | None = Query(None, max_length=200),
+                    status: list[str] = Query([], max_length=20), sort: str | None = Query(None, max_length=20)):
+        """Return every species on the list of the rank card
+        /api/ranks/{rank} would give for the same path and options, in the
+        same order, as a CSV download (no paging)."""
+        given = {name: request.query_params.get(name) for name in RANKS}
+        return csv_download(answer_rank(rank, given, lambda: export_rank(
+            request.app.state.data, export_date(), rank, given, q, status, sort, year_from, year_to)))
+
+    @app.get("/api/export/hexes/{cell}")
+    def hexagon_export(cell: str, request: Request, year_from: int | None = None, year_to: int | None = None,
+                       q: str | None = Query(None, max_length=200), rank: str | None = Query(None, max_length=20),
+                       status: list[str] = Query([], max_length=20),
+                       sort: str | None = Query(None, max_length=20)):
+        """Return every species /api/hexes/{cell} would list for the same
+        options (rank and its path included), in the same order, each with
+        its GBIF link, as a CSV download (no paging). species= is refused:
+        that panel is about one species, not a list."""
+        if "species" in request.query_params:
+            raise HTTPException(status_code=400, detail=(
+                "The hexagon download is the list of the hexagon's species; it does not take species=."))
+        given = {name: request.query_params.get(name) for name in RANKS}
+        return csv_download(answer_hexagon(rank, given, None, lambda: export_hexagon(
+            request.app.state.data, export_date(), cell, q, status, sort, year_from, year_to, rank, given)))
 
     # Dataset ids hold colons and slashes (oai:datadryad.org:doi:10.5061/...),
     # so the id takes the rest of the path.

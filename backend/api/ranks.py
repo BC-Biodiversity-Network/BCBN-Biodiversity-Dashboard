@@ -225,7 +225,8 @@ def rank_card(data, rank, given, offset=0, limit=DEFAULT_PAGE_SIZE, q=None, stat
     range, ListRequestError for an unknown sort or status, QueryTooShort for
     a name filter too short, and UnknownRank when no species (that may be
     shown) has this path. A rank that exists but has no record in the years
-    asked for is found, with no species."""
+    asked for is found, with no species. limit None lists every species
+    from offset on, for the CSV download (export.py)."""
     sort, statuses = check_list_options(sort, statuses)
     years = year_range(year_from, year_to, data.meta["first_year"], data.meta["last_year"])
     hidden = hidden_species(data.settings, None)

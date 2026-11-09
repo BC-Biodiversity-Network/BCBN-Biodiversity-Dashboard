@@ -1,6 +1,8 @@
-# The species API (backend/api/) and its tests. duckdb is also used by the
-# pipeline; the others are only for the API.
+# The species API (backend/api/) and its tests. duckdb and h3 are also used
+# by the pipeline; the others are only for the API. h3 (version 4 or later)
+# draws a hexagon's outline for the GBIF links in the hexagon CSV download.
 duckdb
+h3>=4
 fastapi
 uvicorn
 pytest

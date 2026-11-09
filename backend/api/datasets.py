@@ -68,6 +68,10 @@ The counts for the filter options (options in the response) follow the
 search: each filter's counts use the query and the other filters, but not
 its own, so ticking one catalogue still shows how many the others have.
 
+The CSV download of the list (export.py) checks its request with the same
+dataset_request and reads its rows with the same ordered_datasets, with no
+page limit, so it holds exactly the datasets of the list, in its order.
+
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
@@ -324,18 +328,22 @@ def species_filter(data, cursor, key):
     return {"specieskey": card_key, "requested_key": key, "merged_from": merged_from, **label}
 
 
-def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_group=None,
-                  page=1, page_size=DEFAULT_PAGE_SIZE, sort=None, year_from=None, year_to=None,
-                  organism=None, access=None, mappable=False, species=None):
+def dataset_request(data, cursor, query=None, catalogue=None, final_class=None, frontend_group=None,
+                    sort=None, year_from=None, year_to=None, organism=None, access=None, mappable=False,
+                    species=None):
     """
-    Return one page of datasets matching the query and filters, in the order
-    sort asks for (see the top of this file), with the total, the sort and
-    filters used and the counts for the filter options. Raises QueryTooShort
-    for a query or organism with fewer than MIN_QUERY_LENGTH letters or
-    digits, and DatasetsRequestError for an unknown value or species,
-    relevance without a query, or year_from after year_to.
+    Check one request for the list of datasets and work out what it asks
+    for, so the list (list_datasets) and the CSV download (export.py) keep
+    exactly the same datasets in exactly the same order. Returns a dict:
+    query (as given), normalised (the query written the search way, or
+    None), words, organism (as given, or None when not used), sort (the
+    default filled in), filters, species_asked (see species_filter),
+    conditions (see build_conditions), and condition, params, order_by and
+    order_params, ready for the SQL. Raises QueryTooShort for a query or
+    organism with fewer than MIN_QUERY_LENGTH letters or digits, and
+    DatasetsRequestError for an unknown value or species, relevance
+    without a query, or year_from after year_to.
     """
-    cursor = data.cursor()
     frontend_group = frontend_group or list(DEFAULT_FRONTEND_GROUPS)
     check_values("frontend_group", frontend_group, FRONTEND_GROUPS)
     check_values("final_class", final_class or [], FINAL_CLASSES)
@@ -359,17 +367,55 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
                "species": species_asked["specieskey"] if species_asked else None}
     conditions = build_conditions(words, organism_phrase, filters)
     condition, params = where_clause(conditions)
-    total = cursor.execute(f"SELECT count(*) FROM {FROM_DATASETS} WHERE {condition}", params).fetchone()[0]
-
+    # The relevance sort asks again whether every word is in the title.
     in_title = " AND ".join(["s.title_norm LIKE '% ' || ? || '%'"] * len(words)) or "TRUE"
-    order_params = list(words) if sort == "relevance" else []
-    columns = ", ".join(f"d.{field}" for field in LIST_FIELDS) + ", s.checked_licences"
-    rows = cursor.execute(
+    return {"query": query, "normalised": normalised, "words": words,
+            "organism": organism if organism_phrase else None, "sort": sort, "filters": filters,
+            "species_asked": species_asked, "conditions": conditions, "condition": condition,
+            "params": params, "order_by": ORDER_BY[sort].format(in_title=in_title),
+            "order_params": list(words) if sort == "relevance" else []}
+
+
+def ordered_datasets(cursor, request, columns, limit=None, offset=0):
+    """
+    Return the rows of the datasets a request keeps (dataset_request), in
+    its order: columns is the SQL list of what to read (from d, the
+    datasets, and s, dataset_search). With a limit, only that many rows
+    from offset on (one page of the list); with none, every row (the CSV
+    download).
+    """
+    page_sql, page_params = ("LIMIT ? OFFSET ?", [limit, offset]) if limit is not None else ("", [])
+    return cursor.execute(
         f"""SELECT {columns} FROM {FROM_DATASETS}
-            WHERE {condition}
-            ORDER BY {ORDER_BY[sort].format(in_title=in_title)}
-            LIMIT ? OFFSET ?""",
-        params + order_params + [page_size, (page - 1) * page_size]).fetchall()
+            WHERE {request["condition"]}
+            ORDER BY {request["order_by"]}
+            {page_sql}""",
+        request["params"] + request["order_params"] + page_params).fetchall()
+
+
+def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_group=None,
+                  page=1, page_size=DEFAULT_PAGE_SIZE, sort=None, year_from=None, year_to=None,
+                  organism=None, access=None, mappable=False, species=None):
+    """
+    Return one page of datasets matching the query and filters, in the order
+    sort asks for (see the top of this file), with the total, the sort and
+    filters used and the counts for the filter options. Raises QueryTooShort
+    for a query or organism with fewer than MIN_QUERY_LENGTH letters or
+    digits, and DatasetsRequestError for an unknown value or species,
+    relevance without a query, or year_from after year_to (see
+    dataset_request, which checks the request for the CSV download too).
+    """
+    cursor = data.cursor()
+    request = dataset_request(data, cursor, query, catalogue, final_class, frontend_group, sort,
+                              year_from, year_to, organism, access, mappable, species)
+    normalised, sort, filters = request["normalised"], request["sort"], request["filters"]
+    frontend_group, species_asked, conditions = (filters["frontend_group"], request["species_asked"],
+                                                 request["conditions"])
+    total = cursor.execute(f"SELECT count(*) FROM {FROM_DATASETS} WHERE {request['condition']}",
+                           request["params"]).fetchone()[0]
+
+    columns = ", ".join(f"d.{field}" for field in LIST_FIELDS) + ", s.checked_licences"
+    rows = ordered_datasets(cursor, request, columns, page_size, (page - 1) * page_size)
 
     results = []
     for row in rows:
@@ -384,7 +430,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
         "sort": sort,
         "filters": {"catalogue": filters["catalogue"], "final_class": filters["final_class"],
                     "frontend_group": frontend_group, "year_from": year_from, "year_to": year_to,
-                    "organism": organism if organism_phrase else None, "access": filters["access"],
+                    "organism": request["organism"], "access": filters["access"],
                     "mappable": bool(mappable), "species": species_asked},
         "page": page,
         "page_size": page_size,

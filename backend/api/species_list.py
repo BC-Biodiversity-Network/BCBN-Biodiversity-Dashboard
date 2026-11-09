@@ -100,6 +100,7 @@ def species_page(items, keep, statuses, sort, offset, limit):
     file). items is [(key, records, details)], every species of the list;
     keep is the set of keys the name filter keeps, or None for no name
     filter; statuses and sort are as check_list_options returns them.
+    limit None gives every species from offset on (the CSV download).
     Returns {matching, status_counts, results}, each result {specieskey,
     col_name, name_source, english_name, statuses, records}."""
     named = [item for item in items if keep is None or item[0] in keep]
@@ -110,10 +111,12 @@ def species_page(items, keep, statuses, sort, offset, limit):
     wanted = set(statuses)
     shown = [item for item in named if not wanted or wanted & set(status_options_of(item[2]))]
     shown.sort(key=sort_key(sort))
+    # One page, or with no limit every species from offset on.
+    page = shown[offset:] if limit is None else shown[offset:offset + limit]
     return {
         "matching": len(shown),
         "status_counts": status_counts,
         "results": [{"specieskey": key, **details, "records": records}
-                    for key, records, details in shown[offset:offset + limit]],
+                    for key, records, details in page],
     }
 

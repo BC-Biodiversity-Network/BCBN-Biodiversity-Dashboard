@@ -1460,6 +1460,18 @@ hand on 2026-11-03, and it showed Turdus migratorius, the years 2000 to
 2020, one location filter around 48.43N 123.35W and 372 results, the same
 as the API. The panel says GBIF shows its current data,
 without our snapshot's cleaning, so its count may differ a little. The
+overview's and a rank map's panel (every species in the hexagon) has one
+link "See these records on GBIF" with the same parameters and no
+`taxonKey`, so GBIF shows every species in the hexagon, for the years
+counted (`gbifCellSearchUrl` with no keys). A rank, a name filter or a BC
+status filter cannot go in the link (the site has no GBIF key for a rank
+yet; the other two are our own), so when the list has any of them a note
+names what the link leaves out (`gbifLeftOutNote`), for example "GBIF
+shows every species in the hexagon: the link leaves out this list's genus
+Turdus." Checked against GBIF's occurrence API on 2026-11-10 for the
+hexagon of about 30 km² by Whistler (8628da99fffffff): all years GBIF
+1,022 records, ours 1,002; 2000 to 2020 GBIF 422, ours 428. (gbif.org
+blocks headless browsers, so the page itself needs checking by hand.) The
 species card's link to all of the species' BC records on GBIF
 (`gbifBcSearchUrl`) uses the same parameters with no year, and as its
 geometry the polygon our GBIF download used, unchanged:

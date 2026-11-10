@@ -3,7 +3,7 @@ import { cellArea } from 'h3-js'
 
 import { cellExportUrl, fetchCell } from './api'
 import CsvDownload from './CsvDownload'
-import { GBIF_COUNT_NOTE, gbifCellSearchUrl } from './gbifLinks'
+import { GBIF_COUNT_NOTE, gbifCellSearchUrl, gbifLeftOutNote } from './gbifLinks'
 import RankName, { rankTitle } from './RankName'
 import { NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
@@ -225,6 +225,7 @@ function AllSpeciesPanel({
               </InPageLink>
             </p>
           )}
+          <HexagonGbifLink cell={cell} yearsCounted={data.years_counted} rank={rank} list={list} />
           <p className="hexagon-sources">
             Scientific names from the Catalogue of Life, via GBIF; English names and statuses
             from {data.english_name_source}. Records counted after merging keys, as on the maps.
@@ -232,6 +233,27 @@ function AllSpeciesPanel({
         </>
       )}
     </aside>
+  )
+}
+
+// The all-species panel's link to every record in the hexagon on GBIF, in a
+// new tab: the hexagon's own outline as GBIF's location, every species, and
+// the years the answer counted (yearsCounted, [from, to], or null for all
+// years). Under it, what GBIF's count may differ by, and, when the list has
+// filters the link cannot carry (a rank, a name filter, a BC status filter;
+// rank and list as the panel has them), a note naming them.
+function HexagonGbifLink({ cell, yearsCounted, rank, list }) {
+  const leftOut = gbifLeftOutNote({ place: 'hexagon', rank, list })
+  return (
+    <>
+      <p className="hexagon-gbif">
+        <a href={gbifCellSearchUrl({ cell, years: yearsCounted })} target="_blank" rel="noopener noreferrer">
+          See these records on GBIF
+        </a>
+      </p>
+      <p className="hexagon-note">{GBIF_COUNT_NOTE}</p>
+      {leftOut && <p className="hexagon-note">{leftOut}</p>}
+    </>
   )
 }
 

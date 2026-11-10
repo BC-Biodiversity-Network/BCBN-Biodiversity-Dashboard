@@ -45,6 +45,10 @@ gbif_link, the GBIF search for its keys (its card key and every key merged
 into it) inside the box for the years counted. A single species' map is not
 covered yet (species= gives 400).
 
+Reserves: reserve_names lists every First Nations reserve that any of the
+hexagons touches, sorted, for the reserve reminder (see reserves.py). It
+is looked up from the hexagon ids alone and never joined to the records.
+
 Plain SQL only (in cells.py), so this runs on the cluster's DuckDB 0.10.3.
 """
 
@@ -56,6 +60,7 @@ from api.cells import DEFAULT_PAGE_SIZE, cards_gbif_keys, hexagons_list
 from api.gbif_links import gbif_box_search_url
 from api.hexes import HexesRequestError, year_range
 from api.ranks import require_rank
+from api.reserves import reserve_names
 from api.sensitive import hidden_species
 from api.settings import RESOLUTIONS
 from api.species_list import check_list_options
@@ -218,5 +223,9 @@ def area_species(data, west, south, east, north, res, year_from=None, year_to=No
         # The years actually counted (a missing bound filled in), or null
         # when every record is counted.
         "years_counted": list(years) if years else None,
+        # The names of every reserve any of these hexagons touches, sorted,
+        # for the reminder (reserves.py; empty when there are none or the
+        # rule gives none at this size).
+        "reserve_names": reserve_names(data.reserves, data.settings.reserve_reminder_rule, res, cells),
         **part,
     }

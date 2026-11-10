@@ -17,6 +17,16 @@ Endpoints so far:
                     the GBIF download to cite, species and record totals,
                     the year range, the map resolutions and the
                     sensitive-species setting.
+    GET /api/reserves
+                    the map's reserve layer: every First Nations reserve's
+                    outline with its alcode and name only, and where the
+                    outlines come from (source, licence, the note that they
+                    are not to be used for defining boundaries, dates; see
+                    reserves.py). It takes no parameters. Without the
+                    reserve files it answers available false, with no
+                    outlines. /api/hexes/{cell} and /api/area, and their
+                    downloads, also name the reserves their hexagons touch
+                    (reserve_names), under the rule in settings.py.
     GET /api/species/{key}
                     one species card (see species.py), with how many
                     BC data datasets mention the species. An old key that
@@ -241,6 +251,14 @@ def create_app(settings=None):
         are worked out once at start-up, since they only change with the
         data files."""
         return request.app.state.data.meta
+
+    @app.get("/api/reserves")
+    def reserves(request: Request):
+        """Return the reserve layer for the map: the outlines (alcode and
+        name only) and their source, made once at start-up (reserves.py).
+        No parameters: nothing here is chosen by reserve. About 1 MB, so
+        the gzip set-up above sends it compressed (about 0.3 MB)."""
+        return Response(content=request.app.state.data.reserves.layer, media_type="application/json")
 
     @app.get("/api/species/{key}")
     def species(key: str, request: Request):

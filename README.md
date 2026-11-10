@@ -52,6 +52,12 @@ Then put the five files in `backend/data/api/`:
 The map's hexagon files (`frontend/public/data/bc_hex_r4.csv.gz` to
 `bc_hex_r7.csv.gz`) are in git, so there is nothing to copy for them.
 
+Optional: the three reserve files (`reserves_outlines.geojson`,
+`reserve_cells.parquet`, `reserves_info.json`, about 1.2 MB together) from
+`backend/pipeline/reserves/build_reserves.py`, in the same folder. Without
+them the API still starts, with the reserve layer and reminders off (see
+"The reserve layer and reminder").
+
 ### 3. Start the API (terminal 1)
 
 From the top of the repo:
@@ -582,7 +588,7 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, adds the BCSEE entries listed in `bcsee_extra_keys.csv` (next to the script) to their extra keys, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search (`rank_search.py` the ranks), `hexes.py` builds the species map, `overview.py` the overview map, `cells.py` a hexagon's species, `ranks.py` the rank card and map, `species_list.py` the filters, order and pages of those species lists, `sensitive.py` says which species they hide, `datasets.py` lists and shows the Lunaris datasets, `area.py` runs the area search (the species in the hexagons under a box), `export.py` makes the CSV downloads of the Datasets list and the species lists (an area's included), `gbif_links.py` builds the hexagon's GBIF search link exactly as `frontend/src/gbifLinks.js` does, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search (`rank_search.py` the ranks), `hexes.py` builds the species map, `overview.py` the overview map, `cells.py` a hexagon's species, `ranks.py` the rank card and map, `species_list.py` the filters, order and pages of those species lists, `sensitive.py` says which species they hide, `datasets.py` lists and shows the Lunaris datasets, `area.py` runs the area search (the species in the hexagons under a box), `reserves.py` serves the reserve outlines and names the reserves chosen hexagons touch, `export.py` makes the CSV downloads of the Datasets list and the species lists (an area's included), `gbif_links.py` builds the hexagon's GBIF search link exactly as `frontend/src/gbifLinks.js` does, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/shared/` | Code used by both the API and the pipeline. `image_credit.py` is the one definition of when a species image can be shown (image URL, link to the original, creator, readable licence), in Python for the API and as SQL for `build_species_image.py`. |
 | `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. `frontend_node.py` runs pieces of the front end's own JavaScript with node (with Vite's `?raw` imports working), so tests can check the API and the front end agree (GBIF links, the hexagons under a box); those tests are skipped without node or the front end's packages. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
@@ -1348,6 +1354,38 @@ hexagon's own size ("species in H3 hexagon 861298d4fffffff, a hexagon of
 about 29 km²"). The resolution stays where only the program uses it: the
 address (`area_res`), the API's parameters (`res`) and their error messages,
 and the code.
+
+### The reserve layer and reminder
+
+Option A of the November 2026 proposal: whenever a hexagon or a drawn box
+touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
+
+- `GET /api/reserves` (no parameters) gives the map layer: every reserve's
+  outline with `alcode` and `name` only, and `source` (title, publisher,
+  licence, the note that the outlines are not to be used for defining
+  boundaries, the shapefile, the latest revision date, the build date).
+  About 1.1 MB, sent gzipped (about 270 KB). Without the reserve files it
+  answers `{"available": false, "source": null, "outlines": null}`.
+- `GET /api/hexes/{cell}` (both panels) and `GET /api/area` have
+  `reserve_names`: the names of the reserves the hexagon, or any of the
+  box's hexagons, touches, sorted, each once (empty when none).
+- Their downloads (`/api/export/hexes/{cell}`, `/api/export/area`) end
+  header line 2 with "This area includes First Nations reserve land
+  (NAMES). If these data were collected on a reserve, check where they came
+  from and whether the Nation agreed to the work. See the Indigenous data
+  page of the site." when the list is not empty, still with exactly 4
+  header lines. Dataset and rank downloads do not change.
+- The rule is `RESERVE_REMINDER_RULE` in `backend/api/settings.py`: `"A"`
+  (the default) names reserves at every hexagon size; `"B"` only at the two
+  smallest (res 6 and 7), with empty lists at the larger sizes. Any other
+  value stops the API.
+
+Privacy: nothing takes a reserve as input (no endpoint, parameter, filter
+or download is about one; `tests/test_reserves.py` goes through every
+route to check), and `reserve_cells.parquet` is read into a Python lookup
+from cell to reserves, never into a DuckDB table, so it cannot be joined to
+records, species or datasets. Its only use is naming the reserves of
+hexagons the visitor already chose.
 
 ### The place lookup (tried, not used)
 

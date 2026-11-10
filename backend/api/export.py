@@ -42,7 +42,10 @@ line break is put in quotes, a quote mark inside written twice); lines
 ending in CR LF. After the BOM it starts with exactly 4 lines, each
 starting with "# ": what the file is and the export date (Vancouver time),
 how the list was made (only the options used), the sources, and how to read
-it in R. Then the column names and the rows. Anything a visitor typed that
+it in R. When the hexagons of a hexagon or area download touch a First
+Nations reserve, line 2 ends with a reminder naming the reserves
+(RESERVE_NOTE; see reserves.py); it stays on line 2. Then the column names
+and the rows. Anything a visitor typed that
 goes into those 4 lines has its line breaks turned into spaces, so it can
 never add a line. The BOM sits at the start of the first of those lines,
 which read.csv(file, skip = 4) skips, so R (and Python, skipping 4 lines
@@ -102,6 +105,13 @@ SPECIES_SORT_LABELS = {"most_records": "most records first", "fewest_records": "
 
 # How long a part of a file name made from a search can be.
 FILE_PART_LENGTH = 40
+
+# The reserve reminder added to the end of header line 2 of a hexagon or
+# area download when its hexagons touch a First Nations reserve
+# (reserves.py). {names} is every reserve name, joined with ", ".
+RESERVE_NOTE = (" This area includes First Nations reserve land ({names}). If these data were collected on a "
+                "reserve, check where they came from and whether the Nation agreed to the work. See the "
+                "Indigenous data page of the site.")
 
 
 def export_date(now=None):
@@ -318,11 +328,22 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
     header = [f"BCBN species list for hexagon {answer['cell']}, exported {date}",
-              "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
+              list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_hexagon",
                      [answer["cell"], answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
                      date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)
+
+
+def list_line(parts, names):
+    """Return header line 2 of a hexagon or area download: "List: " and
+    the parts, then, when names (the reserves its hexagons touch) is not
+    empty, a full stop and RESERVE_NOTE with every name. It stays one line,
+    so the file keeps exactly 4 header lines."""
+    line = "List: " + "; ".join(parts)
+    if names:
+        line += "." + RESERVE_NOTE.format(names=", ".join(one_line(name) for name in names))
+    return line
 
 
 def km2_text(value):
@@ -361,6 +382,6 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
     header = [f"BCBN species list for an area, exported {date}",
-              "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
+              list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)

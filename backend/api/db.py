@@ -20,6 +20,11 @@ stays fast without a database server.
 Each request should use its own cursor (connection.cursor()), which is
 DuckDB's way of sharing one database between threads.
 
+The reserve files (reserves_outlines.geojson, reserve_cells.parquet,
+reserves_info.json) are optional and read by reserves.py, not here: when
+they are missing the API still starts, with the reserve layer and
+reminders off. They never become DuckDB tables.
+
 Only plain SQL is used, so this also runs on the cluster's DuckDB 0.10.3.
 """
 
@@ -27,7 +32,8 @@ import json
 
 import duckdb
 
-from api.settings import RESOLUTIONS, refuse_sensitive_setting
+from api.reserves import ReserveData, load_reserves
+from api.settings import RESOLUTIONS, refuse_sensitive_setting, refuse_unknown_reserve_rule
 
 # The columns the API reads from each parquet file, so a file from an older
 # build is caught when the API starts rather than halfway through a request.
@@ -486,12 +492,15 @@ class ApiData:
                   id shown; filled in by datasets.prepare_datasets()
     dataset_catalogues
                   each catalogue (source id) of the datasets, to its
-                  readable name; filled in by datasets.prepare_datasets()"""
+                  readable name; filled in by datasets.prepare_datasets()
+    reserves      the reserve outlines and the cells that touch them
+                  (reserves.ReserveData; off when the files are missing)"""
 
     def __init__(self, connection, settings, meta, merged_keys,
-                 bcsee_includes_without_status):
+                 bcsee_includes_without_status, reserves=None):
         """Keep everything the endpoints need."""
         self.connection = connection
+        self.reserves = reserves if reserves is not None else ReserveData()
         self.settings = settings
         self.meta = meta
         self.merged_keys = merged_keys
@@ -519,6 +528,7 @@ def open_data(settings):
     start rather than serve wrong or partial answers. A value for the
     sensitive-species setting stops it first, with SettingsError."""
     refuse_sensitive_setting(settings)
+    refuse_unknown_reserve_rule(settings)
 
     data_dir = settings.data_dir
     if not data_dir.is_dir():
@@ -554,4 +564,7 @@ def open_data(settings):
         con.close()
         raise
 
-    return ApiData(con, settings, meta, merged_keys, includes_without_status)
+    # The reserve files are optional: when they are missing the API still
+    # starts, with the reserves off and one message logged (reserves.py).
+    reserves = load_reserves(data_dir)
+    return ApiData(con, settings, meta, merged_keys, includes_without_status, reserves)

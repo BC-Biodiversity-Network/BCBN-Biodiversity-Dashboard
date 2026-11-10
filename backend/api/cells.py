@@ -61,6 +61,11 @@ filters and hidden species work exactly as for one hexagon. A species in
 several of the hexagons is still one species, and each record is in only
 one hexagon at a resolution, so it is counted once.
 
+Reserves: reserve_names lists the First Nations reserves the hexagon
+touches, sorted, for the reserve reminder (see reserves.py). It is looked
+up from the hexagon id alone and never joined to the records; under rule B
+in settings.py it is empty at the larger sizes.
+
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
@@ -68,6 +73,7 @@ import re
 
 from api.hexes import HexesRequestError, year_range
 from api.ranks import RankRequestError, path_filter, rank_label, require_rank
+from api.reserves import reserve_names
 from api.search import matching_keys
 from api.sensitive import hidden_species
 from api.species import resolve_key, species_details
@@ -273,6 +279,10 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
         # The years actually counted (a missing bound filled in), or null
         # when every record is counted.
         "years_counted": list(years) if years else None,
+        # The names of the reserves this hexagon touches, sorted, for the
+        # reminder (reserves.py; empty when there are none or the rule
+        # gives none at this size).
+        "reserve_names": reserve_names(data.reserves, data.settings.reserve_reminder_rule, res, [cell]),
         **part,
         "species_asked_for": (asked_species(data, cursor, species, f"h3_r{res}", cell, years, counts, hidden)
                               if species else None),

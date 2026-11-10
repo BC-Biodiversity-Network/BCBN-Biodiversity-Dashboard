@@ -22,11 +22,24 @@ number BCBN works out: each species' record count, the same number the list
 shows (asked for by Evan on 2026-11-10). Nothing else BCBN computes (years,
 first and last records, and so on) goes in a file.
 
-    Datasets (6 columns): title, creators, published, catalogue, doi, link
-        title and creators as harvested (creators joined with "; "), the
-        issued date as stored, the catalogue name the page shows, the DOI
-        when the record's identifier is one (never another kind of id), and
-        the link to the original catalogue the page uses.
+    Datasets (14 columns): title, abstract, subjects, creators, published,
+        catalogue, doi, link, publisher, places, boxes, points, rights,
+        lunaris_id. The record's own metadata, as harvested from Lunaris
+        (public, and Lunaris shows it too; Evan, 2026-11-10): title,
+        abstract and subjects (the harvest took out HTML tags and extra
+        spaces), creators (joined with "; "), publisher, places (the
+        record's DataCite geoLocationPlace names, not the places we looked
+        up), boxes and points (its DataCite geoLocationBox and
+        geoLocationPoint, unchanged even when a box's edges are swapped),
+        rights (its DataCite rightsList, name and URI as given, not the
+        licences we checked) and lunaris_id (the record's OAI identifier).
+        Lists of several values are joined with " | ", which no harvested
+        value holds. Then the issued date as stored, the catalogue name the
+        page shows, the DOI when the record's identifier is one (never
+        another kind of id), and the link to the original catalogue the
+        page uses. Nothing BCBN or its models made (the BC class, the
+        organisms, looked-up places, hand decisions, checked licences or
+        access) goes in.
     Species lists (5 columns): specieskey, scientific_name, english_name,
         bcsee_status, records: the card's Catalogue of Life name (no
         authorship), the English name the card shows, the BC statuses the
@@ -84,12 +97,39 @@ HEADER_LINE_COUNT = 4
 R_LINE = "To read in R: read.csv(file, skip = 4)"
 
 # The columns of each file.
-DATASET_COLUMNS = ["title", "creators", "published", "catalogue", "doi", "link"]
+DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                   "publisher", "places", "boxes", "points", "rights", "lunaris_id"]
 SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
 
-# What each dataset row is read from (d is lunaris_datasets).
-DATASET_SQL_COLUMNS = "d.title, d.creators, d.issued, d.source_name, d.link, d.link_type"
+# What each dataset row is read from (d is lunaris_datasets), in the order
+# dataset_row takes them.
+DATASET_SQL_COLUMNS = ("d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, d.link_type, "
+                       "d.publisher, d.places, d.boxes, d.points, d.licences, d.id")
+
+# The date of the Lunaris harvest the datasets come from. The API's data
+# files do not store it (lunaris_datasets.parquet has no date), so it is
+# written here, from the harvest folder export_lunaris_datasets.py reads
+# (DEFAULT_HARVEST, exploration/lunaris/harvest_2026_10_20/); a test checks
+# the two still agree. Change both when the datasets are rebuilt from a new
+# harvest.
+LUNARIS_HARVEST_DATE = "2026-10-20"
+
+# Header line 3 of the Datasets file: where the text comes from and what
+# the harvest did to it (checked against the raw XML on 2026-11-10: HTML
+# tags taken out of 762 abstracts and 14 titles, runs of spaces and line
+# breaks made one space in abstracts, titles and 38 subject lists, one
+# description kept per record), and that rights are the source's own.
+DATASETS_SOURCE_LINE = (
+    f"Source: Lunaris dataset records from our harvest of {LUNARIS_HARVEST_DATE} (HTML tags removed from "
+    "titles and abstracts, extra spaces from titles, abstracts and subjects; one description per record); "
+    "rights are as the source gives them, not checked by BCBN; each row links to the original catalogue")
+
+# How a dataset column with several values joins them. No harvested value
+# holds it (checked on 2026-11-10 for subjects, places, rights and
+# publisher), so a list can always be split again; joined_values refuses a
+# value that holds it rather than write a list that cannot be.
+LIST_SEPARATOR = " | "
 
 # A link the Datasets page follows (isWebLink in datasetText.js), and the
 # start of a DOI written as a link (the export's link for a DOI record).
@@ -203,10 +243,60 @@ def dataset_doi(link, link_type):
     return None
 
 
-def dataset_row(title, creators, issued, source_name, link, link_type):
-    """Return one dataset's row: the 6 columns (see the top of this file)."""
-    return [title, "; ".join(creators or []), issued, source_name, dataset_doi(link, link_type),
-            link if WEB_LINK.match(link or "") else None]
+def joined_values(values):
+    """Return a list of harvested values as one cell, joined with
+    LIST_SEPARATOR, or None for none. Raises ValueError for a value that
+    holds the separator, since the cell could not be split back."""
+    values = list(values or [])
+    for value in values:
+        if LIST_SEPARATOR.strip() in value:
+            raise ValueError(f"a harvested value holds {LIST_SEPARATOR.strip()!r}: {value[:80]!r}")
+    return LIST_SEPARATOR.join(values) or None
+
+
+def number_text(value):
+    """Write a harvested coordinate: Python's shortest exact text for the
+    number ("-125.134589", "48.0"). The data file keeps the number, not the
+    source's own text, so trailing zeros can differ from it ("52.0125" for
+    "52.01250"); on the 2026-10-20 harvest this text matched the source's
+    for 4,858 of 5,488 coordinates (dropping ".0" matched only 4,333)."""
+    return repr(float(value))
+
+
+def boxes_text(boxes):
+    """Return a record's harvested boxes as one cell, each "west W, east E,
+    south S, north N" (DataCite's order), or None for none."""
+    return joined_values(f"west {number_text(box['w'])}, east {number_text(box['e'])}, "
+                         f"south {number_text(box['s'])}, north {number_text(box['n'])}" for box in boxes or [])
+
+
+def points_text(points):
+    """Return a record's harvested points as one cell, each "lon X, lat Y"
+    (DataCite's order), or None for none."""
+    return joined_values(f"lon {number_text(point['lon'])}, lat {number_text(point['lat'])}"
+                         for point in points or [])
+
+
+def rights_text(licences):
+    """Return a record's harvested rightsList as one cell: each entry its
+    name and its URI in brackets, "name (uri)", or whichever of the two it
+    has; or None for none."""
+    entries = []
+    for entry in licences or []:
+        name, uri = entry["name"], entry["uri"]
+        entries.append(f"{name} ({uri})" if name and uri else (name or uri or ""))
+    return joined_values(entry for entry in entries if entry)
+
+
+def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type, publisher, places,
+                boxes, points, licences, record_id):
+    """Return one dataset's row: the 14 columns (see the top of this file),
+    from the values DATASET_SQL_COLUMNS reads. Text is written as stored,
+    never shortened."""
+    return [title, abstract, joined_values(subjects), "; ".join(creators or []), issued, source_name,
+            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None,
+            publisher, joined_values(places), boxes_text(boxes), points_text(points), rights_text(licences),
+            record_id]
 
 
 def datasets_search_line(data, request):
@@ -250,7 +340,7 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
     rows = [dataset_row(*row) for row in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
     header = [f"BCBN Datasets search results, exported {date}",
               datasets_search_line(data, request),
-              "Source: Lunaris dataset records, as harvested; each row links to the original catalogue",
+              DATASETS_SOURCE_LINE,
               R_LINE]
     name = file_name("datasets", [" ".join(request["words"])], date)
     return name, csv_text(header, DATASET_COLUMNS, rows)

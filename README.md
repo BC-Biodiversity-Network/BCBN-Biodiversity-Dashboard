@@ -1210,12 +1210,14 @@ a table to read into R. Four endpoints give them as CSV files
 (`backend/api/export.py`; the area one since the area search below). What
 comes from the sources goes in as it is, plus one number BCBN works out
 for the species lists: each species' record count, the number the list
-shows (Evan agreed on 2026-11-10 that the lists should have it). Nothing
-else BCBN works out (years, abstracts and so on) goes in.
+shows (Evan agreed on 2026-11-10 that the lists should have it). The
+Datasets file also has each record's own metadata as harvested from
+Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too). Nothing
+else BCBN or its models work out goes in.
 
 | Endpoint | Options | Columns |
 | --- | --- | --- |
-| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `creators`, `published`, `catalogue`, `doi`, `link` |
+| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `publisher`, `places`, `boxes`, `points`, `rights`, `lunaris_id` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
 | `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
@@ -1226,8 +1228,43 @@ else BCBN works out (years, abstracts and so on) goes in.
   `rank_card` and `cell_species` with no page limit), so a download always
   matches its list, leaves out the species `sensitive.py` hides (none for
   now), and gets the list's 400 or 404 answer for a bad request.
-- **Columns.** `title` and `creators` as harvested (creators joined with
-  `; `); `published` is the issued date as stored; `catalogue` the
+- **Columns.** `title`, `abstract`, `subjects`, `creators` and
+  `publisher` as harvested; `places` the record's own DataCite
+  `geoLocationPlace` names (not the places we looked up in GeoNames);
+  `boxes` and `points` its DataCite `geoLocationBox` (each `west W, east
+  E, south S, north N`, unchanged even when the edges are swapped) and
+  `geoLocationPoint` (each `lon X, lat Y`); `rights` its DataCite
+  `rightsList`, each entry `name (uri)` or whichever of the two it has
+  (some names are a whole licence in HTML; this is not the licence or
+  access we checked); `lunaris_id` the record's OAI identifier. Creators
+  are joined with `; `; every other list with ` | `, which no harvested
+  value holds (the code refuses a value that does, rather than write a
+  cell that cannot be split again; `;` would not do, as 248 records have a
+  place such as "British Columbia; Canada"). Text is never shortened: on
+  the 2026-11-10 data the longest abstract is 15,967 characters and the
+  longest cell (a subjects list) 21,851, under Excel's 32,767. "As
+  harvested" means as our 2026-10-20 harvest stored it: it took HTML tags
+  out of 762 abstracts and 14 titles and collapsed runs of spaces and line
+  breaks (1,103 abstracts, 54 titles, 38 subject lists), kept one
+  description per record as the abstract (1,684 records have two or more,
+  often an English and a French one), and stored coordinates as numbers,
+  so trailing zeros can differ from the source's text (`52.0125` for
+  `52.01250`; 4,858 of 5,488 coordinates match it exactly). Header line 3
+  of the Datasets file says so in short: `Source: Lunaris dataset records
+  from our harvest of 2026-10-20 (HTML tags removed from titles and
+  abstracts, extra spaces from titles, abstracts and subjects; one
+  description per record); rights are as the source gives them, not
+  checked by BCBN; each row links to the original catalogue`. The API's
+  data files do not store the harvest date, so it is written in
+  `backend/api/export.py` (`LUNARIS_HARVEST_DATE`), and a test checks it
+  against the harvest folder `export_lunaris_datasets.py` reads
+  (`DEFAULT_HARVEST`); change both when the datasets are rebuilt from a
+  new harvest. The source
+  records also have fields the data file does not keep (publication year,
+  resource type, contributors, affiliations, related items, translated
+  titles); there is no language field, only `xml:lang` on some texts.
+  The BC class, organisms, looked-up places, hand decisions and checked
+  licences are never exported. `published` is the issued date as stored; `catalogue` the
   catalogue name the Datasets page shows; `doi` the DOI when the record's
   identifier is one (from the `https://doi.org/` link), else empty, never
   another kind of id; `link` the link to the original catalogue the page
@@ -1263,7 +1300,8 @@ else BCBN works out (years, abstracts and so on) goes in.
   export date; how the list was made (the search words, filters, years,
   rank path or hexagon, and order used, and for species what `records`
   means); the sources (for datasets the
-  Lunaris records, for species the GBIF download DOI, the Catalogue of
+  Lunaris records, the harvest date and what the harvest changed, and that
+  rights are the source's own, not checked by BCBN; for species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
   `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a
   visitor typed are turned into spaces, so they never add a line. The BOM

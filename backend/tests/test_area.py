@@ -47,16 +47,16 @@ def box_of(params):
 
 
 def read_download(response):
-    """Return (the 4 header lines, column names, rows as dicts) of a
-    download, checking its BOM and that it is a CSV attachment."""
+    """Return (the 4 header lines' text, column names, rows as dicts) of a
+    download, checking its BOM, that it is a CSV attachment, and that each
+    header line is one quoted field (read back with the csv module)."""
     assert response.status_code == 200, response.text
     assert response.headers["content-type"] == "text/csv; charset=utf-8"
-    assert response.content.startswith(b"\xef\xbb\xbf# BCBN ")
-    stream = io.StringIO(response.content.decode("utf-8-sig"), newline="")
-    header = [stream.readline() for _ in range(4)]
-    reader = csv.reader(stream)
-    columns = next(reader)
-    return header, columns, [dict(zip(columns, row)) for row in reader]
+    assert response.content.startswith(b'\xef\xbb\xbf"# BCBN ')
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
+    assert [len(row) for row in rows[:4]] == [1, 1, 1, 1]
+    columns = rows[4]
+    return [row[0] for row in rows[:4]], columns, [dict(zip(columns, row)) for row in rows[5:]]
 
 
 # --- The answer ----------------------------------------------------------------------
@@ -167,14 +167,14 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
     response = client.get("/api/export/area", params={**BOTH, **ANIMALIA, "year_from": 2020, "offset": 1,
                                                       "limit": 1})
     header, columns, rows = read_download(response)
-    assert header[0] == f"# BCBN species list for an area, exported {export_date()}\r\n"
+    assert header[0] == f"# BCBN species list for an area, exported {export_date()}"
     count = len(box_cells(box_of(BOTH), 4))
     # The hexagons' size, never their resolution number.
     assert header[1] == (f"# List: species in the {count:,} hexagons of about 1,770 km² each that touch the box "
                          "west -131, south 39.5, east -124.5, north 49.5; only kingdom Animalia "
-                         "(kingdom Animalia); records from 2020 to 2021; sorted by most records first\r\n")
+                         "(kingdom Animalia); records from 2020 to 2021; sorted by most records first")
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
-    assert header[3] == "# To read in R: read.csv(file, skip = 4)\r\n"
+    assert header[3] == "# To read in R: read.csv(file, skip = 4)"
     assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "gbif_link"]
     # Paging options never cut the download.
     assert [row["specieskey"] for row in rows] == ["AAAA", "CCCC"]

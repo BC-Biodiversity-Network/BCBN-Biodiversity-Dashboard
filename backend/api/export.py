@@ -39,8 +39,10 @@ The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
 start, so Excel on Windows reads it as UTF-8 and shows accented letters
 correctly; standard CSV quoting (a value holding a comma, a quote mark or a
 line break is put in quotes, a quote mark inside written twice); lines
-ending in CR LF. After the BOM it starts with exactly 4 lines, each
-starting with "# ": what the file is and the export date (Vancouver time),
+ending in CR LF. After the BOM it starts with exactly 4 lines, each one
+CSV field in double quotes (a quote mark inside written twice) starting
+with "# ", so a spreadsheet such as Excel shows each line whole in column A
+rather than split at its commas: what the file is and the export date (Vancouver time),
 how the list was made (only the options used), the sources, and how to read
 it in R. Then the column names and the rows. Anything a visitor typed that
 goes into those 4 lines has its line breaks turned into spaces, so it can
@@ -139,13 +141,19 @@ def file_name(kind, parts, date):
 def csv_text(header_lines, columns, rows):
     """Return the whole file: the 4 header lines, each starting with "# ",
     the column names, and the rows, with standard CSV quoting. None is
-    written as an empty value."""
+    written as an empty value. Each header line is one quoted CSV field,
+    so a spreadsheet shows the whole sentence in its first column instead
+    of cutting it at every comma."""
     lines = [one_line(line) for line in header_lines]
     if len(lines) != HEADER_LINE_COUNT:
         raise ValueError(f"a download has exactly {HEADER_LINE_COUNT} header lines; got {len(lines)}")
     buffer = io.StringIO(newline="")
+    # The header lines: always in double quotes, any quote mark inside
+    # written twice, by the csv module's own quoting. one_line has already
+    # taken out every line break, so each stays one line of the file.
+    header_writer = csv.writer(buffer, lineterminator="\r\n", quoting=csv.QUOTE_ALL)
     for line in lines:
-        buffer.write(f"# {line}\r\n")
+        header_writer.writerow([f"# {line}"])
     writer = csv.writer(buffer, lineterminator="\r\n")
     writer.writerow(columns)
     for row in rows:

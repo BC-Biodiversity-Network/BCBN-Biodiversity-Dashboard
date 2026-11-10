@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 import api.cells
 import api.ranks
 from api.export import (BOM, DATASET_COLUMNS, DATASETS_SOURCE_LINE, LIST_SEPARATOR, LUNARIS_HARVEST_DATE,
-                        download_date, export_date, file_name, joined_values, km2_text, number_text, one_line)
+                        download_date, export_date, file_name, joined_values, km2_text, one_line)
 from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.main import create_app
 from api.settings import Settings
@@ -62,10 +62,7 @@ TRICKY_SQL = ("'Bald Eagle, \"nest\" survey à l''île' || chr(10) || "
 # whole: nothing is ever shortened.
 TRICKY_ABSTRACT = ('Nests, "active" and old,\r\non the coast; Haida Gwaii (été)\nsecond paragraph. '
                    + "x" * 40000 + " end.")
-TRICKY_SUBJECTS = ['Birds, "raptors"', "Ospreys; eagles", "Pygargue à tête blanche"]
-TRICKY_PLACES = ["British Columbia; Canada", 'Haida Gwaii, "Xaayda Gwaay"']
-TRICKY_LICENCE = '<p>Open Government Licence, "BC"</p>'
-EAGLE_ID = "oai:catalogue.data.gov.bc.ca:eagle-nests"
+TRICKY_SUBJECTS = ['Birds, "raptors"', "Ospreys; eagles", "Pygargue à tête blanche", "<b>Raptors</b>"]
 
 
 def sql_text(text):
@@ -89,15 +86,12 @@ def sql_list(values):
 
 def tricky_datasets_sql():
     """Return the test datasets with the eagle-nests record's title,
-    abstract, subjects, places and licence name made awkward (see
-    TRICKY_TITLE and TRICKY_ABSTRACT)."""
+    abstract and subjects made awkward (see TRICKY_TITLE, TRICKY_ABSTRACT
+    and TRICKY_SUBJECTS)."""
     sql = DATASETS_SQL.replace("'Bald Eagle nest survey'", TRICKY_SQL)
     replacements = [
         ("'Nest locations of Haliaeetus leucocephalus on the coast.', ['Birds', 'Raptors']",
          f"{sql_text(TRICKY_ABSTRACT)}, {sql_list(TRICKY_SUBJECTS)}"),
-        ("[]::VARCHAR[] AS places",
-         f"CASE WHEN id LIKE '%eagle-nests' THEN {sql_list(TRICKY_PLACES)} ELSE []::VARCHAR[] END AS places"),
-        ("'Open Government Licence - British Columbia'", sql_text(TRICKY_LICENCE)),
     ]
     for old, new in replacements:
         assert sql.count(old) == 1, old
@@ -161,29 +155,20 @@ def test_the_datasets_file(client):
     assert header[1] == '# Search: words "eagle"; BC data only; sorted by relevance'
     assert header[2] == ("# Source: Lunaris dataset records from our harvest of 2026-10-20 (HTML tags "
                          "removed from titles and abstracts, extra spaces from titles, abstracts and subjects; "
-                         "one description per record); rights are as the source gives them, not checked by "
-                         "BCBN; each row links to the original catalogue")
+                         "one description per record); each row links to the original catalogue")
+    assert "rights" not in header[2]
     assert len(header) == 4
-    assert columns == ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
-                       "publisher", "places", "boxes", "points", "rights", "lunaris_id"]
+    assert columns == ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link"]
     assert rows[0] == {"title": "Bald Eagle nest survey",
                        "abstract": "Nest locations of Haliaeetus leucocephalus on the coast.",
                        "subjects": "Birds | Raptors",
                        "creators": "SBOT Requests;  Blackburn, Ian ; SBOT Requests",
                        "published": "2020-05-01", "catalogue": "BC Data Catalogue", "doi": "",
-                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests",
-                       "publisher": "A publisher", "places": "",
-                       "boxes": "west -139.5, east -113.5, south 48.0, north 60.0", "points": "",
-                       "rights": ("Open Government Licence - British Columbia "
-                                  "(https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)"
-                                  " | info:eu-repo/semantics/openAccess"),
-                       "lunaris_id": EAGLE_ID}
+                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests"}
     salmon = next(row for row in rows if row["title"].startswith("Salmon"))
-    assert (salmon["doi"], salmon["link"]) == ("10.1/salmon", "https://doi.org/10.1/salmon")
-    assert (salmon["points"], salmon["boxes"], salmon["subjects"]) == ("lon -128.1, lat 51.6", "", "")
-    assert salmon["rights"] == "info:eu-repo/semantics/restrictedAccess"
+    assert (salmon["doi"], salmon["link"], salmon["subjects"]) == ("10.1/salmon", "https://doi.org/10.1/salmon", "")
     plots = next(row for row in rows if row["title"] == "Forest plots")
-    assert (plots["published"], plots["creators"], plots["doi"], plots["rights"]) == ("", "", "", "")
+    assert (plots["published"], plots["creators"], plots["doi"]) == ("", "", "")
     assert response.headers["content-disposition"] == (
         f'attachment; filename="bcbn_datasets_eagle_{export_date()}.csv"')
 
@@ -468,26 +453,24 @@ TRICKY_CELLS = {
     "title": TRICKY_TITLE,
     "abstract": TRICKY_ABSTRACT,
     "subjects": " | ".join(TRICKY_SUBJECTS),
-    "places": " | ".join(TRICKY_PLACES),
-    "rights": (f"{TRICKY_LICENCE} (https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)"
-               " | info:eu-repo/semantics/openAccess"),
-    "lunaris_id": EAGLE_ID,
+    "creators": "SBOT Requests;  Blackburn, Ian ; SBOT Requests",
 }
 
 
-def test_the_new_dataset_columns_follow_title_and_keep_the_old_ones_in_order(client):
-    """abstract and subjects come right after title; the 6 columns the file
-    always had keep their order; the record's other harvested fields follow.
-    None of our own fields (class, organisms, looked-up places, checked
-    licences) is a column."""
+def test_the_datasets_file_has_exactly_the_8_columns_chosen(client):
+    """Exactly title, abstract, subjects, creators, published, catalogue,
+    doi and link, in that order (Lucia, 2026-11-10): abstract and subjects
+    right after title, the 6 columns the file always had in their order, and
+    nothing else, so none of the record's other fields (publisher, places,
+    boxes, points, rights, its id) and none of our own (class, organisms,
+    looked-up places, checked licences) is a column."""
     _, header, columns, _ = download(client, "/api/export/datasets")
-    assert columns[:3] == ["title", "abstract", "subjects"]
-    old = ["title", "creators", "published", "catalogue", "doi", "link"]
-    assert [column for column in columns if column in old] == old
-    assert columns[8:] == ["publisher", "places", "boxes", "points", "rights", "lunaris_id"]
-    for ours in ("final_class", "frontend_group", "organisms", "looked_up_places", "location_type", "mappable",
-                 "access", "licences", "copy_count"):
-        assert ours not in columns
+    assert columns == DATASET_COLUMNS == ["title", "abstract", "subjects", "creators", "published", "catalogue",
+                                          "doi", "link"]
+    for left_out in ("publisher", "places", "boxes", "points", "rights", "lunaris_id", "final_class",
+                     "frontend_group", "organisms", "looked_up_places", "location_type", "mappable", "access",
+                     "licences", "copy_count"):
+        assert left_out not in columns
     assert len(header) == 4
 
 
@@ -499,7 +482,7 @@ def test_the_tricky_record_reads_back_unchanged_with_the_csv_module(tmp_path):
     content = tricky_download(tmp_path)
     header, columns, rows = read_back(content.decode("utf-8-sig"))
     assert len(header) == 4
-    eagle = next(row for row in rows if row["lunaris_id"] == EAGLE_ID)
+    eagle = next(row for row in rows if row["title"] == TRICKY_TITLE)
     for column, expected in TRICKY_CELLS.items():
         assert eagle[column] == expected, column
     assert len(eagle["abstract"]) > 32767
@@ -514,15 +497,15 @@ def test_the_tricky_record_reads_back_unchanged_with_pandas(tmp_path):
                             keep_default_na=False)
     assert list(frame.columns) == DATASET_COLUMNS
     assert len(frame) == 3
-    eagle = frame[frame["lunaris_id"] == EAGLE_ID].iloc[0]
+    eagle = frame[frame["title"] == TRICKY_TITLE].iloc[0]
     for column, expected in TRICKY_CELLS.items():
         assert eagle[column] == expected, column
     assert "\r\n" in eagle["abstract"] and eagle["abstract"].count("\n") == 2
 
 
 def test_lists_are_joined_so_they_can_be_split_again():
-    """A list cell is joined with " | ", and a value holding "|" is refused
-    rather than written as a cell that cannot be split back."""
+    """The subjects cell is joined with " | ", and a value holding "|" is
+    refused rather than written as a cell that cannot be split back."""
     assert LIST_SEPARATOR == " | "
     assert joined_values(["a, b", "c; d"]) == "a, b | c; d"
     assert joined_values([]) is None and joined_values(None) is None
@@ -531,12 +514,6 @@ def test_lists_are_joined_so_they_can_be_split_again():
     with pytest.raises(ValueError):
         joined_values(["a|b"])
 
-
-def test_coordinates_are_written_as_harvested_numbers():
-    """A coordinate is Python's shortest exact text for it, the text most
-    sources use too (see number_text)."""
-    assert [number_text(value) for value in (-125.134589, 48.0, -139.5, 60, 0.0001)] == \
-        ["-125.134589", "48.0", "-139.5", "60.0", "0.0001"]
 
 
 def test_filters_and_sort_change_the_rows(client):

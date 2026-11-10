@@ -1248,12 +1248,17 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   `bcbn_species_Chordata_2000-2020_2026-11-09.csv` or
   `bcbn_species_hexagon_872800b30ffffff_2026-11-09.csv` (letters, digits,
   `-` and `_` only; the date is the export date in Vancouver). It always
-  starts (after the BOM) with exactly 4 lines starting with `# `: what the file is and the
+  starts (after the BOM) with exactly 4 lines, each one CSV field in double
+  quotes starting with `# ` (a quote mark inside written twice, by Python's
+  `csv` module), so a spreadsheet such as Excel shows each line whole in
+  column A instead of splitting it at its commas, for example
+  `"# BCBN species list for hexagon 8712d2a94ffffff, exported 2026-11-09"`.
+  The 4 lines are: what the file is and the
   export date; how the list was made (the search words, filters, years,
   rank path or hexagon, and order used); the sources (for datasets the
   Lunaris records, for species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
-  `# To read in R: read.csv(file, skip = 4)`. Line breaks in anything a
+  `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a
   visitor typed are turned into spaces, so they never add a line. The BOM
   sits at the start of the first of those lines, which `skip = 4` skips,
   so R's `read.csv(file, skip = 4)` and Python (pandas

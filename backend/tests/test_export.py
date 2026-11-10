@@ -57,29 +57,29 @@ TRICKY_SQL = ("'Bald Eagle, \"nest\" survey à l''île' || chr(10) || "
 def download(client, path, **params):
     """Ask for a download and return (response, header lines, column names,
     rows as dicts), checking it worked, is a CSV attachment and starts with
-    one byte order mark. The file is read as plain UTF-8, as a reader that
-    knows nothing of the BOM would, so the BOM stays at the start of the
-    first header line; it is taken off that line before it is returned."""
+    one byte order mark, then the first header line in quotes. The header
+    lines are returned as their text, quotes taken off (see read_back)."""
     response = client.get(path, params=params)
     assert response.status_code == 200, response.text
     assert response.headers["content-type"] == "text/csv; charset=utf-8"
     assert response.headers["content-disposition"].startswith('attachment; filename="bcbn_')
-    assert response.content.startswith(BOM_BYTES + b"# BCBN ")
-    header, columns, rows = read_back(response.content.decode("utf-8"))
-    assert header[0].startswith(BOM + "# ")
-    return response, [header[0][len(BOM):], *header[1:]], columns, rows
+    assert response.content.startswith(BOM_BYTES + b'"# BCBN ')
+    header, columns, rows = read_back(response.content.decode("utf-8-sig"))
+    return response, header, columns, rows
 
 
 def read_back(text):
-    """Read a downloaded file the way R's read.csv(file, skip = 4) does:
-    the first 4 lines skipped (the BOM with the first of them), then CSV
-    with a row of column names. Returns (the 4 skipped lines, the column
-    names, the rows as dicts)."""
-    stream = io.StringIO(text, newline="")
-    header = [stream.readline() for _ in range(4)]
-    reader = csv.reader(stream)
-    columns = next(reader)
-    return header, columns, [dict(zip(columns, row)) for row in reader]
+    """Read a downloaded file (its text, BOM taken off) with the csv module,
+    as a spreadsheet does: the first 4 rows must each be one field starting
+    with "# " (the header lines), the fifth the column names. Returns (the
+    4 header lines' text, the column names, the rows as dicts)."""
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    header = rows[:4]
+    assert [len(row) for row in header] == [1, 1, 1, 1], header
+    assert all(row[0].startswith("# ") for row in header)
+    columns = rows[4]
+    assert not columns[0].startswith("#")
+    return [row[0] for row in header], columns, [dict(zip(columns, row)) for row in rows[5:]]
 
 
 def keys(rows):
@@ -94,19 +94,22 @@ def test_exactly_four_header_lines_then_the_columns(client):
     for path, params in (("/api/export/datasets", {}), ("/api/export/ranks/kingdom", ANIMALIA),
                          (f"/api/export/hexes/{CELL_A}", {})):
         response, header, columns, _ = download(client, path, **params)
-        assert all(line.startswith("# ") and line.endswith("\r\n") for line in header)
-        assert header[3] == "# To read in R: read.csv(file, skip = 4)\r\n"
-        # The fifth line is the column names, not a fifth "#" line.
-        assert not response.content.decode("utf-8").split("\r\n")[4].startswith("#")
+        assert all(line.startswith("# ") for line in header)
+        assert header[3] == "# To read in R: read.csv(file, skip = 4)"
+        # Each header line is one line of the file, in double quotes, and
+        # the fifth line is the column names, not a fifth "#" line.
+        lines = response.content.decode("utf-8-sig").split("\r\n")
+        assert all(line.startswith('"# ') and line.endswith('"') for line in lines[:4])
+        assert not lines[4].startswith(('#', '"#'))
         assert columns[0] in ("title", "specieskey")
 
 
 def test_the_datasets_file(client):
     response, header, columns, rows = download(client, "/api/export/datasets", q="eagle")
-    assert header[0] == f"# BCBN Datasets search results, exported {export_date()}\r\n"
-    assert header[1] == '# Search: words "eagle"; BC data only; sorted by relevance\r\n'
+    assert header[0] == f"# BCBN Datasets search results, exported {export_date()}"
+    assert header[1] == '# Search: words "eagle"; BC data only; sorted by relevance'
     assert header[2] == ("# Source: Lunaris dataset records, as harvested; each row links to the "
-                         "original catalogue\r\n")
+                         "original catalogue")
     assert columns == ["title", "creators", "published", "catalogue", "doi", "link"]
     assert rows[0] == {"title": "Bald Eagle nest survey",
                        "creators": "SBOT Requests;  Blackburn, Ian ; SBOT Requests",
@@ -123,13 +126,13 @@ def test_the_datasets_file(client):
 def test_the_rank_file(client):
     response, header, columns, rows = download(client, "/api/export/ranks/phylum", kingdom="Animalia",
                                                phylum="Chordata", year_from=2019, year_to=2020)
-    assert header[0] == f"# BCBN species list for phylum Chordata, exported {export_date()}\r\n"
+    assert header[0] == f"# BCBN species list for phylum Chordata, exported {export_date()}"
     assert header[1] == ("# List: species of phylum Chordata (kingdom Animalia > phylum Chordata); "
-                         "records from 2019 to 2020; sorted by most records first\r\n")
+                         "records from 2019 to 2020; sorted by most records first")
     assert header[2] == ("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test; names: "
                          "Catalogue of Life COL26.6 XR (ChecklistBank 315557); English names and BC "
                          "status: BC Species and Ecosystems Explorer (BCSEE), provincial export of "
-                         "2026-05-05, accessed 2026-09-26\r\n")
+                         "2026-05-05, accessed 2026-09-26")
     assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status"]
     assert rows == [{"specieskey": "AAAA", "scientific_name": "Turdus migratorius",
                      "english_name": "American Robin", "bcsee_status": "Yellow"}]
@@ -139,11 +142,11 @@ def test_the_rank_file(client):
 
 def test_the_hexagon_file(client):
     response, header, columns, rows = download(client, f"/api/export/hexes/{CELL_A}")
-    assert header[0] == f"# BCBN species list for hexagon {CELL_A}, exported {export_date()}\r\n"
+    assert header[0] == f"# BCBN species list for hexagon {CELL_A}, exported {export_date()}"
     # The hexagon's own size, never its resolution number.
     size = km2_text(h3.cell_area(CELL_A, "km^2"))
     assert header[1] == (f"# List: species in H3 hexagon {CELL_A}, a hexagon of about {size}; "
-                         "sorted by most records first\r\n")
+                         "sorted by most records first")
     assert size == "5.1 km²"
     assert "resolution" not in "".join(header)
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
@@ -190,7 +193,7 @@ def tricky_download(tmp_path):
 
 def test_a_value_with_commas_quotes_a_line_break_and_accents_round_trips(tmp_path):
     content = tricky_download(tmp_path)
-    _, columns, rows = read_back(content.decode("utf-8"))
+    _, columns, rows = read_back(content.decode("utf-8-sig"))
     assert columns == ["title", "creators", "published", "catalogue", "doi", "link"]
     assert rows[0]["title"] == TRICKY_TITLE
     assert rows[0]["creators"] == "SBOT Requests;  Blackburn, Ian ; SBOT Requests"
@@ -205,12 +208,59 @@ def test_every_file_starts_with_one_bom_before_the_four_header_lines(client):
         content = client.get(path, params=params).content
         assert content.startswith(BOM_BYTES) and not content.startswith(BOM_BYTES * 2)
         # Read as UTF-8 with a BOM (as Excel does), the text starts with the
-        # first "# " line, and the BOM is nowhere else.
+        # first quoted "# " line, and the BOM is nowhere else.
         text = content.decode("utf-8-sig")
         assert BOM not in text
         lines = text.split("\r\n")
-        assert [line[:2] for line in lines[:5]] == ["# ", "# ", "# ", "# ", lines[4][:2]]
-        assert not lines[4].startswith("#")
+        assert [line[:3] for line in lines[:4]] == ['"# '] * 4
+        assert not lines[4].startswith(('#', '"#'))
+
+
+# One download of every kind, each with rows, and header lines with commas
+# (the export date, a hexagon's size, a box's edges) and, for the datasets,
+# quote marks (the search words).
+EVERY_EXPORT = [
+    ("/api/export/datasets", {"q": "eagle"}),
+    ("/api/export/ranks/kingdom", ANIMALIA),
+    (f"/api/export/hexes/{CELL_A}", {}),
+    ("/api/export/area", {"west": -131.0, "south": 39.5, "east": -124.5, "north": 49.5, "res": 4}),
+]
+
+
+@pytest.mark.parametrize("path, params", EVERY_EXPORT)
+def test_each_header_line_is_one_quoted_field(client, path, params):
+    """Read back with the csv module, as a spreadsheet does, each of the
+    first 4 rows is one field starting with "# " (so Excel shows the line
+    whole in column A, commas and all), and row 5 is the column names. On
+    the line itself the field is in double quotes, any quote mark inside
+    written twice."""
+    content = client.get(path, params=params).content
+    assert content.startswith(BOM_BYTES + b'"# BCBN ')
+    text = content.decode("utf-8-sig")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    assert [len(row) for row in rows[:4]] == [1, 1, 1, 1]
+    assert all(row[0].startswith("# ") for row in rows[:4])
+    assert rows[3] == ["# To read in R: read.csv(file, skip = 4)"]
+    assert rows[4][0] in ("title", "specieskey")
+    # The text holds commas, and each line is the csv module's quoting of it.
+    assert any("," in row[0] for row in rows[:4])
+    lines = text.split("\r\n")
+    for row, line in zip(rows[:4], lines[:4]):
+        assert line == '"' + row[0].replace('"', '""') + '"'
+
+
+@pytest.mark.parametrize("path, params", EVERY_EXPORT)
+def test_pandas_skipping_four_lines_reads_the_same_table(client, path, params):
+    """pandas.read_csv(file, skiprows=4) gives the column names and the rows
+    the csv module reads after the 4 header lines, unchanged by the quoting
+    of the header lines."""
+    content = client.get(path, params=params).content
+    _, columns, rows = read_back(content.decode("utf-8-sig"))
+    frame = pandas.read_csv(io.BytesIO(content), skiprows=4, encoding="utf-8-sig", dtype=str,
+                            keep_default_na=False)
+    assert list(frame.columns) == columns
+    assert frame.to_dict("records") == rows
+    assert len(rows) > 0
 
 
 def test_pandas_reads_the_file_skipping_four_lines(tmp_path):

@@ -14,6 +14,7 @@ Every reserve here is made up. The test data in conftest.py has hexagon A
     90003 "zeta point 3"     touches hexagon B at res 7 and res 4 only
 So hexagon B at res 6 and 5 touches no reserve."""
 
+import csv
 import io
 import json
 import logging
@@ -119,15 +120,19 @@ def names_for(client, path, **params):
 
 
 def header_lines(client, path, **params):
-    """Ask for a download and return its 4 header lines (BOM taken off),
-    checking the file has exactly 4 "# " lines before the column names."""
+    """Ask for a download and return its 4 header lines' text (BOM taken
+    off), checking with the csv module that the file has exactly 4 rows of
+    one "# " field each (one line of the file each) before the column names."""
     response = client.get(path, params=params)
     assert response.status_code == 200, response.text
-    lines = io.StringIO(response.content.decode("utf-8-sig"), newline="").readlines()
-    header = [line for line in lines if line.startswith("# ")]
-    assert len(header) == 4 and lines[:4] == header
-    assert lines[4].startswith("specieskey,")
-    return [line.rstrip("\r\n") for line in header]
+    text = response.content.decode("utf-8-sig")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    header = [row[0] for row in rows[:4]]
+    assert [len(row) for row in rows[:4]] == [1, 1, 1, 1]
+    assert all(line.startswith("# ") for line in header)
+    assert sum(1 for row in rows if row and row[0].startswith("# ")) == 4
+    assert text.split("\r\n")[4].startswith("specieskey,")
+    return header
 
 
 # --- The layer ---------------------------------------------------------------------

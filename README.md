@@ -1562,14 +1562,22 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 
 | After | The address entry | Back then |
 | --- | --- | --- |
-| Drawing the first box | added (marked `AREA_FROM_DRAW`; closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
+| Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
 | Drawing another box | replaced | returns to before the first box |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
 | Opening a species from the area's list | added | returns to the area panel; the card also offers "Back to this area's species" |
-| "Clear area" on the entry the first box added | acts like Back | (it was Back) |
-| "Clear area" anywhere else (a shared link, or a hexagon's panel open on top) | replaced, keeping a hexagon's panel | goes to the entry before, which may still hold the area (for example the area panel under the hexagon's) |
+| "Clear area" right after drawing (nothing opened since) | goes back to the entry from before the box | returns to what was there before that |
+| "Clear area" with a hexagon's panel or a rank opened over the area | goes back past every entry holding the area, then adds the address without it (a hexagon's panel stays open) | the same as the hexagon panel's x: the map as it was before the box, never the cleared area |
+| "Clear area" on a shared link's area | the link's entry, and any entry added since, become one entry without the area (a hexagon's panel stays open) | leaves the page, as from the link |
+
+"Clear area" takes the area out of the history, not only out of the
+address: every entry that holds an area records how far it is from the
+entry before the area began (`withAreaHistory` and `clearAreaMove` in
+`frontend/src/route.js`), so neither a panel's x nor Back can bring a
+cleared area back. Forward cannot either once a hexagon's panel or a rank
+was open; right after drawing, Forward can redo the box, as for any Back.
 
 **Download CSV.** Four lists have a "Download CSV" button (the area panel's,
 described above, as well as these three)

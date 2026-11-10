@@ -107,11 +107,11 @@ describe('the page', () => {
     render(<App search="" navigate={navigate} />)
     await act(async () => {})
     act(() => screen.getByRole('button', { name: 'Pick the robin' }).click())
-    expect(navigate).toHaveBeenLastCalledWith('?species=59PMB', { replace: true })
+    expect(navigate).toHaveBeenLastCalledWith('?species=59PMB', { replace: true, state: null })
     act(() => screen.getByRole('button', { name: 'Open its datasets' }).click())
-    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&species=59PMB')
+    expect(navigate).toHaveBeenLastCalledWith('?view=datasets&species=59PMB', { replace: false, state: null })
     act(() => screen.getByRole('button', { name: 'Close the card' }).click())
-    expect(navigate).toHaveBeenLastCalledWith('?', { replace: true })
+    expect(navigate).toHaveBeenLastCalledWith('?', { replace: true, state: null })
   })
 
   it('opens the card the address names, with its name once the card arrives, and follows the back button', async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 // Which page is shown, and the Datasets page's state, kept in the address
 // bar's query string so a link can be shared and the back button works.
@@ -79,14 +79,120 @@ export function readCell(search) {
 // App.jsx).
 export const PANEL_FROM_CLICK = { panelFromClick: true }
 
-// The history state of an address entry added by drawing the first box, so
-// "Clear area" knows it can go back instead of leaving a dead entry.
-export const AREA_FROM_DRAW = { areaFromDraw: true }
-
 // Whether a query string is the plain species map: no species, rank,
 // hexagon or area open.
 export function isPlainMap(search) {
   return !readSpeciesKey(search) && !readRank(search) && !readCell(search) && !readArea(search)
+}
+
+// Whether two query strings ask for the same thing, whatever the order of
+// their parameters and with or without the "?" ('' and '?' are the same).
+export function sameAddress(a, b) {
+  // A query string's parameters in name order, as text.
+  const sorted = (search) => {
+    const params = new URLSearchParams(search)
+    params.sort()
+    return params.toString()
+  }
+  return sorted(a) === sorted(b)
+}
+
+// A query string with its hexagon (cell and the cell_ list options) taken
+// out, everything else kept.
+function withoutCell(search) {
+  const params = new URLSearchParams(search)
+  for (const name of ['cell', `${CELL_LIST}q`, `${CELL_LIST}sort`, `${CELL_LIST}status`, `${CELL_LIST}page`]) {
+    params.delete(name)
+  }
+  return params.toString()
+}
+
+// The area's place in the history. Every address entry that holds an area
+// keeps it in its history state, so "Clear area" can take the area out of
+// the history altogether (see clearAreaMove), and no earlier entry is left
+// to bring it back when a panel's x or the back button returns to it:
+//   areaDepth   how many entries this one comes after the first entry that
+//               held the area (0 for that first entry);
+//   areaBefore  the address of the entry just before that first one, when
+//               the area was drawn in this visit; left out when the area
+//               came with the page (a shared link), as the entry before it
+//               then belongs to another page or site.
+const AREA_HISTORY_KEYS = ['areaDepth', 'areaBefore']
+
+// A history state without the area's place in it: null when nothing else is
+// left.
+function withoutAreaHistory(state) {
+  if (!state) {
+    return null
+  }
+  const rest = { ...state }
+  for (const key of AREA_HISTORY_KEYS) {
+    delete rest[key]
+  }
+  return Object.keys(rest).length > 0 ? rest : null
+}
+
+// The history state to give a new or replaced address entry (target), from
+// the state asked for (state) and the current entry (currentSearch and
+// currentState): the state asked for, with the area's place in the history
+// (see AREA_HISTORY_KEYS) when target holds an area, else without it.
+//   - The first entry with an area, added after an entry without one (a box
+//     drawn): depth 0, and the entry before it is the current one.
+//   - A replaced entry keeps the current entry's place; a new entry comes
+//     one further along.
+//   - An entry holding an area with no place recorded came with the page:
+//     depth 0, with nothing before it to go back to.
+export function withAreaHistory(state, { target, replace, currentSearch, currentState }) {
+  const own = withoutAreaHistory(state)
+  if (!readArea(target)) {
+    return own
+  }
+  let place
+  if (!readArea(currentSearch)) {
+    place = replace ? { areaDepth: 0 } : { areaDepth: 0, areaBefore: currentSearch }
+  } else {
+    const depth = currentState?.areaDepth ?? 0
+    place = { areaDepth: replace ? depth : depth + 1 }
+    if (currentState?.areaBefore !== undefined) {
+      place.areaBefore = currentState.areaBefore
+    }
+  }
+  return { ...own, ...place }
+}
+
+// How "Clear area" moves through the history, so that no entry is left
+// holding the area: it goes back past every entry that holds it, then shows
+// target (the current address without the area) there. Returns { back,
+// search, replace, state } for navigate (see useLocationSearch):
+//   - area drawn in this visit, and target is the address from before it:
+//     only go back to that entry (search null), as if the area was never
+//     drawn;
+//   - area drawn in this visit, target different (a hexagon's panel or a
+//     rank opened since): go back to the entry before the area, then add
+//     target as a new entry after it. Its state marks it as a hexagon
+//     click's entry when the entry before is the same map without the
+//     hexagon (so the panel's x goes back to it), or as a rank's entry
+//     opened from there when the current entry was one;
+//   - area that came with the page: go back to the first entry holding it
+//     and put target in its place (in place, with no going back, when that
+//     is the current entry, keeping the entry's other marks).
+// currentState is the current entry's history state.
+export function clearAreaMove(target, currentState) {
+  const depth = currentState?.areaDepth ?? 0
+  const before = currentState?.areaBefore
+  if (before === undefined) {
+    return { back: depth, search: target, replace: true, state: depth === 0 ? withoutAreaHistory(currentState) : null }
+  }
+  if (sameAddress(before, target)) {
+    return { back: depth + 1, search: null, replace: false, state: null }
+  }
+  let state = null
+  if (readCell(target) && sameAddress(before, withoutCell(target))) {
+    state = PANEL_FROM_CLICK
+  } else if (readRank(target) && !readCell(target) && currentState?.rankOpenedFrom !== undefined) {
+    state = { rankOpenedFrom: before }
+  }
+  return { back: depth + 1, search: target, replace: false, state }
 }
 
 // The resolutions an area can be drawn at (those of the maps).
@@ -395,20 +501,18 @@ export function speciesDatasetsSearch(key) {
 // navigate(newSearch) puts a new entry in the browser history (so back
 // returns to the old one), or replaces the current one with { replace: true }.
 // state is kept with the entry (window.history.state while it is the current
-// one; null unless given). The back and forward buttons update search too.
+// one; null unless given). With { back: n }, it first goes back n entries
+// (as pressing Back n times) and then adds or replaces the entry there; a new
+// entry drops the entries that were ahead of it, so Forward cannot return to
+// them. newSearch null with back only goes back. The back and forward buttons
+// update search too.
 export function useLocationSearch() {
   const [search, setSearch] = useState(() => window.location.search)
+  // The entry to add or replace once going back has finished, or null.
+  const pending = useRef(null)
 
-  useEffect(() => {
-    // Called when the back or forward button changes the address.
-    function onPopState() {
-      setSearch(window.location.search)
-    }
-    window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
-  }, [])
-
-  const navigate = useCallback((newSearch, { replace = false, state = null } = {}) => {
+  // Adds or replaces the history entry for newSearch, with state, and shows it.
+  const write = useCallback((newSearch, replace, state) => {
     const url = `${window.location.pathname}${newSearch === '?' ? '' : newSearch}`
     if (replace) {
       window.history.replaceState(state, '', url)
@@ -417,6 +521,33 @@ export function useLocationSearch() {
     }
     setSearch(window.location.search)
   }, [])
+
+  useEffect(() => {
+    // Called when the address changes by going back or forward: the back
+    // and forward buttons, or navigate's own going back, after which the
+    // entry it asked for is written.
+    function onPopState() {
+      const move = pending.current
+      pending.current = null
+      if (move) {
+        write(move.newSearch, move.replace, move.state)
+      } else {
+        setSearch(window.location.search)
+      }
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [write])
+
+  const navigate = useCallback((newSearch, { replace = false, state = null, back = 0 } = {}) => {
+    if (back > 0) {
+      // Going back is finished only when the browser says so (popstate).
+      pending.current = newSearch === null ? null : { newSearch, replace, state }
+      window.history.go(-back)
+    } else if (newSearch !== null) {
+      write(newSearch, replace, state)
+    }
+  }, [write])
 
   return [search, navigate]
 }

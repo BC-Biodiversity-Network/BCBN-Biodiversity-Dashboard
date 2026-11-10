@@ -7,6 +7,8 @@ and Evan at the November 4, 2026 meeting):
     GET /api/export/datasets      the Datasets search results
     GET /api/export/ranks/{rank}  the species list of a rank card
     GET /api/export/hexes/{cell}  the species list of a hexagon's panel
+    GET /api/export/area          the species list of the hexagons under a box
+                                  (area.py)
 
 Each takes the same options as its list (minus paging) and gives every row
 that passes them, in the order the list shows. The rows come from the very
@@ -30,6 +32,8 @@ anything else BCBN worked out.
     Hexagon species list (5 columns): the same 4 and gbif_link, the GBIF
         search the hexagon panel links to for that species, hexagon and
         years (gbif_links.py).
+    Area species list (5 columns): the same 5, gbif_link being the GBIF
+        search for that species inside the box (area.py).
 
 The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
 start, so Excel on Windows reads it as UTF-8 and shows accented letters
@@ -53,6 +57,7 @@ import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from api.area import area_species
 from api.cells import cards_gbif_keys, cell_species
 from api.datasets import dataset_request, ordered_datasets
 from api.gbif_links import gbif_cell_search_url
@@ -314,5 +319,37 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species_hexagon",
                      [answer["cell"], answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
+                     date)
+    return name, csv_text(header, HEXAGON_COLUMNS, rows)
+
+
+def degrees(value):
+    """Write a box edge for a header line: up to six decimals, no trailing
+    zeros ("-120.6", "50")."""
+    return format(value, ".6f").rstrip("0").rstrip(".")
+
+
+def export_area(data, date, west, south, east, north, res, q=None, statuses=None, sort=None,
+                year_from=None, year_to=None, rank=None, rank_given=None):
+    """Return (file name, CSV text) of every species in the hexagons under a
+    box for these options, in the list's order, each with its GBIF search
+    inside the box for the years counted. The list is the area search's own
+    (area_species with no page limit), so it raises what that raises."""
+    answer = area_species(data, west, south, east, north, res, year_from, year_to, q, 0, None, rank,
+                          rank_given, statuses, sort)
+    rows = [species_row(result) + [result["gbif_link"]] for result in answer["results"]]
+    box = answer["box"]
+    count = answer["hexagon_count"]
+    parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} at resolution "
+             f"{answer['res']} that touch the box west {degrees(box['west'])}, south {degrees(box['south'])}, "
+             f"east {degrees(box['east'])}, north {degrees(box['north'])}"]
+    if answer["rank"]:
+        label = answer["rank"]
+        parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
+    parts += species_options_text(answer)
+    header = [f"BCBN species list for an area (resolution {answer['res']}), exported {date}",
+              "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
+    name = file_name("species_area",
+                     [str(answer["res"]), answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
                      date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)

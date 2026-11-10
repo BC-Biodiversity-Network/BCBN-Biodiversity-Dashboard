@@ -582,9 +582,9 @@ running them from anywhere else quietly writes to the wrong place.
 | `backend/pipeline/gbif/legacy/` | `download_bc_raw.py` (Layer 1), which copied BC's bounding box out of GBIF's S3 snapshot. Replaced by `request_gbif_download.py` and no longer used; kept until the Darwin Core Archive path has fully replaced it. |
 | `backend/pipeline/bcsee/` | The BC Species and Ecosystems Explorer (BCSEE). `pull_bcsee.py` downloads the province's "Summary Export All" copy of the BCSEE list and writes `bcsee_status.parquet`, the current conservation status of every species and ecological community; `match_bcsee_gbif.py` matches every BCSEE species name to its GBIF species key using GBIF's name matching service and writes `bcsee_gbif_match.parquet`. It needs `bcsee_status.parquet` from `pull_bcsee.py` first, and its rows should be joined to GBIF observations only where `join_ok` is true; `build_bcsee_status_display.py` gathers every BCSEE entry that points to the same GBIF species (with a Red, Blue, Yellow or Exotic status, or in BCSEE without one) into `bcsee_status_by_gbif_species.parquet` (plus a CSV copy), one row per GBIF species with a list of status entries for the front end. It needs `bcsee_gbif_match.parquet` from `match_bcsee_gbif.py` first, applies the hand-checked keys in `bcsee_gbif_overrides.csv` if that file exists, adds the BCSEE entries listed in `bcsee_extra_keys.csv` (next to the script) to their extra keys, and with `--key-merge` moves statuses from merged-away species keys to the kept key (see "BCSEE statuses on the species cards" below); `build_bcsee_history.py` turns BCSEE's yearly archives on the BC Data Catalogue into `bcsee_history.parquet`, one row per species or community per year from 2011. |
 | `backend/pipeline/lunaris/` | Lunaris dataset metadata. `lunaris_harvest_only.py` harvests dataset metadata over OAI-PMH, `lunaris_keywords.py` is the finalized biodiversity keyword filter, `build_lunaris_candidates.py` applies it to the harvest, and `build_lunaris_taxa.py` adds the taxon columns (both described below). |
-| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search (`rank_search.py` the ranks), `hexes.py` builds the species map, `overview.py` the overview map, `cells.py` a hexagon's species, `ranks.py` the rank card and map, `species_list.py` the filters, order and pages of those species lists, `sensitive.py` says which species they hide, `datasets.py` lists and shows the Lunaris datasets, `export.py` makes the CSV downloads of the Datasets list and the species lists, `gbif_links.py` builds the hexagon's GBIF search link exactly as `frontend/src/gbifLinks.js` does, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
+| `backend/api/` | The species search API the front end calls (see "Running the species API" below). `settings.py` reads the data folder and the (not yet implemented) sensitive-species setting from environment variables, `db.py` checks and opens the data files with DuckDB, `species.py` builds the species card, `search.py` runs species search (`rank_search.py` the ranks), `hexes.py` builds the species map, `overview.py` the overview map, `cells.py` a hexagon's species, `ranks.py` the rank card and map, `species_list.py` the filters, order and pages of those species lists, `sensitive.py` says which species they hide, `datasets.py` lists and shows the Lunaris datasets, `area.py` runs the area search (the species in the hexagons under a box), `export.py` makes the CSV downloads of the Datasets list and the species lists (an area's included), `gbif_links.py` builds the hexagon's GBIF search link exactly as `frontend/src/gbifLinks.js` does, `images.py` decides whether an image can be shown with full credit, and `main.py` is the FastAPI app. |
 | `backend/shared/` | Code used by both the API and the pipeline. `image_credit.py` is the one definition of when a species image can be shown (image URL, link to the original, creator, readable licence), in Python for the API and as SQL for `build_species_image.py`. |
-| `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. |
+| `backend/tests/` | Tests for the API, `shared/`, and the pipeline steps behind the species cards (`build_bcsee_status_display.py`, `build_species_image.py`). `conftest.py` writes a tiny copy of the API's data files, so the tests never need the real data. `frontend_node.py` runs pieces of the front end's own JavaScript with node (with Vite's `?raw` imports working), so tests can check the API and the front end agree (GBIF links, the hexagons under a box); those tests are skipped without node or the front end's packages. |
 | `backend/tools/` | Small helper scripts. `list_gbif_columns.py` prints a snapshot's column names and types straight from the parquet schema on S3 (schema only, no scan). `read_parquet.py` dumps a parquet file to CSV for eyeballing. |
 | `backend/exploration/` | Analysis and validation, not part of the product build. `gbif_bc_filtered.py` counts what survives the filters straight from S3; `gbif_bc_drops.py` is its diagnostic companion, attributing drops to each individual filter (note: those per-filter counts overlap and must not be summed). |
 | `backend/exploration/lunaris/` | Tuning and validation for the Lunaris keyword filter, not part of the product build. All of these import `backend/pipeline/lunaris/lunaris_keywords.py`. `lunaris_check_false_positives.py` is the evidence check to run before changing the filter; `lunaris_analyze.py` reports word frequencies and kept/dropped counts; `lunaris_check_missed.py` looks for biodiversity datasets the filter drops; `lunaris_sample_for_review.py` draws a mixed sample to hand-review and `lunaris_semantic_review.py` scores that sample's labels against the filter. |
@@ -1206,8 +1206,8 @@ downloads" below).
 ### The CSV downloads
 
 At the November 4, 2026 meeting Diane and Evan asked for search results as
-a table to read into R. Three endpoints give them as CSV files
-(`backend/api/export.py`). Only what comes from the sources goes in, as it
+a table to read into R. Four endpoints give them as CSV files
+(`backend/api/export.py`; the area one since the area search below). Only what comes from the sources goes in, as it
 is: no record counts, years, abstracts or anything else BCBN worked out.
 
 | Endpoint | Options | Columns |
@@ -1215,6 +1215,7 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
 | `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `creators`, `published`, `catalogue`, `doi`, `link` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` (the species inside the box) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1263,6 +1264,78 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   30,000 at resolution 7. `backend/tests/test_export.py` checks the
   front end's robin example and, when node and the front end's packages
   are installed, runs `gbifLinks.js` itself.
+
+### The area search
+
+Evan asked that a user can draw a box on the map and get everything in the
+hexagons under it; the rules were decided with Lucia in November 2026
+(`backend/api/area.py`).
+
+`GET /api/area?west=&south=&east=&north=&res=` plus the hexagon panel's
+list options (`year_from`, `year_to`, `q`, `status`, `sort`, `offset`,
+`limit`, and `rank` with its path) gives the species in every hexagon at
+`res` (4 to 7) that overlaps the box, even by a corner. The edges are in
+degrees (west less than east, south less than north; a box across the
+180th meridian is not taken).
+
+- **Counting.** The answer is the hexagon panel's, for those hexagons
+  together, from the same code (`hexagons_list` in `backend/api/cells.py`):
+  the totals for the years (each record counted once, each species once,
+  however many of the hexagons it is in), the records a year range left
+  out, and one page of species with the list's filters, order, status
+  counts and rank. Species `backend/api/sensitive.py` hides at that
+  resolution are left out of all of it. Each species has `gbif_link`, the
+  GBIF search for its keys (its card key and every key merged into it)
+  inside the box for the years counted; the box is written as a closed,
+  counter-clockwise 5-point polygon (`box_wkt` in
+  `backend/api/gbif_links.py`). `species=` gives 400 for now: a single
+  species' map is not covered yet.
+- **Which hexagons.** The h3 package's polygon to cells search in its
+  "overlap" mode. The answer gives their number (`hexagon_count`), the box,
+  its area (`box_area_km2`) and the smallest allowed (`minimum_area_km2`),
+  not the hexagon ids, which for a large box would be megabytes (9.4 MB of
+  ids for all of BC at resolution 7). The front end can find the same
+  hexagons with h3-js (`polygonToCellsExperimental` with
+  `POLYGON_TO_CELLS_FLAGS.containmentOverlapping`, the corners as
+  `[lat, lng]`), from the same H3 library (4.5.0 on both sides): on
+  2026-11-09 the two gave the same hexagons for 400 random boxes in BC
+  (31,482 hexagons), and `backend/tests/test_area.py` runs h3-js with node
+  to check a few boxes every time.
+- **The smallest box** is `MIN_AREA_HEXAGONS` (4) average hexagons of the
+  resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
+  nobody can draw a box tightly around one small place, such as a First
+  Nations reserve, and pull out that place's records alone. The box's area
+  is worked out on H3's sphere, so it compares with H3's average hexagon
+  area like for like. A smaller box gives 400 saying its area and the
+  minimum.
+- **The largest box** touches at most `MAX_AREA_HEXAGONS` (200,000)
+  hexagons; a larger one gives 400 suggesting a coarser resolution, checked
+  from its area before any hexagon is found. Measured on 2026-11-09 on a
+  laptop with the real data:
+
+  | Box | Res | Hexagons | `/api/area` | Download |
+  | --- | --- | --- | --- | --- |
+  | Kamloops (0.5 x 0.25 degrees) | 6 | 45 | 0.10 s | 0.45 s, 1.5 MB |
+  | Okanagan (2 x 1.5 degrees) | 7 | 5,456 | 0.23 s | 0.85 s, 3.1 MB |
+  | Southern BC (14 x 4.8 degrees) | 7 | 117,442 | 0.61 s | 2.6 s, 10.5 MB |
+  | All of BC (25 x 11.8 degrees) | 6 | 70,747 | 0.66 s | 2.9 s, 12.1 MB |
+  | All of BC | 7 | about 415,000 (estimate) | refused | |
+
+  Finding all of BC's 492,555 resolution 7 hexagons and counting them
+  took 1.9 s and 220 MB more memory, and the map only shows resolution 7
+  when zoomed in, so such a box is not a normal request.
+- **Errors (400):** a missing or non-numeric edge, an edge outside -180 to
+  180 or -90 to 90, west not less than east, south not less than north,
+  `res` not 4 to 7, a box below the minimum or over the maximum, a bad
+  filter, status, sort or year range, a rank not named, or `species=`. A
+  rank no species has gives 404.
+
+`GET /api/export/area` takes the same parameters minus paging and gives the
+whole list as a CSV file, as the other downloads do (see "The CSV
+downloads" above). Its second header line names the box, the resolution and
+how many hexagons touch it, then the other options used; the file is named
+for example `bcbn_species_area_6_2026-11-09.csv`, with the rank name and
+the years when there are some (`bcbn_species_area_6_Chordata_2000-2020_2026-11-09.csv`).
 
 ### The place lookup (tried, not used)
 

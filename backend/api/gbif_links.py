@@ -17,6 +17,11 @@ The outline: the hexagon's corners from the h3 package (the same H3 library
 the front end's h3-js is made from), longitude then latitude, counter-
 clockwise, the first corner repeated at the end, each number with six
 decimals rounded as JavaScript's toFixed rounds them.
+
+The area search (area.py) links to the same search with its box as the
+geometry instead of a hexagon: a 5-point polygon, west-south, east-south,
+east-north, west-north and west-south again, which runs counter-clockwise
+and is closed, as GBIF asks.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -73,9 +78,33 @@ def gbif_cell_search_url(keys, cell, years=None):
     keys inside one hexagon, PRESENT records only, for a year range
     ((from, to), both included) or every year (None): the same text
     gbifCellSearchUrl in gbifLinks.js gives."""
+    return gbif_search_url(keys, cell_wkt(cell), years)
+
+
+def box_wkt(west, south, east, north):
+    """Return a box as WKT for GBIF: a closed 5-point polygon running
+    counter-clockwise (west-south, east-south, east-north, west-north,
+    west-south), longitude first, six decimals as for a hexagon."""
+    corners = [(west, south), (east, south), (east, north), (west, north), (west, south)]
+    return "POLYGON((" + ",".join(f"{to_fixed(lng)} {to_fixed(lat)}" for lng, lat in corners) + "))"
+
+
+def gbif_box_search_url(keys, box, years=None):
+    """Return the address of a GBIF occurrence search for these species
+    keys inside a box (west, south, east, north), PRESENT records only, for
+    a year range ((from, to)) or every year (None): the hexagon's search
+    with the box as its geometry."""
+    return gbif_search_url(keys, box_wkt(*box), years)
+
+
+def gbif_search_url(keys, geometry, years=None):
+    """Write a GBIF occurrence search address, the one place the links are
+    made: the Catalogue of Life checklist, one taxonKey per key, the area
+    as WKT, PRESENT records only, and the years when given, in the same
+    order and written the same way as gbifLinks.js does."""
     params = [("checklistKey", GBIF_CHECKLIST_KEY)]
     params += [("taxonKey", key) for key in keys]
-    params += [("geometry", cell_wkt(cell)), ("occurrenceStatus", "PRESENT")]
+    params += [("geometry", geometry), ("occurrenceStatus", "PRESENT")]
     if years:
         params.append(("year", f"{years[0]},{years[1]}"))
     query = "&".join(f"{form_encode(name)}={form_encode(str(value))}" for name, value in params)

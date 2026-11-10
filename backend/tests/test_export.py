@@ -13,7 +13,6 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas
 import pytest
@@ -26,6 +25,7 @@ from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.main import create_app
 from api.settings import Settings
 from conftest import DATASETS_SQL, write_test_data
+from frontend_node import NODE_READY, front_end_module, run_node
 
 CELL_A = "872800b30ffffff"
 CELL_B = "8728c9b40ffffff"
@@ -51,9 +51,6 @@ BOM_BYTES = b"\xef\xbb\xbf"
 TRICKY_TITLE = 'Bald Eagle, "nest" survey à l\'île\nsecond line, with a comma (été)'
 TRICKY_SQL = ("'Bald Eagle, \"nest\" survey à l''île' || chr(10) || "
               "'second line, with a comma (été)'")
-
-# The front end's folder, for running gbifLinks.js itself when node is here.
-FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
 
 def download(client, path, **params):
@@ -382,8 +379,7 @@ def test_numbers_are_rounded_as_javascript_rounds_them():
     assert to_fixed(48.0) == "48.000000"
 
 
-@pytest.mark.skipif(shutil.which("node") is None or not (FRONTEND / "node_modules" / "h3-js").exists(),
-                    reason="needs node and the front end's packages (npm install in frontend/)")
+@pytest.mark.skipif(not NODE_READY, reason="needs node and the front end's packages (npm install in frontend/)")
 def test_the_links_match_gbif_links_js_run_by_node(tmp_path):
     """Runs frontend/src/gbifLinks.js itself on a few cases (every
     resolution, several keys, with and without years) and compares the
@@ -392,12 +388,12 @@ def test_the_links_match_gbif_links_js_run_by_node(tmp_path):
              (["AAAA"], CELL_A, None), (["BBBB", "OLD1"], CELL_B, [2019, 2019]),
              (["X"], "842800bffffffff", [1900, 2026]), (["X"], "8528c9b7fffffff", None),
              (["X"], "862800b37ffffff", None)]
-    script = tmp_path / "links.mjs"
-    script.write_text(
-        f"import {{ gbifCellSearchUrl }} from {str((FRONTEND / 'src' / 'gbifLinks.js').as_uri())!r}\n"
-        + "".join(f"console.log(gbifCellSearchUrl({json.dumps({'keys': keys, 'cell': cell, 'years': years})}))\n"
-                  for keys, cell, years in cases))
-    output = subprocess.run(["node", str(script)], capture_output=True, text=True, check=True).stdout
+    script = (f"import {{ gbifCellSearchUrl }} from {front_end_module('gbifLinks.js')!r}\n"
+              + "".join(f"console.log(gbifCellSearchUrl({json.dumps({'keys': keys, 'cell': cell, 'years': years})}))\n"
+                        for keys, cell, years in cases))
+    # gbifLinks.js reads BC's boundary with a Vite "?raw" import, which
+    # run_node makes work in plain node.
+    output = run_node(tmp_path, script)
     assert output.splitlines() == [gbif_cell_search_url(keys, cell, years) for keys, cell, years in cases]
 
 

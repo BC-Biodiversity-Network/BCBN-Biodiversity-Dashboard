@@ -55,6 +55,12 @@ and last year, no-year records and gbif_keys; none for now; see
 sensitive.py), so that the rule, once decided, covers
 these lists too.
 
+The same counting serves a set of hexagons: the area search (area.py)
+asks hexagons_list for every hexagon under a box, so its totals, list,
+filters and hidden species work exactly as for one hexagon. A species in
+several of the hexagons is still one species, and each record is in only
+one hexagon at a resolution, so it is counted once.
+
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
@@ -90,11 +96,13 @@ def cell_resolution(cell):
     return int(found.group(1))
 
 
-def cell_counts(cursor, column, cell, years, hidden, members=None):
-    """Return, for one hexagon, [(specieskey, records, name, name source,
+def cell_counts(cursor, column, cells, years, hidden, members=None):
+    """Return, for a list of hexagons together (one hexagon, or every
+    hexagon under an area's box), [(specieskey, records, name, name source,
     BCSEE entries, BCSEE statuses)] for the years asked for (most records
-    first, then by name), and (records with no year, records with a year
-    outside the range) left out by the year filter.
+    first, then by name), each species once with its records in all of
+    them, and (records with no year, records with a year outside the range)
+    left out by the year filter.
     Hidden species are left out of all of them, and so is every species not
     in members, when given: (SQL selecting species keys, its parameters),
     the species of a rank. column is h3_r4 to h3_r7, checked by the caller."""
@@ -109,12 +117,12 @@ def cell_counts(cursor, column, cell, years, hidden, members=None):
             FROM species_hex AS h
             LEFT JOIN species_card AS c USING (specieskey)
             LEFT JOIN bcsee_status AS b ON b.gbif_species_key = h.specieskey
-            WHERE h.{column} = ? {year_filter}
+            WHERE h.{column} IN (SELECT unnest(CAST(? AS VARCHAR[]))) {year_filter}
               AND NOT list_contains(CAST(? AS VARCHAR[]), coalesce(h.specieskey, ''))
               {member_filter}
             GROUP BY 1
             ORDER BY records DESC, col_name, h.specieskey""",
-        [cell, *(years or []), hidden_list, *member_params]).fetchall()
+        [list(cells), *(years or []), hidden_list, *member_params]).fetchall()
     if years is None:
         return rows, (0, 0)
     no_year, outside = cursor.execute(
@@ -122,10 +130,10 @@ def cell_counts(cursor, column, cell, years, hidden, members=None):
                    coalesce(sum(h.occurrences) FILTER (
                        WHERE h.year IS NOT NULL AND (h.year < ? OR h.year > ?)), 0)
             FROM species_hex AS h
-            WHERE h.{column} = ?
+            WHERE h.{column} IN (SELECT unnest(CAST(? AS VARCHAR[])))
               AND NOT list_contains(CAST(? AS VARCHAR[]), coalesce(h.specieskey, ''))
               {member_filter}""",
-        [years[0], years[1], cell, hidden_list, *member_params]).fetchone()
+        [years[0], years[1], list(cells), hidden_list, *member_params]).fetchone()
     return rows, (no_year, outside)
 
 
@@ -188,6 +196,48 @@ def asked_species(data, cursor, key, column, cell, years, counts, hidden):
     }
 
 
+def hexagons_list(data, cursor, res, cells, years, hidden, q, statuses, sort, offset, limit, path):
+    """Return what the answer for one hexagon and for an area share, for
+    the hexagons in cells at resolution res: (counts, part), counts being
+    [(specieskey, records)] of every species there (for the species asked
+    for), and part the totals for the years (records, species, and the
+    records a year range left out), the list's options, how many species
+    pass its filters, the status counts, one page of species (offset,
+    limit; limit None for all of them) and the rank. years is
+    (from, to) or None for every record; hidden the species to leave out;
+    path the rank's path, or None for every species. statuses and sort are
+    as check_list_options returns them."""
+    members = None
+    if path:
+        condition, params = path_filter(path)
+        members = (f"SELECT c.specieskey FROM species_card AS c WHERE {condition}", params)
+    rows, (no_year, outside) = cell_counts(cursor, f"h3_r{res}", cells, years, hidden, members)
+    counts = [(key, records) for key, records, *_ in rows]
+    keep = matching_keys(cursor, q) if q is not None and q.strip() else None
+    listed = species_page(list_items([row for row in rows if row[0] is not None]),
+                          keep, statuses, sort, offset, limit)
+    return counts, {
+        "records": sum(records for _, records in counts),
+        "species": sum(1 for key, _ in counts if key is not None),
+        "records_no_year_left_out": no_year,
+        "records_outside_years": outside,
+        "q": q,
+        "status": statuses,
+        "sort": sort,
+        "matching": listed["matching"],
+        "status_counts": listed["status_counts"],
+        "offset": offset,
+        "limit": limit,
+        # Where the English names and statuses come from (BCSEE); each
+        # result's scientific name says its own source (name_source).
+        "english_name_source": data.meta["statuses"]["status_source"],
+        "results": listed["results"],
+        # The rank the answer is restricted to (its name and path), or null.
+        "rank": rank_label(path) if path else None,
+        "sensitive_max_res": data.settings.sensitive_max_res,
+    }
+
+
 def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None, offset=0,
                  limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None, statuses=None, sort=None):
     """Return the answer for one hexagon (see the top of this file), its
@@ -207,19 +257,13 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
     hidden = hidden_species(data.settings, res)
 
     cursor = data.cursor()
-    path, members = None, None
+    path = None
     if rank:
         if species:
             raise RankRequestError("give a species or a rank, not both.")
         path = require_rank(data, cursor, rank, rank_given or {})
-        condition, params = path_filter(path)
-        members = (f"SELECT c.specieskey FROM species_card AS c WHERE {condition}", params)
-    rows, (no_year, outside) = cell_counts(cursor, f"h3_r{res}", cell, years, hidden, members)
-    counts = [(key, records) for key, records, *_ in rows]
-    keep = matching_keys(cursor, q) if q is not None and q.strip() else None
-    listed = species_page(list_items([row for row in rows if row[0] is not None]),
-                          keep, statuses, sort, offset, limit)
-    status_source = data.meta["statuses"]["status_source"]
+    counts, part = hexagons_list(data, cursor, res, [cell], years, hidden, q, statuses, sort, offset, limit,
+                                 path)
 
     return {
         "cell": cell,
@@ -229,24 +273,7 @@ def cell_species(data, cell, year_from=None, year_to=None, q=None, species=None,
         # The years actually counted (a missing bound filled in), or null
         # when every record is counted.
         "years_counted": list(years) if years else None,
-        "records": sum(records for _, records in counts),
-        "species": sum(1 for key, _ in counts if key is not None),
-        "records_no_year_left_out": no_year,
-        "records_outside_years": outside,
-        "q": q,
-        "status": statuses,
-        "sort": sort,
-        "matching": listed["matching"],
-        "status_counts": listed["status_counts"],
-        "offset": offset,
-        "limit": limit,
-        # Where the English names and statuses come from (BCSEE); each
-        # result's scientific name says its own source (name_source).
-        "english_name_source": status_source,
-        "results": listed["results"],
+        **part,
         "species_asked_for": (asked_species(data, cursor, species, f"h3_r{res}", cell, years, counts, hidden)
                               if species else None),
-        # The rank the answer is restricted to (its name and path), or null.
-        "rank": rank_label(path) if path else None,
-        "sensitive_max_res": data.settings.sensitive_max_res,
     }

@@ -1371,9 +1371,10 @@ touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
   box's hexagons, touches, sorted, each once (empty when none).
 - Their downloads (`/api/export/hexes/{cell}`, `/api/export/area`) end
   header line 2 with "This area includes First Nations reserve land
-  (NAMES). If these data were collected on a reserve, check where they came
-  from and whether the Nation agreed to the work. See the Indigenous data
-  page of the site." when the list is not empty, still with exactly 4
+  (NAMES). Some of these records may have been collected on a reserve. If
+  you use them, check whether they were, and if so, whether the Nation
+  agreed to the collection. See the Indigenous data page of the site." when
+  the list is not empty, still with exactly 4
   header lines. It names at most 10 reserves (`RESERVE_NOTE_MAX_NAMES` in
   `backend/api/export.py`), then "and N more reserves" ("and 1 more
   reserve" for one); `reserve_names` in the API answers always has them

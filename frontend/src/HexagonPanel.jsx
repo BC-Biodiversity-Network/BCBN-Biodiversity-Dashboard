@@ -100,8 +100,9 @@ export function ReserveReminder({ names, onOpenPage }) {
     <section className="reserve-reminder" aria-labelledby={titleId}>
       <h3 id={titleId} className="reserve-reminder-title">First Nations reserve land</h3>
       <p>
-        This area includes First Nations reserve land ({reminderNamesText(names)}). If these data were collected
-        on a reserve, check where they came from and whether the Nation agreed to the work.
+        This area includes First Nations reserve land ({reminderNamesText(names)}). Some of these records may
+        have been collected on a reserve. If you use them, check whether they were, and if so, whether the Nation
+        agreed to the collection.
       </p>
       <p>
         <InPageLink href={INDIGENOUS_PAGE_SEARCH} onFollow={onOpenPage}>Indigenous data</InPageLink>

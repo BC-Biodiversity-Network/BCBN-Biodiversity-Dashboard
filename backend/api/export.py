@@ -110,9 +110,9 @@ FILE_PART_LENGTH = 40
 # The reserve reminder added to the end of header line 2 of a hexagon or
 # area download when its hexagons touch a First Nations reserve
 # (reserves.py). {names} is every reserve name, joined with ", ".
-RESERVE_NOTE = (" This area includes First Nations reserve land ({names}). If these data were collected on a "
-                "reserve, check where they came from and whether the Nation agreed to the work. See the "
-                "Indigenous data page of the site.")
+RESERVE_NOTE = (" This area includes First Nations reserve land ({names}). Some of these records may have been "
+                "collected on a reserve. If you use them, check whether they were, and if so, whether the Nation "
+                "agreed to the collection. See the Indigenous data page of the site.")
 
 # The most reserve names the note lists. Past this, the note gives the first
 # ones (in the same sorted order) and then how many more there are. The API

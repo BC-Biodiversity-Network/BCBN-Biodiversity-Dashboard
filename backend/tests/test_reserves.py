@@ -229,9 +229,9 @@ def test_hexagon_download_has_the_note_at_the_end_of_line_2(rclient):
     assert header[1].startswith("# List: species in H3 hexagon 872800b30ffffff")
     assert header[1].endswith("sorted by most records first." + note)
     assert header[1].endswith(
-        " This area includes First Nations reserve land (ALPHA LAKE 2, Made-up Creek 1). If these data "
-        "were collected on a reserve, check where they came from and whether the Nation agreed to the "
-        "work. See the Indigenous data page of the site.")
+        " This area includes First Nations reserve land (ALPHA LAKE 2, Made-up Creek 1). Some of these "
+        "records may have been collected on a reserve. If you use them, check whether they were, and if "
+        "so, whether the Nation agreed to the collection. See the Indigenous data page of the site.")
     assert header[3] == "# To read in R: read.csv(file, skip = 4)"
 
 

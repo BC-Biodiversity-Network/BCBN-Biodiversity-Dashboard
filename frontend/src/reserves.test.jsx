@@ -24,8 +24,8 @@ const SEVEN = ['ALPHA 1', 'K’IT TSAḎẔE', 'WǪCHIIGII NANÉɁ', 'Made-up Cr
 
 // The words of the reminder before and after the names.
 const BEFORE = 'This area includes First Nations reserve land ('
-const AFTER = '). If these data were collected on a reserve, check where they came from and whether the Nation '
-  + 'agreed to the work.'
+const AFTER = '). Some of these records may have been collected on a reserve. If you use them, check whether '
+  + 'they were, and if so, whether the Nation agreed to the collection.'
 
 // A pretend /api/hexes/{cell} answer (all species), with reserve_names.
 function cellAnswer(names, fields = {}) {

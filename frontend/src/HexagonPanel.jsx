@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { cellArea, getResolution } from 'h3-js'
+import { cellArea } from 'h3-js'
 
 import { cellExportUrl, fetchCell } from './api'
 import CsvDownload from './CsvDownload'
@@ -16,13 +16,18 @@ export const PAGE_SIZE = 50
 // The statuses that get a coloured chip, as on the species card.
 const STATUS_CLASSES = { Red: 'status-red', Blue: 'status-blue', Yellow: 'status-yellow', Exotic: 'status-exotic' }
 
-// A hexagon's size in words, from its id: "Resolution 7 hexagon, about
-// 5.2 km²". The area is the hexagon's own (hexagons vary a little in size),
-// to one decimal below 10 km² and to the nearest km² above.
+// A hexagon's size in words, from its id: "Hexagon of about 5.2 km²". The
+// area is the hexagon's own (hexagons vary a little in size), to one decimal
+// below 10 km² and to the nearest km² above. Visitors are told the size,
+// never H3's resolution number.
 export function hexagonSizeText(cell) {
-  const area = cellArea(cell, 'km2')
-  const shown = area < 10 ? area.toFixed(1) : Math.round(area).toLocaleString()
-  return `Resolution ${getResolution(cell)} hexagon, about ${shown} km²`
+  return `Hexagon of about ${km2Text(cellArea(cell, 'km2'))}`
+}
+
+// Writes an area for visitors: to one decimal below 10 km², else to the
+// nearest km², with commas ("5.2 km²", "1,504 km²").
+export function km2Text(value) {
+  return value < 10 ? `${value.toFixed(1)} km²` : `${Math.round(value).toLocaleString('en-US')} km²`
 }
 
 // The hexagon's totals in words: "6 records of 2 species, all years" or
@@ -41,7 +46,7 @@ function recordsWord(count) {
 
 // The note when a year range left out records with no date (count of them),
 // or null.
-function notCountedText(count) {
+export function notCountedText(count) {
   return count ? `${recordsWord(count)} with no date ${count === 1 ? 'is' : 'are'} not counted.` : null
 }
 
@@ -78,18 +83,25 @@ export function InPageLink({ href, onFollow, children, ...rest }) {
 }
 
 // Loads one hexagon's answer from /api/hexes/{cell} for the options given
-// (see fetchCell), again whenever they change; a newer request cancels an
-// older one, so a slow answer can never replace a newer one. Returns
-// { current, data }: current is the answer (or { error }) for these
-// options, or null while it loads; data is the last answer that arrived,
-// kept on screen while a new one loads.
+// (see fetchCell), again whenever they change (see useListAnswer).
 function useCellAnswer(cell, options) {
+  return useListAnswer([cell, options], (signal) => fetchCell(cell, { ...options, signal }))
+}
+
+// Loads an answer with a list of species (a hexagon's, an area's) for what
+// asking describes (anything that can be written as JSON: the same asking
+// gives the same answer), with load(signal), again whenever asking changes;
+// a newer request cancels an older one, so a slow answer can never replace
+// a newer one. Returns { current, data }: current is the answer (or
+// { error }) for this asking, or null while it loads; data is the last
+// answer that arrived, kept on screen while a new one loads.
+export function useListAnswer(asking, load) {
   const [loaded, setLoaded] = useState(null)
-  const request = JSON.stringify([cell, options])
+  const request = JSON.stringify(asking)
 
   useEffect(() => {
     const controller = new AbortController()
-    fetchCell(cell, { ...options, signal: controller.signal })
+    load(controller.signal)
       .then((data) => setLoaded({ request, data }))
       .catch((error) => {
         if (error.name !== 'AbortError') {

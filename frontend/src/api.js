@@ -302,6 +302,41 @@ export function cellExportUrl(cell, options = {}) {
   return apiAddress(`/export/hexes/${encodeURIComponent(cell)}`, cellQuery({ ...options, species: null }))
 }
 
+// The query string of an area's answer, without paging: the one place that
+// writes an area's box, resolution and list options the way the API takes
+// them, for the area panel (fetchArea) and for its CSV download
+// (areaExportUrl). area is { box: { west, south, east, north }, res } (see
+// readArea in route.js); the other options are those of fetchCell (years,
+// q, status, sort, rank), never a species. params is where to add them (a
+// new, empty query string when not given).
+function areaQuery(area, { years = null, q = '', status = [], sort = null, rank = null } = {},
+  params = new URLSearchParams()) {
+  const { west, south, east, north } = area.box
+  params.set('west', String(west))
+  params.set('south', String(south))
+  params.set('east', String(east))
+  params.set('north', String(north))
+  params.set('res', String(area.res))
+  return cellQuery({ years, q, status, sort, rank }, params)
+}
+
+// Fetches the species in every hexagon under a box drawn on the map
+// (/api/area): area is { box, res }, the options are fetchCell's (years, q,
+// status, sort, rank), and offset and limit choose the page. Returns the
+// API's answer: the box, hexagon_count, the totals and one page of species,
+// each with its GBIF link.
+export function fetchArea(area, { offset = 0, limit = 50, signal, ...options } = {}) {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  return fetchJson(`/area?${areaQuery(area, options, params)}`, signal)
+}
+
+// The address of the CSV download of an area's species list
+// (/api/export/area): every species the area panel's list has for the same
+// box and options, never a page of them.
+export function areaExportUrl(area, options = {}) {
+  return apiAddress('/export/area', areaQuery(area, options))
+}
+
 // Adds a species list's options to a query string, as the API takes them:
 // the name filter q, each BC status asked for, and the order (left out for
 // the default, most records first). list is { q, status, sort }, or null

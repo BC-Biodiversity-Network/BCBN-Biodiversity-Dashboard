@@ -68,7 +68,7 @@ describe('the hexagon panel', () => {
     stubCell(() => answer())
     const { container } = show()
     await screen.findByText('6 records of 2 species, all years')
-    expect(container.querySelector('.hexagon-size').textContent).toMatch(/^Resolution 7 hexagon, about \d+\.\d km²$/)
+    expect(container.querySelector('.hexagon-size').textContent).toMatch(/^Hexagon of about \d+\.\d km²$/)
     const rows = [...container.querySelectorAll('.hexagon-row')]
     expect(rows.map((row) => row.textContent)).toEqual([
       'Turdus migratorius American RobinYellow5', 'Bombus (Pyrobombus) vosnesenskii1'])
@@ -187,7 +187,8 @@ describe('the hexagon panel', () => {
 
 describe('the panel\'s words', () => {
   it('says the size from the hexagon\'s own area, and the totals in the singular when there is one', () => {
-    expect(hexagonSizeText('8428c9bffffffff')).toMatch(/^Resolution 4 hexagon, about [\d,]+ km²$/)
+    expect(hexagonSizeText('8428c9bffffffff')).toMatch(/^Hexagon of about \d,\d\d\d km²$/)
+    expect(hexagonSizeText('8428c9bffffffff')).not.toMatch(/resolution/i)
     expect(totalsText(answer({ records: 1, species: 1 }))).toBe('1 record of 1 species, all years')
     expect(totalsText(answer({ records: 1234, species: 3, years_counted: [2020, 2020] }))).toBe(
       '1,234 records of 3 species, 2020')

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Map, { useControl } from 'react-map-gl/maplibre'
+import Map, { Layer, Source, useControl } from 'react-map-gl/maplibre'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
 import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
@@ -8,6 +8,7 @@ import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
 // zoom buttons and the attribution line in the corner come out unstyled.
 import 'maplibre-gl/dist/maplibre-gl.css'
 
+import { boxFromCorners, selectionTest } from './area'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
@@ -75,7 +76,10 @@ export function rankLayerId(rankId, yearsCounted, resolution) {
 // Builds one hexagon layer: rows of { h3Cell, ... } coloured by a scale.
 // schemeName tells deck.gl when the colours must be worked out again, and
 // outline is how strong the white outline is, 0 to 1 (see outlineOpacity).
-function buildHexagonLayer(id, rows, visible, schemeName, outline) {
+// selection is null, or { test, key } while an area is selected: test(cell)
+// says whether a hexagon is in it (see selectionTest in area.js), and every
+// other hexagon is faded (fadedColour); key names the area.
+function buildHexagonLayer(id, rows, visible, schemeName, outline, selection = null) {
   const scheme = COLOUR_SCHEMES[schemeName]
 
   return new H3HexagonLayer({
@@ -83,7 +87,10 @@ function buildHexagonLayer(id, rows, visible, schemeName, outline) {
     data: rows,
     visible,
     getHexagon: (hexagon) => hexagon.h3Cell,
-    getFillColor: (hexagon) => hexagonColour(hexagon, scheme),
+    getFillColor: (hexagon) => {
+      const colour = hexagonColour(hexagon, scheme)
+      return selection && !selection.test(hexagon.h3Cell) ? fadedColour(colour) : colour
+    },
     // DO NOT DELETE THIS. It looks redundant and is not.
     //
     // deck.gl works out each hexagon's colour once and keeps the answer in a
@@ -98,7 +105,9 @@ function buildHexagonLayer(id, rows, visible, schemeName, outline) {
     // both switched correctly. With the line in place the same click ran it
     // 98,158 times, once per hexagon across all four resolutions, and the fill
     // changed. That is the whole difference.
-    updateTriggers: { getFillColor: schemeName },
+    // The selected area's key does the same when an area is selected,
+    // changed or closed.
+    updateTriggers: { getFillColor: [schemeName, selection?.key ?? null] },
     // Left at 1 because the opacity that matters is the one carried per hexagon
     // by getFillColor above. deck.gl multiplies the two together, so anything
     // less than 1 here would scale every bin down at once and undo the ramp.
@@ -139,6 +148,46 @@ export function selectedCellLayer(cell) {
   })
 }
 
+// While an area is selected, every hexagon outside it keeps this share of
+// its usual opacity, so the selected ones, in their normal colours, stand
+// out.
+export const FADED_SHARE = 0.2
+
+// A hexagon's fill colour ([r, g, b, a]) faded for being outside the
+// selected area: the same colour, FADED_SHARE of its opacity.
+export function fadedColour([red, green, blue, alpha]) {
+  return [red, green, blue, Math.round(alpha * FADED_SHARE)]
+}
+
+// The outline around a selected area's whole group of hexagons: a dark line
+// on a wider white one, so it reads on light and dark hexagons of either
+// scale (blue or orange). The box is drawn dashed in the same two colours.
+export const GROUP_OUTLINE = { dark: '#1a1a1a', light: '#ffffff', darkWidth: 2.5, lightWidth: 6 }
+
+// A box ({ west, south, east, north }) as a GeoJSON outline, for the map to
+// draw the box itself, while it is dragged and once it is drawn.
+export function boxOutline({ west, south, east, north }) {
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates: [[west, south], [east, south], [east, north], [west, north], [west, south]],
+    },
+  }
+}
+
+// What the "Draw a box" button says on a single species' map, where it is
+// not available yet.
+export const DRAW_UNAVAILABLE = "Drawing a box is not available on a single species' map yet."
+
+// The hint shown while drawing.
+export const DRAW_HINT = 'Drag to draw a box. Esc to cancel.'
+
+// How long after a box is drawn a click on the map is ignored, in
+// milliseconds, so letting go of the mouse never also opens a hexagon.
+const CLICK_AFTER_DRAW_MS = 400
+
 // Builds every layer the map holds.
 //
 // All four overview resolutions from the shipped files (all years) are
@@ -158,6 +207,8 @@ export function selectedCellLayer(cell) {
 // id. Holding on to an old layer object and handing the same one back is what
 // caused hexagons from one zoom tier to show up under another. The outline of
 // the clicked hexagon (selectedCell, or null) comes last, above the rest.
+// While an area is selected (selection, see buildHexagonLayer), every
+// hexagon outside it is faded.
 //
 // A rank's map (rankOpen, with rankData its map data from the API, or null
 // while none has arrived; rankId names the rank) takes the overview's place:
@@ -165,7 +216,7 @@ export function selectedCellLayer(cell) {
 export function buildLayers({
   overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
   overviewFiltered = false, filteredOverview = null, selectedCell = null,
-  rankOpen = false, rankData = null, rankId = null,
+  rankOpen = false, rankData = null, rankId = null, selection = null,
 }) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
@@ -173,18 +224,19 @@ export function buildLayers({
       return null
     }
     const visible = !speciesOpen && !rankOpen && !overviewFiltered && r === resolution
-    return buildHexagonLayer(overviewLayerId(r), rows, visible, schemeName, outline)
+    return buildHexagonLayer(overviewLayerId(r), rows, visible, schemeName, outline, selection)
   })
 
   if (!speciesOpen && rankOpen && rankData) {
     layers.push(buildHexagonLayer(
-      rankLayerId(rankId, rankData.yearsCounted, rankData.resolution), rankData.rows, true, schemeName, outline))
+      rankLayerId(rankId, rankData.yearsCounted, rankData.resolution), rankData.rows, true, schemeName, outline,
+      selection))
   }
 
   if (!speciesOpen && !rankOpen && overviewFiltered && filteredOverview) {
     layers.push(buildHexagonLayer(
       filteredOverviewLayerId(filteredOverview.yearsCounted, filteredOverview.resolution),
-      filteredOverview.rows, true, schemeName, outline))
+      filteredOverview.rows, true, schemeName, outline, selection))
   }
 
   if (speciesOpen && speciesData) {
@@ -235,6 +287,76 @@ export function fitPadding(width, height) {
   const right = width > 2.2 * CARD_PANEL_PX ? CARD_PANEL_PX : 24
   const bottom = height > 500 ? 150 : 24
   return { top: 24, left: 24, right, bottom }
+}
+
+// No hover box over a hexagon (while drawing).
+function noTooltip() {
+  return null
+}
+
+// The cursor while drawing a box: a crosshair over the whole map.
+function crosshairCursor() {
+  return 'crosshair'
+}
+
+// The cursor otherwise: deck.gl's own, a hand that grabs while dragging.
+function dragCursor({ isDragging }) {
+  return isDragging ? 'grabbing' : 'grab'
+}
+
+// The box around a GeoJSON outline (see groupOutline in area.js), as
+// [[west, south], [east, north]].
+export function outlineBounds(outline) {
+  const points = outline.geometry.coordinates.flat(2)
+  const lngs = points.map(([lng]) => lng)
+  const lats = points.map(([, lat]) => lat)
+  return [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]]
+}
+
+// A short text naming an area (its resolution and box), to tell areas apart.
+function areaId(area) {
+  const { west, south, east, north } = area.box
+  return `${area.res}:${west},${south},${east},${north}`
+}
+
+// The "Draw a box" button, with the controls at the top left: while
+// drawing it cancels and the hint shows under it; on a single species' map
+// it is greyed out, saying why when hovered (unavailable). Beside it, while
+// an area exists and nothing is being drawn, "Clear area" (onClear) and,
+// while the area panel is closed, "Show area" (onShow); each is null when
+// its button is not shown. message (or null) is what was wrong with the
+// last box drawn, with an x that calls onDismissMessage.
+function DrawBoxControl({ drawing, unavailable, onToggle, message, onDismissMessage, onClear = null, onShow = null }) {
+  return (
+    <div className="draw-box">
+      <div className="draw-box-buttons">
+        <span className="draw-box-wrap" title={unavailable ? DRAW_UNAVAILABLE : undefined}>
+          <button type="button" className={drawing ? 'draw-box-button drawing' : 'draw-box-button'}
+            disabled={unavailable} aria-pressed={drawing} onClick={onToggle}
+            aria-describedby={unavailable ? 'draw-box-unavailable' : undefined}>
+            {drawing ? 'Cancel drawing' : 'Draw a box'}
+          </button>
+        </span>
+        {onShow && !drawing && (
+          <button type="button" className="draw-box-button" onClick={onShow}>Show area</button>
+        )}
+        {onClear && !drawing && (
+          <button type="button" className="draw-box-button" onClick={onClear}>Clear area</button>
+        )}
+      </div>
+      {unavailable && <span id="draw-box-unavailable" className="visually-hidden">{DRAW_UNAVAILABLE}</span>}
+      {drawing && <p className="draw-box-hint" role="status">{DRAW_HINT}</p>}
+      {message && !drawing && (
+        <p className="draw-box-message" role="alert">
+          <span>{message}</span>
+          <button type="button" className="draw-box-message-close" onClick={onDismissMessage}
+            aria-label="Dismiss this message">
+            ×
+          </button>
+        </p>
+      )}
+    </div>
+  )
 }
 
 // Puts the deck.gl layers onto the MapLibre map.
@@ -329,9 +451,26 @@ function apiStatus(hexes, what) {
 // naming the rank, and a label above the map ("Showing genus Turdus") whose
 // x calls onCloseRank. rankId is rankKey(rank) (route.js). id changes every
 // time a rank is opened, so the map moves to it again.
+//
+// Drawing an area: the "Draw a box" button (not on a single species' map)
+// starts drawing: the map stops panning and zooming by drag, the cursor is a
+// crosshair, a hint shows, and dragging (mouse or one finger) draws the
+// box; Esc or the button again cancels. Letting go calls onAreaDrawn(box,
+// res) with the box (see boxFromCorners in area.js) and the resolution the
+// map shows then. selectedArea is the area whose panel is open ({ box, res,
+// cells, outline }, or null): every hexagon outside it is faded, at its
+// own resolution whatever the zoom, and one outline is drawn around the
+// whole group (outline, see groupOutline in area.js), with the box dashed.
+// areaMessage (or null) is shown under the button, for a box too small or
+// too big, with an x that calls onDismissAreaMessage. onClearArea (or null
+// when there is no area) is the "Clear area" button beside "Draw a box",
+// and onShowArea (or null when the area panel is open or covered) the
+// "Show area" button that opens the area panel again.
 export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
+  selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
+  onClearArea = null, onShowArea = null,
 }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
@@ -351,15 +490,44 @@ export default function HexMap({
   const overviewFiltered = years !== null
   // The id of the species the map was last moved to.
   const fittedFor = useRef(null)
+  // Whether the user is drawing a box, the drag so far ({ from, to }, each
+  // [lng, lat], or null before it starts), and when the last box was drawn.
+  const [drawing, setDrawing] = useState(false)
+  const [drag, setDrag] = useState(null)
+  const lastDrawn = useRef(0)
+  // While an area is selected: which hexagons are in it (see
+  // buildHexagonLayer), worked out once per area.
+  const selection = useMemo(
+    () => (selectedArea ? { test: selectionTest(selectedArea.cells, selectedArea.res), key: areaId(selectedArea) } : null),
+    [selectedArea])
 
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
-      overviewFiltered, filteredOverview: overviewHexes.data, selectedCell, rankOpen, rankData, rankId,
+      overviewFiltered, filteredOverview: overviewHexes.data, selectedCell, rankOpen, rankData, rankId, selection,
     }),
     [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data,
-      selectedCell, rankOpen, rankData, rankId],
+      selectedCell, rankOpen, rankData, rankId, selection],
   )
+
+  // Esc cancels drawing; so does opening a single species' map, where
+  // drawing is not available.
+  useEffect(() => {
+    if (!drawing) {
+      return undefined
+    }
+    if (species) {
+      stopDrawing()
+      return undefined
+    }
+    function cancelOnEscape(event) {
+      if (event.key === 'Escape') {
+        stopDrawing()
+      }
+    }
+    window.addEventListener('keydown', cancelOnEscape)
+    return () => window.removeEventListener('keydown', cancelOnEscape)
+  }, [drawing, species])
 
   // Moves the map to a newly picked species once its first hexagons arrive:
   // fits them in view beside the card, but no closer than FIT_MAX_ZOOM, so a
@@ -420,9 +588,18 @@ export default function HexMap({
   }, [selectedCell, species?.id])
 
   // When the page opens with a hexagon in the address (a shared link), moves
-  // the map to it, at a zoom where hexagons of its size are shown.
+  // the map to it, at a zoom where hexagons of its size are shown; with an
+  // area, fits its whole group of hexagons (which reaches past the box) in
+  // view beside the panel.
   function handleLoad() {
     const map = mapRef.current
+    if (map && selectedArea) {
+      const container = map.getContainer()
+      map.fitBounds(outlineBounds(selectedArea.outline), {
+        padding: fitPadding(container.clientWidth, container.clientHeight), duration: 0,
+      })
+      return
+    }
     if (!selectedCell || !map) {
       return
     }
@@ -430,12 +607,69 @@ export default function HexMap({
     map.jumpTo({ center: [lng, lat], zoom: zoomShowingResolution(getResolution(selectedCell)) })
   }
 
-  // Opens the panel of the hexagon under a click, on either map.
+  // Opens the panel of the hexagon under a click, on either map; not while
+  // drawing a box, nor just after one is drawn (letting go of the mouse).
   function handleClick(info) {
     const cell = info.object?.h3Cell
-    if (cell) {
+    if (cell && !drawing && Date.now() - lastDrawn.current > CLICK_AFTER_DRAW_MS) {
       onCellClick(cell)
     }
+  }
+
+  // Starts or cancels drawing (the "Draw a box" button). Starting clears
+  // any message about the last box.
+  function toggleDrawing() {
+    if (drawing) {
+      stopDrawing()
+    } else {
+      onDismissAreaMessage()
+      setDrawing(true)
+    }
+  }
+
+  // Stops drawing without a box.
+  function stopDrawing() {
+    setDrawing(false)
+    setDrag(null)
+  }
+
+  // The [lng, lat] under a mouse or touch event, or null for a touch with
+  // more than one finger (left to the map, which is not moved meanwhile).
+  function pointOf(event) {
+    if (event.points && event.points.length > 1) {
+      return null
+    }
+    return event.lngLat ? [event.lngLat.lng, event.lngLat.lat] : null
+  }
+
+  // Starts a box where the mouse button or finger goes down.
+  function startBox(event) {
+    const point = drawing ? pointOf(event) : null
+    if (point) {
+      event.preventDefault?.()
+      setDrag({ from: point, to: point })
+    }
+  }
+
+  // Stretches the box to where the mouse or finger is.
+  function stretchBox(event) {
+    const point = drag ? pointOf(event) : null
+    if (point) {
+      setDrag((current) => (current ? { ...current, to: point } : current))
+    }
+  }
+
+  // Finishes the box where the mouse button or finger comes up, and hands
+  // it on with the resolution the map shows now (see onAreaDrawn).
+  function finishBox(event) {
+    if (!drag) {
+      return
+    }
+    const to = pointOf(event) ?? drag.to
+    const box = boxFromCorners(drag.from, to)
+    lastDrawn.current = Date.now()
+    stopDrawing()
+    onAreaDrawn(box, resolution)
   }
 
   // Called whenever the map moves. Only stores a new resolution when the tier
@@ -519,6 +753,9 @@ export default function HexMap({
           <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
+          <DrawBoxControl drawing={drawing} unavailable={Boolean(species)} onToggle={toggleDrawing}
+            message={areaMessage} onDismissMessage={onDismissAreaMessage}
+            onClear={species ? null : onClearArea} onShow={species ? null : onShowArea} />
         </div>
       )}
 
@@ -532,8 +769,44 @@ export default function HexMap({
         onMove={handleMove}
         onLoad={handleLoad}
         maxZoom={MAX_ZOOM}
+        // While drawing, a drag draws the box instead of moving the map.
+        dragPan={!drawing}
+        dragRotate={!drawing}
+        touchZoomRotate={!drawing}
+        touchPitch={!drawing}
+        doubleClickZoom={!drawing}
+        boxZoom={!drawing}
+        cursor={drawing ? 'crosshair' : undefined}
+        onMouseDown={startBox}
+        onMouseMove={stretchBox}
+        onMouseUp={finishBox}
+        onTouchStart={startBox}
+        onTouchMove={stretchBox}
+        onTouchEnd={finishBox}
       >
-        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={tooltipFor} onClick={handleClick} />
+        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawing ? noTooltip : tooltipFor}
+          onClick={handleClick} getCursor={drawing ? crosshairCursor : dragCursor} />
+        {/* The outline around the selected group of hexagons, then the box
+            dashed above it; both are added again (a new key) whenever the
+            area changes, so they always sit above the hexagons. */}
+        {selectedArea && !drag && (
+          <Source key={`group-${areaId(selectedArea)}`} id="area-group" type="geojson" data={selectedArea.outline}>
+            <Layer id="area-group-edge" type="line"
+              paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': GROUP_OUTLINE.lightWidth }} />
+            <Layer id="area-group-line" type="line"
+              paint={{ 'line-color': GROUP_OUTLINE.dark, 'line-width': GROUP_OUTLINE.darkWidth }} />
+          </Source>
+        )}
+        {(drag || selectedArea) && (
+          <Source key={drag ? 'dragging' : areaId(selectedArea)} id="area-box" type="geojson"
+            data={boxOutline(drag ? boxFromCorners(drag.from, drag.to) : selectedArea.box)}>
+            {/* A white edge under a dark dashed line, so the box shows on
+                light and dark hexagons alike. */}
+            <Layer id="area-box-edge" type="line" paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': 3 }} />
+            <Layer id="area-box-line" type="line"
+              paint={{ 'line-color': GROUP_OUTLINE.dark, 'line-width': 1.5, 'line-dasharray': [3, 2] }} />
+          </Source>
+        )}
       </Map>
     </>
   )

@@ -65,6 +65,22 @@ vi.mock('./HexagonPanel', () => ({
     )
   },
 }))
+vi.mock('./AreaPanel', () => ({
+  // A stand-in area panel: its box, resolution and map, its x, a species in
+  // its list, and a change to its list.
+  default: function AreaPanel({ area, cellCount, rank, list, onListChange, onClose, onOpenSpecies }) {
+    const map = rank ? `the map of ${rank.rank} ${rank.name}` : 'the overview'
+    return (
+      <div className="stand-in-area">
+        <p>Area {JSON.stringify(area.box)} at {area.res} ({cellCount} hexagons) on {map}</p>
+        <button type="button" onClick={onClose}>Close the area</button>
+        <button type="button" onClick={() => onOpenSpecies('CCCC')}>Open the bumble bee from the area</button>
+        <button type="button" onClick={() => onListChange(PANEL_LIST)}>Filter the area's list</button>
+        <p className="stand-in-area-list">{JSON.stringify(list)}</p>
+      </div>
+    )
+  },
+}))
 vi.mock('./RankCard', () => ({
   // A stand-in rank card: its rank, its x, the genus Turdus as the next
   // rank down, and the robin in its list.
@@ -89,7 +105,7 @@ vi.mock('./loadHexData', () => ({
 
 // Imported after the stand-ins above, which vitest puts in place first.
 import App from './App'
-import { PANEL_FROM_CLICK, useLocationSearch } from './route'
+import { AREA_FROM_DRAW, PANEL_FROM_CLICK, useLocationSearch } from './route'
 
 const CELL_A = '872800b30ffffff'
 const CELL_B = '8728c9b40ffffff'
@@ -163,7 +179,7 @@ function panelText() {
 // Whether the species card is on screen (it stays loaded but hidden while
 // a hexagon's panel covers it).
 function cardShown() {
-  const holder = document.querySelector('.card-holder')
+  const holder = document.querySelector('.card-holder:not(.area-holder)')
   return Boolean(holder) && !holder.hidden
 }
 
@@ -732,5 +748,204 @@ describe('the year range and the address', () => {
     expect(window.location.search).toBe('?year_from=2000')
     expect(seen.map.years).toEqual({ from: 2000, to: null })
     expect(seen.map.rank).toBeNull()
+  })
+})
+
+describe('a box drawn on the map', () => {
+  // A box around Kamloops (45 hexagons at resolution 6), its address, and a
+  // box far too small to ask about.
+  const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
+  const KAMLOOPS_SEARCH = '?area=-120.6,50.55,-120.1,50.8&area_res=6'
+  const TINY = { west: -120.3, south: 50.6, east: -120.29, north: 50.61 }
+
+  // Draws a box on the map, at a resolution.
+  function drawBox(box, res = 6) {
+    act(() => seen.map.onAreaDrawn(box, res))
+  }
+
+  // The area panel's line when it is on screen, else null (closed, or
+  // covered by a hexagon's panel).
+  function areaText() {
+    const holder = document.querySelector('.area-holder')
+    return holder && !holder.hidden ? holder.querySelector('.stand-in-area p').textContent : null
+  }
+
+  // Clicks the area panel's x and lets the page settle.
+  async function closeAreaPanel() {
+    fireEvent.click(screen.getByRole('button', { name: 'Close the area' }))
+    await act(async () => {})
+  }
+
+  // Presses the map's "Clear area" (or "Show area") and waits for the address.
+  async function pressMapButton(name, expectedSearch) {
+    act(() => (name === 'Clear area' ? seen.map.onClearArea() : seen.map.onShowArea()))
+    await waitFor(() => expect(window.location.search).toBe(expectedSearch))
+    await act(async () => {})
+  }
+
+  it('selects the area as a new address entry, with its panel and its hexagons on the map', async () => {
+    await openAt('')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    expect(calls()).toEqual({ added: 1, replaced: 0 })
+    expect(window.history.state).toEqual(AREA_FROM_DRAW)
+    expect(areaText()).toBe(`Area ${JSON.stringify(KAMLOOPS)} at 6 (45 hexagons) on the overview`)
+    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.onClearArea).toBeTypeOf('function')
+    expect(seen.map.onShowArea).toBeNull()
+  })
+
+  it('replaces the area when another box is drawn, and the entry when its list changes', async () => {
+    await openAt('')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    drawBox({ ...KAMLOOPS, east: -120.0 }, 7)
+    await act(async () => {})
+    expect(window.location.search).toBe('?area=-120.6,50.55,-120,50.8&area_res=7')
+    fireEvent.click(screen.getByRole('button', { name: "Filter the area's list" }))
+    await act(async () => {})
+    expect(window.location.search).toBe('?area=-120.6,50.55,-120,50.8&area_res=7'
+      + '&area_q=bee&area_sort=english&area_status=red&area_status=none&area_page=2')
+    expect(calls()).toEqual({ added: 1, replaced: 2 })
+    expect(window.history.state).toEqual(AREA_FROM_DRAW)
+  })
+
+  it('opens a clicked hexagon on top of the area panel, keeping the area; its x and Back return to the area', async () => {
+    await openAt('')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    clickHexagon(CELL_A)
+    await act(async () => {})
+    expect(window.location.search).toBe(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}`)
+    expect(calls()).toEqual({ added: 2, replaced: 0 })
+    expect(window.history.state).toEqual(PANEL_FROM_CLICK)
+    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
+    expect(areaText()).toBeNull()
+    expect(document.querySelector('.area-holder').hidden).toBe(true)
+    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.selectedCell).toBe(CELL_A)
+    // Another hexagon replaces the entry, still over the area.
+    clickHexagon(CELL_B)
+    await act(async () => {})
+    expect(window.location.search).toBe(`?cell=${CELL_B}&${KAMLOOPS_SEARCH.slice(1)}`)
+    expect(calls()).toEqual({ added: 2, replaced: 1 })
+    await closeWithX(KAMLOOPS_SEARCH)
+    expect(history.backs).toHaveBeenCalledTimes(1)
+    expect(panelText()).toBeNull()
+    expect(areaText()).not.toBeNull()
+    clickHexagon(CELL_A)
+    await act(async () => {})
+    await pressBack(KAMLOOPS_SEARCH)
+    expect(areaText()).not.toBeNull()
+  })
+
+  it("closes only the panel with the area panel's x, keeping the area; Show area opens it again", async () => {
+    await openAt('')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    await closeAreaPanel()
+    expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_panel=closed`)
+    expect(calls()).toEqual({ added: 1, replaced: 1 })
+    expect(history.backs).not.toHaveBeenCalled()
+    expect(areaText()).toBeNull()
+    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.onShowArea).toBeTypeOf('function')
+    await pressMapButton('Show area', KAMLOOPS_SEARCH)
+    expect(areaText()).not.toBeNull()
+    expect(seen.map.onShowArea).toBeNull()
+    expect(calls()).toEqual({ added: 1, replaced: 2 })
+  })
+
+  it('clears the area with Clear area: like Back for the box drawn in this visit', async () => {
+    await openAfter('?species=59PMB', '')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    await pressMapButton('Clear area', '')
+    expect(history.backs).toHaveBeenCalledTimes(1)
+    expect(areaText()).toBeNull()
+    expect(seen.map.selectedArea).toBeNull()
+    expect(seen.map.onClearArea).toBeNull()
+  })
+
+  it('clears a shared area in place, and keeps a hexagon panel open on top of it', async () => {
+    await openAt(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}&area_q=bee`)
+    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
+    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    await pressMapButton('Clear area', `?cell=${CELL_A}`)
+    expect(history.backs).not.toHaveBeenCalled()
+    expect(calls()).toEqual({ added: 0, replaced: 1 })
+    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
+    expect(seen.map.selectedArea).toBeNull()
+  })
+
+  it('closes an open hexagon panel when the first box is drawn, as a new entry Back undoes', async () => {
+    await openAt('')
+    clickHexagon(CELL_A)
+    await act(async () => {})
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    expect(panelText()).toBeNull()
+    expect(areaText()).not.toBeNull()
+    expect(calls()).toEqual({ added: 2, replaced: 0 })
+    await pressBack(`?cell=${CELL_A}`)
+    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
+    expect(seen.map.selectedArea).toBeNull()
+  })
+
+  it('does not ask about a box too small or too big: the map says why instead', async () => {
+    await openAt('')
+    drawBox(TINY, 4)
+    await act(async () => {})
+    expect(window.location.search).toBe('')
+    expect(calls()).toEqual({ added: 0, replaced: 0 })
+    expect(seen.map.areaMessage).toMatch(/^This box is about .* km², smaller than the minimum of 7,081\.4 km²/)
+    drawBox({ west: -139.1, south: 48.2, east: -114, north: 60 }, 7)
+    await act(async () => {})
+    expect(seen.map.areaMessage).toMatch(/more than the 200,000 an area search can count/)
+    act(() => seen.map.onDismissAreaMessage())
+    expect(seen.map.areaMessage).toBeNull()
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    expect(seen.map.areaMessage).toBeNull()
+    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+  })
+
+  it("keeps a rank map's rank, listing only its species, over the rank card", async () => {
+    await openAt(TURDUS_SEARCH)
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    expect(window.location.search).toBe(`${TURDUS_SEARCH}&area=-120.6,50.55,-120.1,50.8&area_res=6`)
+    expect(areaText()).toContain('on the map of genus Turdus')
+    expect(document.querySelector('.card-holder:not(.area-holder)').hidden).toBe(true)
+    // With the area panel closed, the rank card shows again under the area.
+    await closeAreaPanel()
+    expect(document.querySelector('.card-holder:not(.area-holder)').hidden).toBe(false)
+    expect(seen.map.selectedArea).not.toBeNull()
+  })
+
+  it('keeps the area while a species map is open, without showing it, and brings it back with the overview', async () => {
+    await openAt('')
+    drawBox(KAMLOOPS)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Open the bumble bee from the area' }))
+    await act(async () => {})
+    expect(window.location.search).toBe(`?species=CCCC&${KAMLOOPS_SEARCH.slice(1)}`)
+    expect(areaText()).toBeNull()
+    expect(seen.map.selectedArea).toBeNull()
+    expect(seen.map.onClearArea).toBeNull()
+    expect(cardShown()).toBe(true)
+    expect(screen.getByRole('button', { name: "Back to this area's species" })).toBeTruthy()
+    await pressBack(KAMLOOPS_SEARCH)
+    expect(areaText()).not.toBeNull()
+    // Closing a card picked in the search box returns to the area too.
+    fireEvent.click(screen.getByRole('button', { name: 'Pick the robin' }))
+    await act(async () => {})
+    expect(window.location.search).toBe(`?species=59PMB&${KAMLOOPS_SEARCH.slice(1)}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Close the card' }))
+    await act(async () => {})
+    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    expect(areaText()).not.toBeNull()
   })
 })

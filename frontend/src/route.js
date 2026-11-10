@@ -24,6 +24,17 @@ import { useCallback, useEffect, useState } from 'react'
 //                                     same options with cell_ in front, as
 //                                     both lists can be open at once (the
 //                                     panel covers the card)
+//   ...&area=-120.6,50.55,-120.1,50.8&area_res=6&area_q=thrush&area_page=2
+//                                     an area: the box drawn on the map
+//                                     (west, south, east, north), the
+//                                     resolution it was drawn at, and its
+//                                     panel's species list's options with
+//                                     area_ in front, as for a hexagon; it
+//                                     stays until it is cleared, with a
+//                                     hexagon's panel or a species' card on
+//                                     top of it
+//   ...&area_panel=closed             the area stays on the map with its
+//                                     panel closed
 //   ...&year_from=2000&year_to=2020   the year range of whichever map is
 //                                     shown (either end can be left out for
 //                                     an open end), on any species map
@@ -68,10 +79,41 @@ export function readCell(search) {
 // App.jsx).
 export const PANEL_FROM_CLICK = { panelFromClick: true }
 
-// Whether a query string is the plain species map: no species, rank or
-// hexagon open.
+// The history state of an address entry added by drawing the first box, so
+// "Clear area" knows it can go back instead of leaving a dead entry.
+export const AREA_FROM_DRAW = { areaFromDraw: true }
+
+// Whether a query string is the plain species map: no species, rank,
+// hexagon or area open.
 export function isPlainMap(search) {
-  return !readSpeciesKey(search) && !readRank(search) && !readCell(search)
+  return !readSpeciesKey(search) && !readRank(search) && !readCell(search) && !readArea(search)
+}
+
+// The resolutions an area can be drawn at (those of the maps).
+const AREA_RESOLUTIONS = [4, 5, 6, 7]
+
+// Whether the area's panel is open (the default) or closed with the area
+// kept on the map (area_panel=closed), from a query string.
+export function readAreaPanelOpen(search) {
+  return new URLSearchParams(search).get('area_panel') !== 'closed'
+}
+
+// The area on the species map, from a query string
+// (area=west,south,east,north&area_res=6): { box: { west, south, east,
+// north }, res }, or null for none, or for a box or resolution that cannot
+// be one (an edge that is not a number or out of range, west not less than
+// east, south not less than north, a resolution not 4 to 7). Whether the box
+// is big enough is checked when it is drawn, and by the API.
+export function readArea(search) {
+  const params = new URLSearchParams(search)
+  const edges = (params.get('area') ?? '').split(',').map((text) => (text.trim() === '' ? NaN : Number(text)))
+  const res = Number(params.get('area_res'))
+  if (edges.length !== 4 || edges.some((edge) => !Number.isFinite(edge)) || !AREA_RESOLUTIONS.includes(res)) {
+    return null
+  }
+  const [west, south, east, north] = edges
+  const inRange = west >= -180 && east <= 180 && south >= -90 && north <= 90
+  return inRange && west < east && south < north ? { box: { west, south, east, north }, res } : null
 }
 
 // The ranks a rank page can be about, highest first (the same list as
@@ -114,6 +156,9 @@ export const NO_LIST = { q: '', sort: LIST_SORTS[0], status: [], page: 1 }
 // The address prefix of a hexagon panel's list options (see the top of this
 // file); a rank card's have none.
 export const CELL_LIST = 'cell_'
+
+// The address prefix of an area panel's list options.
+export const AREA_LIST = 'area_'
 
 // A species list's options from a query string, their names starting with
 // prefix: { q, sort, status, page }, each its default when missing or not
@@ -192,13 +237,18 @@ export function withYears(search, years) {
 }
 
 // The query string for the species map: with a species' card open (species,
-// a key), or a rank's page (rank, { rank, path }), never both, and a
-// hexagon's panel open (cell); each null for none. rankList and cellList
-// are the options of the rank card's and the hexagon panel's species lists
-// (see readList), left out when null or the defaults. years is the year
-// range of the map (null for all years).
+// a key), or a rank's page (rank, { rank, path }), never both, a hexagon's
+// panel open (cell), and an area (area, { box, res }, see readArea), each
+// null for none; an area and a hexagon can be there together (the hexagon's
+// panel on top). rankList, cellList and areaList are the options of the
+// rank card's, the hexagon panel's and the area panel's species lists (see
+// readList), left out when null or the defaults; areaPanelOpen false keeps
+// the area with its panel closed. years is the year range of the map (null
+// for all years). The commas between the area's edges are written as
+// commas, so the address stays readable.
 export function mapSearch({
-  species = null, rank = null, cell = null, rankList = null, cellList = null, years = null,
+  species = null, rank = null, cell = null, area = null, rankList = null, cellList = null, areaList = null,
+  areaPanelOpen = true, years = null,
 } = {}) {
   const params = new URLSearchParams()
   if (species) {
@@ -216,8 +266,17 @@ export function mapSearch({
     params.set('cell', cell)
     addList(params, cellList, CELL_LIST)
   }
+  if (area) {
+    const { west, south, east, north } = area.box
+    params.set('area', [west, south, east, north].join(','))
+    params.set('area_res', String(area.res))
+    addList(params, areaList, AREA_LIST)
+    if (!areaPanelOpen) {
+      params.set('area_panel', 'closed')
+    }
+  }
   addYears(params, years)
-  const text = params.toString()
+  const text = params.toString().replace(/%2C/gi, ',')
   return text ? `?${text}` : '?'
 }
 

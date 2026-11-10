@@ -33,7 +33,7 @@ counting their species took about 0.5 s for southern BC at resolution 7
 (117,442 hexagons), and 1.9 s and 220 MB more memory for all of BC at
 resolution 7 (492,555 hexagons). The map only shows resolution 7 when
 zoomed in, so a box that large at that resolution is not a normal request;
-the message suggests a coarser resolution.
+the message suggests larger hexagons.
 
 The answer is the hexagon panel's for these hexagons together (see
 cells.hexagons_list, the same code): totals for the years (each record and
@@ -143,10 +143,12 @@ def check_box_size(box, res):
     area = box_area_km2(box)
     smallest = minimum_area_km2(res)
     if area < smallest:
+        # The message gives the hexagons' size, never the resolution number,
+        # as it may be shown to visitors as it is.
         raise AreaRequestError(
-            f"The box is about {area:,.1f} km², smaller than the minimum of {smallest:,.1f} km² at "
-            f"resolution {res} ({MIN_AREA_HEXAGONS} times the average hexagon of "
-            f"{h3.average_hexagon_area(res, 'km^2'):,.1f} km²). Draw a larger box.")
+            f"The box is about {area:,.1f} km², smaller than the minimum of {smallest:,.1f} km² for "
+            f"hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km² ({MIN_AREA_HEXAGONS} times "
+            "their average area). Draw a larger box.")
     estimate = area / h3.average_hexagon_area(res, "km^2")
     if estimate > MAX_AREA_HEXAGONS:
         raise too_many_hexagons(estimate, res)
@@ -154,11 +156,13 @@ def check_box_size(box, res):
 
 
 def too_many_hexagons(count, res):
-    """The error for a box over MAX_AREA_HEXAGONS hexagons."""
+    """The error for a box over MAX_AREA_HEXAGONS hexagons (count, about) at
+    a resolution, giving the hexagons' size rather than the resolution
+    number, as it may be shown to visitors as it is."""
     return AreaRequestError(
-        f"The box touches about {count:,.0f} hexagons at resolution {res}, more than the "
-        f"{MAX_AREA_HEXAGONS:,} an area search can count. Draw a smaller box or use a coarser "
-        "resolution (a lower res).")
+        f"The box touches about {count:,.0f} hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km², "
+        f"more than the {MAX_AREA_HEXAGONS:,} an area search can count. Draw a smaller box or use larger "
+        "hexagons.")
 
 
 def box_cells(box, res):

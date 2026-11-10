@@ -14,13 +14,14 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 
+import h3
 import pandas
 import pytest
 from fastapi.testclient import TestClient
 
 import api.cells
 import api.ranks
-from api.export import BOM, export_date, file_name, one_line
+from api.export import BOM, export_date, file_name, km2_text, one_line
 from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.main import create_app
 from api.settings import Settings
@@ -139,7 +140,12 @@ def test_the_rank_file(client):
 def test_the_hexagon_file(client):
     response, header, columns, rows = download(client, f"/api/export/hexes/{CELL_A}")
     assert header[0] == f"# BCBN species list for hexagon {CELL_A}, exported {export_date()}\r\n"
-    assert header[1] == f"# List: species in H3 hexagon {CELL_A} (resolution 7); sorted by most records first\r\n"
+    # The hexagon's own size, never its resolution number.
+    size = km2_text(h3.cell_area(CELL_A, "km^2"))
+    assert header[1] == (f"# List: species in H3 hexagon {CELL_A}, a hexagon of about {size}; "
+                         "sorted by most records first\r\n")
+    assert size == "5.1 km²"
+    assert "resolution" not in "".join(header)
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
     assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "gbif_link"]
     assert keys(rows) == ["AAAA", "CCCC"]

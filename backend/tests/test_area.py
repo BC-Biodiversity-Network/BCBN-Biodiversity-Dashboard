@@ -20,7 +20,7 @@ from api.area import (EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, box
                       minimum_area_km2)
 from api.export import export_date
 from api.gbif_links import box_wkt, gbif_box_search_url
-from frontend_node import FRONTEND, NODE_READY, run_node
+from frontend_node import FRONTEND, NODE_READY, front_end_module, run_node
 
 # A box over both hexagons, at resolution 4 (several hundred hexagons, two
 # of them with records), and a small box over hexagon A alone at 7.
@@ -167,9 +167,10 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
     response = client.get("/api/export/area", params={**BOTH, **ANIMALIA, "year_from": 2020, "offset": 1,
                                                       "limit": 1})
     header, columns, rows = read_download(response)
-    assert header[0] == f"# BCBN species list for an area (resolution 4), exported {export_date()}\r\n"
+    assert header[0] == f"# BCBN species list for an area, exported {export_date()}\r\n"
     count = len(box_cells(box_of(BOTH), 4))
-    assert header[1] == (f"# List: species in the {count:,} hexagons at resolution 4 that touch the box "
+    # The hexagons' size, never their resolution number.
+    assert header[1] == (f"# List: species in the {count:,} hexagons of about 1,770 km² each that touch the box "
                          "west -131, south 39.5, east -124.5, north 49.5; only kingdom Animalia "
                          "(kingdom Animalia); records from 2020 to 2021; sorted by most records first\r\n")
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
@@ -180,7 +181,8 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
     assert rows[0]["scientific_name"] == "Turdus migratorius" and rows[0]["bcsee_status"] == "Yellow"
     assert rows[0]["gbif_link"] == gbif_box_search_url(["AAAA"], box_of(BOTH), (2020, 2021))
     assert response.headers["content-disposition"] == (
-        f'attachment; filename="bcbn_species_area_4_Animalia_2020-2021_{export_date()}.csv"')
+        f'attachment; filename="bcbn_species_area_Animalia_2020-2021_{export_date()}.csv"')
+    assert "resolution" not in "".join(header)
 
 
 def test_the_download_matches_the_list(client):
@@ -189,7 +191,7 @@ def test_the_download_matches_the_list(client):
         _, _, rows = read_download(client.get("/api/export/area", params={**BOTH, **options}))
         assert [row["specieskey"] for row in rows] == [key for key, _ in listed(answer)]
     response = client.get("/api/export/area", params=NEAR_A)
-    assert response.headers["content-disposition"] == f'attachment; filename="bcbn_species_area_7_{export_date()}.csv"'
+    assert response.headers["content-disposition"] == f'attachment; filename="bcbn_species_area_{export_date()}.csv"'
 
 
 # --- Bad requests -----------------------------------------------------------------------
@@ -250,7 +252,9 @@ def test_the_smallest_box_at_each_resolution(client, res):
     assert under.status_code == 400
     detail = under.json()["detail"]
     assert f"The box is about {smallest * 0.99:,.1f} km², smaller than the minimum of {smallest:,.1f} km²" in detail
-    assert f"resolution {res} ({MIN_AREA_HEXAGONS} times the average hexagon" in detail
+    assert (f"for hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km² ({MIN_AREA_HEXAGONS} times "
+            "their average area)") in detail
+    assert "resolution" not in detail
     over = client.get("/api/area", params={**box_with_area(smallest * 1.01), "res": res})
     assert over.status_code == 200, over.text
     assert over.json()["box_area_km2"] == round(smallest * 1.01, 1)
@@ -274,7 +278,9 @@ def test_a_box_over_the_most_hexagons_is_refused(client, monkeypatch):
     response = client.get("/api/area", params=all_bc_at_7)
     assert response.status_code == 400
     assert f"more than the {MAX_AREA_HEXAGONS:,} an area search can count" in response.json()["detail"]
-    assert "coarser resolution" in response.json()["detail"]
+    assert "hexagons of about 5.2 km²" in response.json()["detail"]
+    assert "use larger hexagons" in response.json()["detail"]
+    assert "resolution" not in response.json()["detail"]
     # A box whose estimate passes but whose real count does not.
     monkeypatch.setattr(api.area, "MAX_AREA_HEXAGONS", len(box_cells(box_of(BOTH), 4)) - 1)
     response = client.get("/api/area", params=BOTH)
@@ -330,3 +336,32 @@ def test_h3_js_finds_the_same_hexagons(tmp_path):
     found = [json.loads(line) for line in run_node(tmp_path, script).splitlines()]
     assert found == [box_cells(box, res) for box, res in boxes]
     assert all(found)
+
+
+@pytest.mark.skipif(not NODE_READY, reason="needs node and the front end's packages (npm install in frontend/)")
+def test_the_front_ends_area_rules_match_the_apis(tmp_path):
+    """Runs the front end's own area.js and gbifLinks.js with node: its
+    smallest and largest box, its sphere, every box's area and minimum, the
+    hexagons it outlines and its GBIF link for the box are the API's."""
+    boxes = [((-120.6, 50.55, -120.1, 50.8), 6), ((-120.6, 50.55, -120.1, 50.8), 7), (box_of(BOTH), 4),
+             ((-123.3, 48.3, -122.9, 48.7), 5), ((-129.1234, 52.5, -127.0001, 54.25), 6)]
+    script = (f"import {{ MIN_AREA_HEXAGONS, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM, boxAreaKm2, minimumAreaKm2, boxCells }}"
+              f" from {front_end_module('area.js')!r}\n"
+              f"import {{ gbifBoxSearchUrl }} from {front_end_module('gbifLinks.js')!r}\n"
+              f"const boxes = {json.dumps([[list(box), res] for box, res in boxes])}\n"
+              "console.log(JSON.stringify({ MIN_AREA_HEXAGONS, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM }))\n"
+              "for (const [[west, south, east, north], res] of boxes) {\n"
+              "  const box = { west, south, east, north }\n"
+              "  console.log(JSON.stringify({ area: boxAreaKm2(box), minimum: minimumAreaKm2(res),\n"
+              "    cells: boxCells(box, res), link: gbifBoxSearchUrl({ box, years: [2000, 2020] }),\n"
+              "    linkWithKeys: gbifBoxSearchUrl({ keys: ['BBBB', 'OLD1'], box }) }))\n"
+              "}\n")
+    lines = [json.loads(line) for line in run_node(tmp_path, script).splitlines()]
+    assert lines[0] == {"MIN_AREA_HEXAGONS": MIN_AREA_HEXAGONS, "MAX_AREA_HEXAGONS": MAX_AREA_HEXAGONS,
+                        "EARTH_RADIUS_KM": EARTH_RADIUS_KM}
+    for (box, res), found in zip(boxes, lines[1:]):
+        assert found["area"] == pytest.approx(box_area_km2(box), rel=1e-12)
+        assert found["minimum"] == pytest.approx(minimum_area_km2(res), rel=1e-12)
+        assert found["cells"] == box_cells(box, res)
+        assert found["link"] == gbif_box_search_url([], box, (2000, 2020))
+        assert found["linkWithKeys"] == gbif_box_search_url(["BBBB", "OLD1"], box)

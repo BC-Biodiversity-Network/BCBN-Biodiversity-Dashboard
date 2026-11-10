@@ -1332,10 +1332,22 @@ degrees (west less than east, south less than north; a box across the
 
 `GET /api/export/area` takes the same parameters minus paging and gives the
 whole list as a CSV file, as the other downloads do (see "The CSV
-downloads" above). Its second header line names the box, the resolution and
-how many hexagons touch it, then the other options used; the file is named
-for example `bcbn_species_area_6_2026-11-09.csv`, with the rank name and
-the years when there are some (`bcbn_species_area_6_Chordata_2000-2020_2026-11-09.csv`).
+downloads" above). Its second header line names the box, how many hexagons
+touch it and their size ("45 hexagons of about 36 km² each"), then the other
+options used; the file is named for example `bcbn_species_area_2026-11-09.csv`,
+with the rank name and the years when there are some
+(`bcbn_species_area_Chordata_2000-2020_2026-11-09.csv`).
+
+**Hexagon sizes, not resolutions.** Nothing a visitor reads names H3's
+resolution number: the pages, the files and the API's messages a page may
+show (a box too small or too big) give the hexagons' size in km² instead,
+written the same way everywhere (one decimal below 10 km², else the nearest
+km²: `km2Text` in `frontend/src/HexagonPanel.jsx`, `km2_text` in
+`backend/api/export.py`). The hexagon download's second line gives the
+hexagon's own size ("species in H3 hexagon 861298d4fffffff, a hexagon of
+about 29 km²"). The resolution stays where only the program uses it: the
+address (`area_res`), the API's parameters (`res`) and their error messages,
+and the code.
 
 ### The place lookup (tried, not used)
 
@@ -1399,8 +1411,8 @@ they cannot reach it.
 
 Clicking a hexagon opens its panel (`frontend/src/HexagonPanel.jsx`, from
 `GET /api/hexes/{cell}`) in the side panel where the species card goes, and
-outlines the hexagon on the map. Both kinds give the hexagon's resolution and
-own area (from `h3-js`). On the overview the panel lists every species in
+outlines the hexagon on the map. Both kinds give the hexagon's own area
+("Hexagon of about 5.2 km²", from `h3-js`), never its resolution number. On the overview the panel lists every species in
 the hexagon: its records and species for the chosen years, and its species,
 50 at a time, each name opening that species' card and map. The list works
 as a rank card's (`frontend/src/SpeciesListControls.jsx`, shared by both): a
@@ -1472,7 +1484,95 @@ size, and while a panel is open the map stays on the hexagon rather than
 moving to a newly opened species. The page tests the history rules on a
 real browser history (`frontend/src/AppHexagon.test.jsx`).
 
-**Download CSV.** Three lists have a "Download CSV" button
+**Draw a box (the area search).** A "Draw a box" button sits with the
+map's controls at the top left (`DrawBoxControl` in `frontend/src/HexMap.jsx`),
+on the overview and on a rank map; on a single species' map it is greyed
+out, saying on hover that it is not available there yet. Pressing it starts
+drawing: the map stops panning and zooming by drag (MapLibre's drag pan,
+rotate, touch zoom, box zoom and double-click zoom are switched off), the
+cursor is a crosshair (set through deck.gl's `getCursor`, which would
+otherwise put its own back), the hover box is hidden, and the hint "Drag to
+draw a box. Esc to cancel." shows; dragging with the mouse or one finger
+draws the box, Esc or the button ("Cancel drawing") cancels. The box's
+edges keep 4 decimals (about 11 m). The hexagons it selects are those at
+the resolution the map showed when it was drawn that overlap it even by a
+corner (`boxCells` in `frontend/src/area.js`: h3-js
+`polygonToCellsExperimental` with `containmentOverlapping`, the corners as
+`[lat, lng]`, exactly as the API finds them); that resolution stays with
+the box whatever the zoom. While an area is selected, every hexagon outside
+it keeps only a fifth of its opacity (`FADED_SHARE`), at any zoom (a finer
+hexagon counts as selected when the hexagon it lies in is, a coarser one
+when it holds one: `selectionTest` in `area.js`), so the selected ones keep
+their normal colours and stand out. One outline goes around the outside of
+the whole selected group, not around each hexagon (`groupOutline` in
+`area.js`, h3-js `cellsToMultiPolygon`, about 0.8 s for the largest box
+allowed, worked out once per box): a dark line on a wider white one, so it
+reads on light and dark hexagons of either colour scale. The box itself is
+drawn dashed above it, thinner. Both are MapLibre line layers, added again
+whenever the area changes so they stay above the hexagons. A shared link
+fits the whole group in view (it reaches past the box). Checked on
+2026-11-09 on a light area (Fort Nelson) and a dark one (Vancouver), at
+resolution 4 and 7, on both scales, desktop and phone width. A box
+smaller than `MIN_AREA_HEXAGONS` (4) average hexagons of its resolution or
+touching more than `MAX_AREA_HEXAGONS` (200,000) hexagons is not asked
+about: the map shows why under the button, with the box's size and the
+limit (`areaProblem` in `area.js`, the API's own checks, copied; a back end
+test runs `area.js` with node to check its limits, areas, hexagons and GBIF
+link still match `backend/api/area.py`).
+
+The area panel (`frontend/src/AreaPanel.jsx`, from `GET /api/area`) takes
+the side panel like the hexagon panel: "Species in this area" (on a rank
+map "Genus *Turdus* in this area", only that rank's species), the box's size
+in km², how many hexagons it touches and their size, the line "It counts the
+whole of every hexagon the box touches, so the area counted is larger than
+the box.", the records and species for the years with the records a year
+range left out, the species list with the hexagon panel's controls
+(`SpeciesListControls`, page buttons), a Download CSV button
+(`GET /api/export/area` with the same options, no paging), and "See these
+records on GBIF": a GBIF search of the box itself, every species, for the
+years counted (`gbifBoxSearchUrl` in `frontend/src/gbifLinks.js`), with the
+notes "GBIF searches only the box you drew. Our numbers include every
+hexagon the box touches, so GBIF usually shows fewer records." and
+`GBIF_COUNT_NOTE` (and on a rank map that GBIF shows every species in the
+box, not only that rank). If the API counts a different number of hexagons
+than the map outlined, the browser's console says so. The hexagon panel and
+the area panel share their loading (`useListAnswer` in
+`frontend/src/HexagonPanel.jsx`).
+
+The address holds the area as `area=west,south,east,north&area_res=6`, with
+its list options as `area_q`, `area_sort`, `area_status` and `area_page`
+(`readArea` and `mapSearch` in `frontend/src/route.js`; for example
+`?rank=phylum&kingdom=Animalia&phylum=Chordata&area=-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
+so a shared link opens the same box, fitted in view.
+
+**The area stays until it is cleared.** Once drawn, the area (its box, the
+outline and the faded hexagons around it) stays on the map and in the
+address until the map's "Clear area" button (beside "Draw a box" while an
+area exists) removes it; drawing a new box replaces it. Every other move
+keeps it: clicking a hexagon opens that hexagon's panel on top of the area
+panel, which stays loaded under it; opening a species (from the area's
+list, a hexagon's list or the search box) keeps the area in the address,
+not shown on the species' map, and it is back when the card closes or
+Back is pressed; opening or closing a rank and changing the years keep it
+too. The area panel's x only closes the panel (`area_panel=closed` in the
+address); the map's "Show area" button (shown while the panel is closed
+and no hexagon's panel is open) opens it again. "Show area" was chosen
+over clicking inside the selection, because a click on a hexagon already
+opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
+
+| After | The address entry | Back then |
+| --- | --- | --- |
+| Drawing the first box | added (marked `AREA_FROM_DRAW`; closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
+| Drawing another box | replaced | returns to before the first box |
+| Changing the area's list | replaced | the same |
+| Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
+| The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
+| Opening a species from the area's list | added | returns to the area panel; the card also offers "Back to this area's species" |
+| "Clear area" on the entry the first box added | acts like Back | (it was Back) |
+| "Clear area" anywhere else (a shared link, or a hexagon's panel open on top) | replaced, keeping a hexagon's panel | goes to the entry before, which may still hold the area (for example the area panel under the hexagon's) |
+
+**Download CSV.** Four lists have a "Download CSV" button (the area panel's,
+described above, as well as these three)
 (`frontend/src/CsvDownload.jsx`) for the CSV downloads of the API (see "The
 CSV downloads" above): the Datasets page, under the result count, for the
 current search, filters and order; a rank card, above its species list, for

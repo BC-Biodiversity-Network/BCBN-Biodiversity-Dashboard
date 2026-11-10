@@ -60,7 +60,9 @@ from zoneinfo import ZoneInfo
 from api.area import area_species
 from api.cells import cards_gbif_keys, cell_species
 from api.datasets import dataset_request, ordered_datasets
-from api.gbif_links import gbif_cell_search_url
+import h3
+
+from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.ranks import rank_card
 
 # The export date is the date in Vancouver.
@@ -310,7 +312,7 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
     keys = cards_gbif_keys(data.cursor(), [result["specieskey"] for result in answer["results"]])
     rows = [species_row(result) + [gbif_cell_search_url(keys[result["specieskey"]], answer["cell"], years)]
             for result in answer["results"]]
-    parts = [f"species in H3 hexagon {answer['cell']} (resolution {answer['res']})"]
+    parts = [f"species in H3 hexagon {answer['cell']}, a hexagon of about {km2_text(h3.cell_area(answer['cell'], 'km^2'))}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
@@ -321,6 +323,16 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
                      [answer["cell"], answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
                      date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)
+
+
+def km2_text(value):
+    """Write an area for a header line the way the site writes it (km2Text
+    in frontend/src/HexagonPanel.jsx): one decimal below 10 km², else the
+    nearest km² with commas, halves rounded up ("5.2 km²", "1,504 km²").
+    Files name the hexagons' size, never H3's resolution number."""
+    if value < 10:
+        return f"{to_fixed(value, 1)} km²"
+    return f"{int(to_fixed(value, 0)):,} km²"
 
 
 def degrees(value):
@@ -340,16 +352,15 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
     rows = [species_row(result) + [result["gbif_link"]] for result in answer["results"]]
     box = answer["box"]
     count = answer["hexagon_count"]
-    parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} at resolution "
-             f"{answer['res']} that touch the box west {degrees(box['west'])}, south {degrees(box['south'])}, "
-             f"east {degrees(box['east'])}, north {degrees(box['north'])}"]
+    size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
+    parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} of about {size} "
+             f"{'' if count == 1 else 'each '}that touch the box west {degrees(box['west'])}, "
+             f"south {degrees(box['south'])}, east {degrees(box['east'])}, north {degrees(box['north'])}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
-    header = [f"BCBN species list for an area (resolution {answer['res']}), exported {date}",
+    header = [f"BCBN species list for an area, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
-    name = file_name("species_area",
-                     [str(answer["res"]), answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
-                     date)
+    name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)

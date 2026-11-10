@@ -57,6 +57,30 @@ export function gbifBcSearchUrl({ keys }) {
   return gbifSearchUrl({ keys, geometry: BC_BOUNDARY_WKT })
 }
 
+// The note under the area panel's GBIF link: the link searches the box
+// itself, while our numbers count every hexagon the box touches.
+export const AREA_GBIF_NOTE = 'GBIF searches only the box you drew. Our numbers include every hexagon the box '
+  + 'touches, so GBIF usually shows fewer records.'
+
+// A box ({ west, south, east, north }) as WKT for GBIF: a closed 5-point
+// polygon running counter-clockwise (west-south, east-south, east-north,
+// west-north, west-south), longitude first, six decimals, the same text as
+// box_wkt in backend/api/gbif_links.py.
+export function boxWkt({ west, south, east, north }) {
+  const corners = [[west, south], [east, south], [east, north], [west, north], [west, south]]
+  const points = corners.map(([lng, lat]) => `${lng.toFixed(DECIMALS)} ${lat.toFixed(DECIMALS)}`)
+  return `POLYGON((${points.join(',')}))`
+}
+
+// The address of a GBIF occurrence search inside a box drawn on the map,
+// PRESENT records only, for a year range ([from, to]) or every year (null).
+// With no keys (the area panel's link) it finds every species in the box;
+// with keys, only those species (as gbif_box_search_url in
+// backend/api/gbif_links.py writes each species' link).
+export function gbifBoxSearchUrl({ keys = [], box, years = null }) {
+  return gbifSearchUrl({ keys, geometry: boxWkt(box), years })
+}
+
 // Writes a GBIF occurrence search address, the one place both links are
 // made: the Catalogue of Life checklist, one taxonKey per species key, the
 // area as WKT, PRESENT records only, and the years ([from, to]) when given.

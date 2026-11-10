@@ -1759,3 +1759,82 @@ body {
   color: #888;
   cursor: default;
 }
+
+/* The "Draw a box" button with the map's other controls (top left), the
+   hint under it while drawing, and the message about a box too small or
+   too big. Same white, shadowed look as the hexagon size label and the
+   toggle; the button turns blue while drawing. */
+.draw-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+/* "Draw a box", "Show area" and "Clear area" side by side, wrapping on a
+   narrow screen. */
+.draw-box-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.draw-box-button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-family: inherit;
+  font-size: 13px;
+  color: #184f95;
+  cursor: pointer;
+}
+
+.draw-box-button.drawing {
+  background: #184f95;
+  color: #fff;
+}
+
+/* On a single species' map: greyed out, with the reason on hover. */
+.draw-box-button:disabled {
+  color: #999;
+  cursor: default;
+  pointer-events: none;
+}
+
+.draw-box-button:focus-visible {
+  outline: 2px solid #184f95;
+  outline-offset: 2px;
+}
+
+.draw-box-hint,
+.draw-box-message {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  line-height: 1.4;
+  color: #1a1a1a;
+}
+
+.draw-box-message {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  border-left: 3px solid #b3261e;
+}
+
+.draw-box-message-close {
+  flex: none;
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #555;
+  cursor: pointer;
+}

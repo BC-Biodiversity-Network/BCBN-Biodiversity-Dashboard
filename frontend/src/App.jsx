@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
+import { areaProblem, boxCells, groupOutline } from './area'
+import AreaPanel from './AreaPanel'
 import HexagonPanel from './HexagonPanel'
 import HexMap from './HexMap'
 import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readMapYears,
-  readRank, readSpeciesKey, speciesDatasetsSearch, withYears,
+  AREA_FROM_DRAW, AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readArea,
+  readAreaPanelOpen, readCell, readList, readMapYears, readRank, readSpeciesKey, speciesDatasetsSearch, withYears,
 } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
@@ -80,6 +82,28 @@ const HEX_DATA_URLS = {
 // work as above. Clicking another hexagon, or opening another rank, keeps
 // the list's order and statuses and starts with no name filter on page 1.
 //
+// Areas: a box drawn on the map (the map's "Draw a box" button) selects
+// every hexagon it touches, at the resolution the map showed when it was
+// drawn, and opens the area panel listing their species. The area stays,
+// on the map and in the address (area=..., area_res, area_q, ...; see
+// readArea in route.js), until "Clear area" removes it; every other move
+// (a hexagon, a species, a rank, the years) keeps it. On a single species'
+// map it stays in the address but is not shown, and it is back when the
+// card closes. History:
+//   - drawing the first box adds an entry (marked AREA_FROM_DRAW), and
+//     closes an open hexagon panel; drawing another replaces the entry
+//     (the new box replaces the old one);
+//   - clicking a hexagon opens its panel on top of the area panel, by the
+//     hexagon rules above (a new entry for the first click), so its x or
+//     Back returns to the area panel;
+//   - the area panel's x only closes the panel (area_panel=closed), in
+//     place; the map's "Show area" button opens it again, in place;
+//   - "Clear area" acts like Back when the entry is the one the first box
+//     added, else removes the area in place (keeping a hexagon's panel);
+//   - changing the area's list replaces the entry.
+// A box too small or too big is not asked about: the map says why instead
+// (areaProblem in area.js).
+//
 // Years: the year range is in the address too, and every move between maps,
 // cards and hexagons keeps it. Changing it replaces the entry in the same
 // way, so the map, the hexagon panel and the rank card all follow it.
@@ -105,6 +129,31 @@ export default function App({
   const addressRankKey = rankKey(addressRank)
   const addressRankList = readList(search)
   const addressCellList = readList(search, CELL_LIST)
+  // The area in the address, kept on every map until it is cleared, and
+  // whether its panel is open; the area shown (addressArea): never on a
+  // species map. areaText stands for it, so its hexagons are worked out
+  // again only when the area changes.
+  const keptArea = readArea(search)
+  const areaPanelOpen = readAreaPanelOpen(search)
+  const addressArea = addressKey ? null : keptArea
+  const areaText = addressArea ? JSON.stringify(addressArea) : null
+  const addressAreaList = readList(search, AREA_LIST)
+  // What every move but drawing and clearing keeps of the area, for mapSearch.
+  const keepArea = { area: keptArea, areaList: addressAreaList, areaPanelOpen }
+  // The hexagons the area's box touches (see boxCells), outlined on the map
+  // and counted by the API.
+  const areaCells = useMemo(() => (addressArea ? boxCells(addressArea.box, addressArea.res) : null), [areaText])
+  // The area as the map draws it: its box, its resolution, its hexagons and
+  // the outline around the whole group (see groupOutline), worked out once
+  // per area.
+  const mapArea = useMemo(
+    () => (addressArea ? { ...addressArea, cells: areaCells, outline: groupOutline(areaCells) } : null), [areaText])
+  // What was wrong with the last box drawn (too small or too big), or null.
+  const [areaMessage, setAreaMessage] = useState(null)
+  // Whether the area panel is open and on screen (a hexagon's panel covers
+  // it), and whether either panel takes the side panel (covering the cards).
+  const areaPanelShown = Boolean(addressArea && areaPanelOpen && !addressCell)
+  const panelOpen = Boolean(addressCell || areaPanelShown)
   const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
   // What the data is and where it comes from (/api/meta), for the GBIF
@@ -189,13 +238,13 @@ export default function App({
     picks.current += 1
     const key = result.merged_from ?? result.specieskey
     setSpecies({ key, name: result.col_name, id: picks.current })
-    navigate(mapSearch({ species: key, years }), { replace: true })
+    navigate(mapSearch({ species: key, ...keepArea, years }), { replace: true })
   }
 
-  // Closes the card, back to the plain overview.
+  // Closes the card, back to the overview (and the area, when there is one).
   function closeCard() {
     setSpecies(null)
-    navigate(mapSearch({ years }), { replace: true })
+    navigate(mapSearch({ ...keepArea, years }), { replace: true })
   }
 
   // Changes the year range (null for all years) in place, keeping
@@ -206,16 +255,17 @@ export default function App({
   }
 
   // Opens the panel of a clicked hexagon, keeping the species map if one is
-  // open: a new address entry for the first click, marked as added by a
-  // click; the same entry replaced, with its mark kept, while the panel is
-  // already open (see the top of this component).
+  // open, and the area (its panel goes on top of the area panel): a new
+  // address entry for the first click, marked as added by a click; the same
+  // entry replaced, with its mark kept, while a hexagon's panel is already
+  // open (see the top of this component).
   function openCell(cell) {
     if (cell === addressCell) {
       return
     }
     const target = mapSearch({
       species: addressKey, rank: addressRank, rankList: addressRankList, cell,
-      cellList: keptListChoices(addressCellList), years,
+      cellList: keptListChoices(addressCellList), ...keepArea, years,
     })
     if (addressCell) {
       navigate(target, { replace: true, state: historyState() })
@@ -225,15 +275,69 @@ export default function App({
   }
 
   // Closes the hexagon panel: like Back when a click in this visit added its
-  // entry, else in place. Either way the overview shows again, or the
-  // species card on a species map.
+  // entry, else in place. Either way what was under it shows again: the area
+  // panel, the overview, or the species card on a species map.
   function closeCell() {
     if (historyState()?.panelFromClick) {
       goBack()
     } else {
-      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList, years }),
+      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList, ...keepArea, years }),
         { replace: true })
     }
+  }
+
+  // Selects the hexagons under a box drawn on the map (box, at resolution
+  // res), on the overview or a rank map, and opens the area panel (closing
+  // an open hexagon panel): the first box as a new address entry, marked as
+  // added by drawing; a box drawn while an area exists replaces it in the
+  // same entry. A box too small or too big selects nothing: the map shows
+  // why instead.
+  function drawArea(box, res) {
+    const problem = areaProblem(box, res)
+    setAreaMessage(problem)
+    if (problem) {
+      return
+    }
+    const target = mapSearch({
+      rank: addressRank, rankList: addressRankList, area: { box, res },
+      areaList: keptListChoices(addressAreaList), years,
+    })
+    if (keptArea) {
+      navigate(target, { replace: true, state: historyState() })
+    } else {
+      navigate(target, { state: AREA_FROM_DRAW })
+    }
+  }
+
+  // Removes the area ("Clear area"): like Back when the entry is the one the
+  // first box added (so no dead entry is left), else in place, keeping a
+  // hexagon's panel and the entry's mark.
+  function clearArea() {
+    setAreaMessage(null)
+    if (historyState()?.areaFromDraw) {
+      goBack()
+    } else {
+      navigate(mapSearch({
+        species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell,
+        cellList: addressCellList, years,
+      }), { replace: true, state: historyState() })
+    }
+  }
+
+  // Closes the area panel (its x) or opens it again (the map's "Show
+  // area"), keeping the area on the map, in place of the current entry.
+  function setAreaPanelOpen(open) {
+    navigate(mapSearch({
+      rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: addressCellList,
+      ...keepArea, areaPanelOpen: open, years,
+    }), { replace: true, state: historyState() })
+  }
+
+  // Changes the options of the area panel's list (name filter, order, BC
+  // statuses, page), in place of the current entry.
+  function changeAreaList(list) {
+    navigate(mapSearch({ rank: addressRank, rankList: addressRankList, ...keepArea, areaList: list, years }),
+      { replace: true, state: historyState() })
   }
 
   // Switches from a species map's hexagon panel to every species in the same
@@ -242,29 +346,31 @@ export default function App({
   // overview's panel then closes it in place rather than going back to the
   // species panel.
   function showAllSpecies() {
-    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList), years }))
+    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList), ...keepArea, years }))
   }
 
   // Changes the options of the rank card's species list, or of the hexagon
   // panel's, in place (see the top of this component).
   function changeRankList(list) {
-    navigate(mapSearch({ rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList, years }),
-      { replace: true, state: historyState() })
+    navigate(mapSearch({
+      rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList, ...keepArea, years,
+    }), { replace: true, state: historyState() })
   }
   function changeCellList(list) {
     navigate(mapSearch({
-      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list, years,
+      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list,
+      ...keepArea, years,
     }), { replace: true, state: historyState() })
   }
 
   // Opens a species picked from a hexagon's list or a rank card (from, the
   // rank, or null for a hexagon's list): its card and map, as a new address
   // entry, so Back returns to the list or the card.
-  function openSpeciesFrom(key, from = null) {
+  function openSpeciesFrom(key, from = null, fromArea = false) {
     picks.current += 1
     setSpecies({ key, name: null, id: picks.current })
-    setOpenedFrom({ key, rank: from })
-    navigate(mapSearch({ species: key, years }))
+    setOpenedFrom({ key, rank: from, area: fromArea })
+    navigate(mapSearch({ species: key, ...keepArea, years }))
   }
 
   // Opens a rank's page (see the top of this component), as a new address
@@ -277,17 +383,17 @@ export default function App({
       setRankOpen((open) => ({ ...open, id }))
       return
     }
-    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList), years }),
+    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList), ...keepArea, years }),
       { state: { rankOpenedFrom: search } })
   }
 
   // Closes the rank, back to all species (see the top of this component).
   function closeRank() {
     const from = historyState()?.rankOpenedFrom
-    if (from !== undefined && isPlainMap(from) && !addressCell) {
+    if (from !== undefined && isPlainMap(from) && !addressCell && !keptArea) {
       goBack()
     } else {
-      navigate(mapSearch({ cell: addressCell, cellList: addressCellList, years }), { replace: true })
+      navigate(mapSearch({ cell: addressCell, cellList: addressCellList, ...keepArea, years }), { replace: true })
     }
   }
 
@@ -324,6 +430,12 @@ export default function App({
           rank={species ? null : rankOpen}
           rankId={species ? null : rankKey(rankOpen)}
           onCloseRank={closeRank}
+          selectedArea={mapArea}
+          onAreaDrawn={drawArea}
+          areaMessage={areaMessage}
+          onDismissAreaMessage={() => setAreaMessage(null)}
+          onClearArea={addressArea ? clearArea : null}
+          onShowArea={addressArea && !areaPanelOpen && !addressCell ? () => setAreaPanelOpen(true) : null}
         />
 
         <div className="top-right-controls">
@@ -342,15 +454,32 @@ export default function App({
               onShowAllSpecies={showAllSpecies}
             />
           )}
+          {/* The area panel stays loaded under a hexagon's panel, so closing
+              that one shows it again at once. */}
+          {addressArea && areaPanelOpen && (
+            <div className="card-holder area-holder" hidden={Boolean(addressCell)}>
+              <AreaPanel
+                key={areaText}
+                area={addressArea}
+                cellCount={areaCells.length}
+                years={years}
+                rank={rankOpen}
+                list={addressAreaList}
+                onListChange={changeAreaList}
+                onClose={() => setAreaPanelOpen(false)}
+                onOpenSpecies={(key) => openSpeciesFrom(key, null, true)}
+              />
+            </div>
+          )}
           {species && !addressCell && openedFrom?.key === species.key && (
             <button type="button" className="text-button panel-back" onClick={goBack}>
               {openedFrom.rank
                 ? <>Back to {openedFrom.rank.rank} <RankName rank={openedFrom.rank.rank} name={openedFrom.rank.name} /></>
-                : <>Back to this hexagon&apos;s species</>}
+                : <>Back to this {openedFrom.area ? 'area' : 'hexagon'}&apos;s species</>}
             </button>
           )}
           {!species && rankOpen && (
-            <div className="card-holder" hidden={Boolean(addressCell)}>
+            <div className="card-holder" hidden={panelOpen}>
               <RankCard
                 rankRef={rankOpen}
                 years={years}

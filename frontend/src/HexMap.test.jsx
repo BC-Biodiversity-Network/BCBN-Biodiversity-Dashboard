@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The real map (MapLibre) and layers (deck.gl) need a graphics card, which
@@ -6,10 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // instead: the layers handed to deck.gl, the map's onMove handler (to pretend
 // the user zoomed) and every fitBounds call, the overlay's click handler, the
 // map's onLoad handler, and every easeTo and jumpTo call. bounds is the part
-// of the world on screen, [[west, south], [east, north]].
+// of the world on screen, [[west, south], [east, north]]. props is every
+// prop the map was last given (its mouse and touch handlers, whether a drag
+// pans it, its cursor), and sources the GeoJSON of each line it draws, by
+// source id (the box, "area-box"; the selected group's outline, "area-group").
 const mapState = vi.hoisted(() => ({
   layers: [], getTooltip: null, onMove: null, fitBounds: null, onClick: null, onLoad: null, easeTo: null,
-  jumpTo: null, bounds: [[-140, 47], [-113, 61]],
+  jumpTo: null, bounds: [[-140, 47], [-113, 61]], props: {}, sources: {},
 }))
 
 vi.mock('react-map-gl/maplibre', async () => {
@@ -29,8 +32,18 @@ vi.mock('react-map-gl/maplibre', async () => {
     }))
     mapState.onMove = props.onMove
     mapState.onLoad = props.onLoad
+    mapState.props = props
+    mapState.sources = {}
     return React.createElement('div', { 'data-testid': 'map' }, props.children)
   })
+  // Stand-ins for a GeoJSON source and its layer: the source records its data.
+  function Source({ id, data, children }) {
+    mapState.sources[id] = data
+    return React.createElement(React.Fragment, null, children)
+  }
+  function Layer() {
+    return null
+  }
   // A stand-in for useControl: keeps the overlay's latest layers.
   function useControl() {
     return {
@@ -41,7 +54,7 @@ vi.mock('react-map-gl/maplibre', async () => {
       },
     }
   }
-  return { default: Map, useControl }
+  return { default: Map, Layer, Source, useControl }
 })
 vi.mock('@deck.gl/mapbox', () => ({ MapboxOverlay: class {} }))
 vi.mock('@deck.gl/geo-layers', () => ({
@@ -57,7 +70,8 @@ vi.mock('@deck.gl/geo-layers', () => ({
 // Imported after the stand-ins above, which vitest puts in place first.
 import { cellToLatLng } from 'h3-js'
 
-import HexMap from './HexMap'
+import { boxCells, groupOutline } from './area'
+import HexMap, { DRAW_HINT, DRAW_UNAVAILABLE, FADED_SHARE, outlineBounds, overviewLayerId } from './HexMap'
 import { pickResolution, zoomShowingResolution } from './zoomTiers'
 
 // One overview hexagon per resolution, real H3 cells in BC.
@@ -323,9 +337,9 @@ describe('a year range', () => {
     expect(document.querySelector('.legend-left-out').textContent).toBe('37,966 records with no date are not shown.')
     // The same answer colours both scales; the fixed bins stay.
     const layer = () => mapState.layers.find((l) => l.id === 'overview-2000-2020-r4')
-    expect(layer().props.updateTriggers.getFillColor).toBe('species')
+    expect(layer().props.updateTriggers.getFillColor).toEqual(['species', null])
     act(() => screen.getByRole('button', { name: 'Records' }).click())
-    expect(layer().props.updateTriggers.getFillColor).toBe('records')
+    expect(layer().props.updateTriggers.getFillColor).toEqual(['records', null])
     expect([...document.querySelectorAll('.legend-edge')].map((el) => el.textContent))
       .toEqual(['1', '10', '100', '1K', '10K', '100K', '1M+'])
     expect(urls()).toHaveLength(1)
@@ -357,10 +371,11 @@ describe('a year range', () => {
     expect(visibleLayers()).toEqual([])
   })
 
-  it('shows the year control under the scale toggle', () => {
+  it('shows the year control under the scale toggle, then the Draw a box button', () => {
     render(<HexMap overview={OVERVIEW} species={null} years={null} yearBounds={{ firstYear: 1784, lastYear: 2026 }} />)
     const controls = document.querySelector('.top-left-controls')
-    expect([...controls.children].map((el) => el.className)).toEqual(['hex-size-label', 'variable-toggle', 'year-filter'])
+    expect([...controls.children].map((el) => el.className))
+      .toEqual(['hex-size-label', 'variable-toggle', 'year-filter', 'draw-box'])
   })
 })
 
@@ -452,7 +467,7 @@ describe('a rank map', () => {
     expect(urls()).toEqual([`/api/ranks/genus/hexes?res=4&${TURDUS_PATH}`])
     expect(visibleLayers()).toEqual([`rank-${TURDUS_ID}-all-r4`])
     const layer = () => mapState.layers.find((l) => l.id === `rank-${TURDUS_ID}-all-r4`)
-    expect(layer().props.updateTriggers.getFillColor).toBe('species')
+    expect(layer().props.updateTriggers.getFillColor).toEqual(['species', null])
     const caption = document.querySelector('.legend-caption')
     expect(caption.textContent).toBe('Species of Turdus per hexagon')
     expect(caption.querySelector('i').textContent).toBe('Turdus')
@@ -461,7 +476,7 @@ describe('a rank map', () => {
     expect(document.querySelector('.legend-summary').textContent).toBe('965,537 records in 2 hexagons')
 
     act(() => screen.getByRole('button', { name: 'Records' }).click())
-    expect(layer().props.updateTriggers.getFillColor).toBe('records')
+    expect(layer().props.updateTriggers.getFillColor).toEqual(['records', null])
     expect(document.querySelector('.legend-caption').textContent).toBe('Records of Turdus per hexagon')
     expect([...document.querySelectorAll('.legend-edge')].map((el) => el.textContent))
       .toEqual(['1', '10', '100', '1K', '10K', '100K', '1M+'])
@@ -540,5 +555,179 @@ describe('the zoom for a resolution', () => {
     for (const res of [4, 5, 6, 7]) {
       expect(pickResolution(zoomShowingResolution(res), null)).toBe(res)
     }
+  })
+})
+
+describe('drawing a box', () => {
+  // A mouse event on the map at [lng, lat], as react-map-gl gives it.
+  function at(lng, lat) {
+    return { lngLat: { lng, lat }, preventDefault: () => {} }
+  }
+
+  it('offers "Draw a box" on the overview and a rank map, greyed out with a reason on a species map', () => {
+    stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} />)
+    expect(screen.getByRole('button', { name: 'Draw a box' }).disabled).toBe(false)
+    rerender(<HexMap overview={OVERVIEW} species={ROBIN} />)
+    const button = screen.getByRole('button', { name: 'Draw a box' })
+    expect(button.disabled).toBe(true)
+    expect(button.closest('[title]').getAttribute('title')).toBe(DRAW_UNAVAILABLE)
+    expect(document.getElementById(button.getAttribute('aria-describedby')).textContent).toBe(DRAW_UNAVAILABLE)
+  })
+
+  it('stops the map panning, shows the hint and the crosshair, and hands on the box and the resolution', () => {
+    const onAreaDrawn = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
+    expect(mapState.props.dragPan).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    expect(mapState.props.dragPan).toBe(false)
+    expect(mapState.props.touchZoomRotate).toBe(false)
+    expect(mapState.props.boxZoom).toBe(false)
+    expect(mapState.props.cursor).toBe('crosshair')
+    expect(screen.getByText(DRAW_HINT)).toBeTruthy()
+    act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
+    act(() => mapState.props.onMouseMove(at(-120.4, 50.6)))
+    // The box shows while it is dragged.
+    expect(mapState.sources['area-box'].geometry.coordinates[0]).toEqual([-120.4, 50.6])
+    act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
+    const resolution = pickResolution(4.5, null)
+    expect(onAreaDrawn).toHaveBeenCalledWith({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, resolution)
+    expect(mapState.props.dragPan).toBe(true)
+    expect(screen.queryByText(DRAW_HINT)).toBeNull()
+  })
+
+  it('draws with one finger too', () => {
+    const onAreaDrawn = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    act(() => mapState.props.onTouchStart({ ...at(-120.6, 50.55), points: [{}] }))
+    act(() => mapState.props.onTouchMove({ ...at(-120.1, 50.8), points: [{}] }))
+    act(() => mapState.props.onTouchEnd({ points: [] }))
+    expect(onAreaDrawn).toHaveBeenCalledWith({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, expect.any(Number))
+  })
+
+  it('cancels with Esc or the button, drawing nothing', () => {
+    const onAreaDrawn = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByText(DRAW_HINT)).toBeNull()
+    expect(mapState.props.dragPan).toBe(true)
+    act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel drawing' }))
+    expect(screen.queryByText(DRAW_HINT)).toBeNull()
+    expect(onAreaDrawn).not.toHaveBeenCalled()
+  })
+
+  it('does not open a hexagon while drawing, nor when the mouse is let go', () => {
+    const onCellClick = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} onCellClick={onCellClick} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
+    act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
+    act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
+    act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
+    expect(onCellClick).not.toHaveBeenCalled()
+  })
+
+  // An area holding the overview's resolution 6 hexagon (8628c9b47ffffff)
+  // and none of the overview's other hexagons, with its outline.
+  const AREA = { box: { west: -130.4, south: 48.8, east: -130.25, north: 48.9 }, res: 6,
+    cells: ['8628c9b47ffffff'], outline: groupOutline(['8628c9b47ffffff']) }
+
+  // The fill colour a layer gives one of its rows.
+  function fillOf(layerId, row) {
+    return mapState.layers.find((layer) => layer.id === layerId).props.getFillColor(row)
+  }
+
+  it('fades every hexagon outside a selected area, at any resolution, keeping the selected ones as they are', () => {
+    render(<HexMap overview={OVERVIEW} species={null} />)
+    const usual = Object.fromEntries([4, 5, 6, 7].map((r) => [r, fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])]))
+    cleanup()
+    const elsewhere = { h3Cell: '862800b37ffffff', occurrences: 10, distinctSpecies: 5 }
+    render(<HexMap overview={{ ...OVERVIEW, rows: { ...OVERVIEW.rows, 6: [...OVERVIEW.rows[6], elsewhere] } }}
+      species={null} selectedArea={AREA} />)
+    // The selected hexagon, the resolution 7 one inside it and the
+    // resolution 4 and 5 ones that hold it keep their colour.
+    for (const r of [4, 5, 6, 7]) {
+      expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])).toEqual(usual[r])
+    }
+    // A hexagon outside the area keeps its colour at a fifth of its opacity.
+    const faded = fillOf(overviewLayerId(6), elsewhere)
+    expect(faded.slice(0, 3)).toEqual(usual[6].slice(0, 3))
+    expect(faded[3]).toBe(Math.round(usual[6][3] * FADED_SHARE))
+    expect(FADED_SHARE).toBe(0.2)
+    // deck.gl is told the colours changed.
+    expect(mapState.layers.find((layer) => layer.id === overviewLayerId(6)).props.updateTriggers.getFillColor)
+      .toEqual(['species', '6:-130.4,48.8,-130.25,48.9'])
+  })
+
+  it('draws one outline around the whole group and the dashed box, and no outline per hexagon', () => {
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
+    expect(mapState.sources['area-group']).toBe(AREA.outline)
+    expect(mapState.sources['area-box'].geometry.coordinates).toEqual(
+      [[-130.4, 48.8], [-130.25, 48.8], [-130.25, 48.9], [-130.4, 48.9], [-130.4, 48.8]])
+    expect(mapState.layers.some((layer) => layer.id.startsWith('selected-area'))).toBe(false)
+    expect(mapState.layers.every((layer) => layer.props.stroked === false || layer.props.filled !== false)).toBe(true)
+  })
+
+  it('fits the whole group in view when the page opens on an area', () => {
+    // The box around Kamloops at resolution 6: 45 hexagons, reaching past it.
+    const box = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
+    const cells = boxCells(box, 6)
+    const kamloops = { box, res: 6, cells, outline: groupOutline(cells) }
+    mapState.fitBounds = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={kamloops} />)
+    act(() => mapState.onLoad())
+    const [[[west, south], [east, north]]] = mapState.fitBounds.mock.calls[0]
+    expect([[west, south], [east, north]]).toEqual(outlineBounds(kamloops.outline))
+    expect(west).toBeLessThan(box.west)
+    expect(south).toBeLessThan(box.south)
+    expect(east).toBeGreaterThan(box.east)
+    expect(north).toBeGreaterThan(box.north)
+  })
+
+  it('fades nothing with no area selected', () => {
+    render(<HexMap overview={OVERVIEW} species={null} />)
+    expect(mapState.layers.find((layer) => layer.id === overviewLayerId(6)).props.updateTriggers.getFillColor)
+      .toEqual(['species', null])
+    expect(mapState.sources['area-group']).toBeUndefined()
+  })
+
+  it('offers Clear area while an area exists, and Show area while its panel is closed, beside Draw a box', () => {
+    const onClear = vi.fn()
+    const onShow = vi.fn()
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} />)
+    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
+    rerender(<HexMap overview={OVERVIEW} species={null} onClearArea={onClear} onShowArea={onShow} />)
+    const buttons = [...document.querySelectorAll('.draw-box-buttons button')].map((button) => button.textContent)
+    expect(buttons).toEqual(['Draw a box', 'Show area', 'Clear area'])
+    fireEvent.click(screen.getByRole('button', { name: 'Show area' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear area' }))
+    expect(onShow).toHaveBeenCalledTimes(1)
+    expect(onClear).toHaveBeenCalledTimes(1)
+    // Not while drawing a new box.
+    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
+  })
+
+  it('shows neither on a single species map, where the area is not shown', () => {
+    stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
+    render(<HexMap overview={OVERVIEW} species={ROBIN} onClearArea={vi.fn()} onShowArea={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
+  })
+
+  it('shows the message about a box too small or too big, which its x dismisses', () => {
+    const onDismiss = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} areaMessage="This box is about 9.9 km², too small."
+      onDismissAreaMessage={onDismiss} />)
+    expect(screen.getByRole('alert').textContent).toContain('This box is about 9.9 km², too small.')
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss this message' }))
+    expect(onDismiss).toHaveBeenCalled()
   })
 })

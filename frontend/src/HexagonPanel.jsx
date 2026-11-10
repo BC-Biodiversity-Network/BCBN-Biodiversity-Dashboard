@@ -3,7 +3,7 @@ import { cellArea, getResolution } from 'h3-js'
 
 import { cellExportUrl, fetchCell } from './api'
 import CsvDownload from './CsvDownload'
-import { gbifCellSearchUrl } from './gbifLinks'
+import { GBIF_COUNT_NOTE, gbifCellSearchUrl } from './gbifLinks'
 import RankName, { rankTitle } from './RankName'
 import { NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
@@ -256,10 +256,7 @@ function SpeciesRecords({ asked, cell, yearsCounted }) {
           See these {recordsWord(asked.records)} on GBIF
         </a>
       </p>
-      <p className="hexagon-note">
-        GBIF shows its current data, without the cleaning of our snapshot, so its count may differ a
-        little from ours.
-      </p>
+      <p className="hexagon-note">{GBIF_COUNT_NOTE}</p>
     </>
   )
 }

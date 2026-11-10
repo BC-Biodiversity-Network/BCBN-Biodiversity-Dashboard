@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+
 import { cellToBoundary } from 'h3-js'
 import { describe, expect, it } from 'vitest'
 
-import { GBIF_CHECKLIST_KEY, cellWkt, gbifCellSearchUrl } from './gbifLinks'
+import {
+  BC_BOUNDARY_WKT, GBIF_CHECKLIST_KEY, GBIF_COUNT_NOTE, cellWkt, gbifBcSearchUrl, gbifCellSearchUrl,
+} from './gbifLinks'
 
 const CELL = '8728d1aacffffff'
 
@@ -48,5 +53,52 @@ describe('the GBIF search link', () => {
     const url = new URL(gbifCellSearchUrl({ keys: ['59PMB'], cell: CELL, years: [2000, 2020] }))
     expect(url.searchParams.get('year')).toBe('2000,2020')
     expect(url.searchParams.getAll('taxonKey')).toEqual(['59PMB'])
+  })
+})
+
+// The BC polygon file as it is on disk, and the SHA-1 of the file it was
+// copied from (~/Desktop/BCBN/Results/bc_boundary_gbif.wkt, the polygon of
+// GBIF download 0009771-260928105237408; see geo/README.md). Read from
+// frontend/, where the tests run.
+const BC_FILE = readFileSync('src/geo/bc_boundary_gbif.wkt', 'utf8')
+const BC_FILE_SHA1 = '07b56f163b7ada86023a415c9d007bbb4cfff125'
+
+describe('the BC records link', () => {
+  it('uses the polygon file unchanged, the one our GBIF download used', () => {
+    expect(createHash('sha1').update(BC_FILE).digest('hex')).toBe(BC_FILE_SHA1)
+    expect(BC_BOUNDARY_WKT).toBe(BC_FILE)
+    expect(BC_FILE.length).toBe(5533)
+    expect(BC_FILE.startsWith('POLYGON ((-135.06414 59.55753, ')).toBe(true)
+    expect(BC_FILE.endsWith(', -135.06414 59.55753))')).toBe(true)
+  })
+
+  it('carries the full polygon unchanged, every key, the checklist and present records, and no years', () => {
+    const url = new URL(gbifBcSearchUrl({ keys: ['49JFH'] }))
+    expect(url.origin + url.pathname).toBe('https://www.gbif.org/occurrence/search')
+    expect(url.searchParams.get('geometry')).toBe(BC_FILE)
+    expect(url.searchParams.get('checklistKey')).toBe(GBIF_CHECKLIST_KEY)
+    expect(url.searchParams.getAll('taxonKey')).toEqual(['49JFH'])
+    expect(url.searchParams.get('occurrenceStatus')).toBe('PRESENT')
+    expect(url.searchParams.has('year')).toBe(false)
+  })
+
+  it('gives one taxonKey per key, a card\'s merged keys included, in the order given', () => {
+    const url = new URL(gbifBcSearchUrl({ keys: ['CVW5J', 'VP2T6', 'OLD1'] }))
+    expect(url.searchParams.getAll('taxonKey')).toEqual(['CVW5J', 'VP2T6', 'OLD1'])
+  })
+
+  it('has the same parameters, in the same order, as the hexagon link', () => {
+    const names = (address) => [...new URL(address).searchParams.keys()]
+    expect(names(gbifBcSearchUrl({ keys: ['A', 'B'] })))
+      .toEqual(names(gbifCellSearchUrl({ keys: ['A', 'B'], cell: CELL })))
+  })
+
+  it('is 6,209 characters long for Sockeye Salmon', () => {
+    expect(gbifBcSearchUrl({ keys: ['49JFH'] }).length).toBe(6209)
+  })
+
+  it('shares its note with the hexagon panel', () => {
+    expect(GBIF_COUNT_NOTE).toBe(
+      'GBIF shows its current data, without the cleaning of our snapshot, so its count may differ a little from ours.')
   })
 })

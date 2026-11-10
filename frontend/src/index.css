@@ -879,6 +879,17 @@ body {
   color: #555;
 }
 
+/* The link to the species' BC records on GBIF and the note under it. */
+.card-section .card-gbif-link {
+  margin: 6px 0 2px;
+}
+
+.card-section .card-gbif-note {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  color: #555;
+}
+
 .card-datasets {
   margin: 0;
   padding: 0;

@@ -1,5 +1,9 @@
 import { cellToBoundary } from 'h3-js'
 
+// BC's boundary, the polygon our GBIF download used, read as plain text
+// exactly as it is in the file (see geo/README.md for where it comes from).
+import BC_BOUNDARY_WKT from './geo/bc_boundary_gbif.wkt?raw'
+
 // Links to GBIF's own occurrence search, so a visitor can see the records
 // behind a number on the site.
 
@@ -12,6 +16,14 @@ export const GBIF_OCCURRENCE_SEARCH = 'https://www.gbif.org/occurrence/search'
 // must name it: without it GBIF reads them as keys of its old backbone and
 // finds nothing.
 export const GBIF_CHECKLIST_KEY = '7ddf754f-d193-4cc9-b351-99906754a03b'
+
+// The note that goes under every link to GBIF's records, so nobody is
+// surprised when GBIF's count is not ours.
+export const GBIF_COUNT_NOTE = 'GBIF shows its current data, without the cleaning of our snapshot, so its count '
+  + 'may differ a little from ours.'
+
+// BC's boundary as the link sends it: the file's text, unchanged.
+export { BC_BOUNDARY_WKT }
 
 // How many decimals of a degree the hexagon's corners keep in the link:
 // six is about 0.1 m, far finer than any hexagon.
@@ -34,11 +46,26 @@ export function cellWkt(cell) {
 // search: checklistKey, taxonKey (once per key), geometry, occurrenceStatus
 // and year ("from,to").
 export function gbifCellSearchUrl({ keys, cell, years = null }) {
+  return gbifSearchUrl({ keys, geometry: cellWkt(cell), years })
+}
+
+// The address of a GBIF occurrence search for some species keys (a card's
+// own key and every key merged into it) anywhere in BC: inside the polygon
+// our GBIF download used, PRESENT records only, every year. The same
+// parameters as the hexagon's link, with BC's boundary as the geometry.
+export function gbifBcSearchUrl({ keys }) {
+  return gbifSearchUrl({ keys, geometry: BC_BOUNDARY_WKT })
+}
+
+// Writes a GBIF occurrence search address, the one place both links are
+// made: the Catalogue of Life checklist, one taxonKey per species key, the
+// area as WKT, PRESENT records only, and the years ([from, to]) when given.
+function gbifSearchUrl({ keys, geometry, years = null }) {
   const params = new URLSearchParams({ checklistKey: GBIF_CHECKLIST_KEY })
   for (const key of keys) {
     params.append('taxonKey', key)
   }
-  params.set('geometry', cellWkt(cell))
+  params.set('geometry', geometry)
   params.set('occurrenceStatus', 'PRESENT')
   if (years) {
     params.set('year', `${years[0]},${years[1]}`)

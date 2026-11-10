@@ -7,6 +7,7 @@ import { ClassificationLine } from './RankCard'
 import OglBcStatement from './OglBcStatement'
 import { RANKS, speciesDatasetsSearch } from './route'
 import { BCSEE_URL, bcseeCitation, bcseeCitationEnd, citationDate, colRelease } from './sources'
+import { GBIF_COUNT_NOTE, gbifBcSearchUrl } from './gbifLinks'
 
 // The BCSEE values that are conservation statuses, each with its own chip
 // colour. Every other value (Not Reviewed, Unknown, Accidental, No Status,
@@ -489,8 +490,9 @@ function MergedRecordsNote({ card }) {
 
 // The records section: how many, over which years, from how many datasets,
 // how many have no date, and the GBIF datasets with the most records of the
-// species. Says how many records came from keys merged into this one. The
-// GBIF download the records were counted from is cited in the Sources
+// species. Says how many records came from keys merged into this one, and
+// links to all of the species' BC records on GBIF (see BcRecordsOnGbif).
+// The GBIF download the records were counted from is cited in the Sources
 // section, so it is not repeated here.
 function RecordsSection({ card }) {
   const { records } = card
@@ -506,6 +508,7 @@ function RecordsSection({ card }) {
         {noDate && ` ${noDate}`}
       </p>
       {records.merged_keys.length > 0 && <MergedRecordsNote card={card} />}
+      <BcRecordsOnGbif card={card} />
       {card.top_datasets.length > 0 && (
         <>
           <h4>GBIF datasets with the most records of this species</h4>
@@ -523,6 +526,25 @@ function RecordsSection({ card }) {
         </>
       )}
     </section>
+  )
+}
+
+// The link to every BC record of the species on GBIF, in a new tab: a GBIF
+// search for the card's own key and every key merged into it (the same
+// keys the hexagon panel's link uses), inside the polygon our GBIF
+// download used, every year. Under it, the same note as the hexagon
+// panel's: GBIF's count is its current one, without our cleaning.
+function BcRecordsOnGbif({ card }) {
+  const keys = [card.specieskey, ...card.records.merged_keys]
+  return (
+    <>
+      <p className="card-gbif-link">
+        <a href={gbifBcSearchUrl({ keys })} target="_blank" rel="noopener noreferrer">
+          See this species&apos; BC records on GBIF
+        </a>
+      </p>
+      <p className="card-gbif-note">{GBIF_COUNT_NOTE}</p>
+    </>
   )
 }
 

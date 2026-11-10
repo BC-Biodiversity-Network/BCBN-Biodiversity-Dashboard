@@ -1369,7 +1369,17 @@ the same parameters: Lucia opened that hexagon's link for 2000 to 2020 by
 hand on 2026-11-03, and it showed Turdus migratorius, the years 2000 to
 2020, one location filter around 48.43N 123.35W and 372 results, the same
 as the API. The panel says GBIF shows its current data,
-without our snapshot's cleaning, so its count may differ a little. The side
+without our snapshot's cleaning, so its count may differ a little. The
+species card's link to all of the species' BC records on GBIF
+(`gbifBcSearchUrl`) uses the same parameters with no year, and as its
+geometry the polygon our GBIF download used, unchanged:
+`frontend/src/geo/bc_boundary_gbif.wkt`, a copy of the file
+`make_gbif_boundary.py` wrote for download 0009771-260928105237408 (see
+`frontend/src/geo/README.md`; a test checks its SHA-1). That link is
+about 6,200 characters (6,209 for Sockeye Salmon). The GBIF API refuses
+an address that long (it took 3,500 characters and refused 4,000 when
+tested on 2026-11-09), but www.gbif.org opens it: for Sockeye Salmon
+(49JFH) it showed 170,767 records, against 168,427 on the card. The side
 panel shows one thing
 at a time: the hexagon panel when the address has `?cell=<H3 id>` (on a
 species map the card is only covered, and comes back when the panel
@@ -1594,7 +1604,11 @@ shows, top to bottom:
   datasets with the most records of the species (linked to GBIF), under the
   heading "GBIF datasets with the most records of this species" (the GBIF
   download they were counted from is cited in the Sources section only),
-  and how many came from merged keys and
+  a link "See this species' BC records on GBIF" (a new tab) with the hexagon
+  panel's note under it (GBIF shows its current data, without our
+  snapshot's cleaning, so its count may differ a little; the two share
+  `GBIF_COUNT_NOTE` in `frontend/src/gbifLinks.js`), and how many came
+  from merged keys and
   why each was merged: the same species name, or a name the Catalogue of
   Life lists as a synonym of this species (placeholder wording). A card
   opened from a typed old key says the same.

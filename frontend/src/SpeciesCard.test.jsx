@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs'
+
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import SpeciesCard, { entryScope, noDateSentence, scopeSummary } from './SpeciesCard'
+
+// The BC polygon file the species card's GBIF link must carry unchanged
+// (read from frontend/, where the tests run).
+const BC_FILE = readFileSync('src/geo/bc_boundary_gbif.wkt', 'utf8')
 
 const BCSEE = 'BC Species and Ecosystems Explorer (BCSEE)'
 const SOURCE = { status_source: BCSEE, status_source_date: '2026-05-05', status_pulled_on: '2026-09-26' }
@@ -432,6 +438,40 @@ describe('records and merged keys', () => {
     expect(heading.nextElementSibling.className).toBe('card-datasets')
     expect(records.textContent).not.toContain('GBIF download')
     expect(within(records).queryByRole('link', { name: META.gbif_download.doi_url })).toBe(null)
+  })
+
+  it('links to the species\' BC records on GBIF, in a new tab, with the note under it', async () => {
+    const { panel } = await showCard(makeCard())
+    const records = within(panel).getByRole('region', { name: 'Records' })
+    const link = within(records).getByRole('link', { name: "See this species' BC records on GBIF" })
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    const url = new URL(link.href)
+    expect(url.origin + url.pathname).toBe('https://www.gbif.org/occurrence/search')
+    expect(url.searchParams.getAll('taxonKey')).toEqual(['59PMB'])
+    // The whole BC polygon, exactly as in the file our download used.
+    expect(url.searchParams.get('geometry')).toBe(BC_FILE)
+    expect(url.searchParams.get('occurrenceStatus')).toBe('PRESENT')
+    expect(url.searchParams.has('year')).toBe(false)
+    expect(records.textContent).toContain(
+      'GBIF shows its current data, without the cleaning of our snapshot, so its count may differ a little from ours.')
+    // Under the record count, above the GBIF datasets.
+    const order = [...records.querySelectorAll('p, h4')].map((element) => element.className || element.tagName)
+    expect(order.indexOf('card-gbif-link')).toBeGreaterThan(0)
+    expect(order.indexOf('card-gbif-note')).toBe(order.indexOf('card-gbif-link') + 1)
+    expect(order.indexOf('H4')).toBeGreaterThan(order.indexOf('card-gbif-note'))
+  })
+
+  it('gives the BC records link one taxonKey per key, the merged keys included', async () => {
+    const card = makeCard({
+      specieskey: 'CVW5J', requested_key: 'CVW5J',
+      records: { record_count: 104703, records_no_year: 9, first_year: 1887, last_year: 2026,
+                 n_datasets: 25, merged_keys: ['VP2T6', 'OLD1'], merged_record_count: 670 },
+    })
+    const { panel } = await showCard(card)
+    const link = within(panel).getByRole('link', { name: "See this species' BC records on GBIF" })
+    expect(new URL(link.href).searchParams.getAll('taxonKey')).toEqual(['CVW5J', 'VP2T6', 'OLD1'])
+    expect(new URL(link.href).searchParams.get('geometry')).toBe(BC_FILE)
   })
 
   it('writes the no-date sentence for one, several and none', () => {

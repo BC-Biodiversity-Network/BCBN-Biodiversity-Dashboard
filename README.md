@@ -1207,15 +1207,18 @@ downloads" below).
 
 At the November 4, 2026 meeting Diane and Evan asked for search results as
 a table to read into R. Four endpoints give them as CSV files
-(`backend/api/export.py`; the area one since the area search below). Only what comes from the sources goes in, as it
-is: no record counts, years, abstracts or anything else BCBN worked out.
+(`backend/api/export.py`; the area one since the area search below). What
+comes from the sources goes in as it is, plus one number BCBN works out
+for the species lists: each species' record count, the number the list
+shows (Evan agreed on 2026-11-10 that the lists should have it). Nothing
+else BCBN works out (years, abstracts and so on) goes in.
 
 | Endpoint | Options | Columns |
 | --- | --- | --- |
 | `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `creators`, `published`, `catalogue`, `doi`, `link` |
-| `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status` |
-| `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` |
-| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` (the species inside the box) |
+| `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
+| `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1231,7 +1234,16 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   uses. `scientific_name` is the card's Catalogue of Life name without
   authorship, `english_name` the English name the card shows, and
   `bcsee_status` the statuses the list chips show (Red, Blue, Yellow,
-  Exotic) joined with `; `. `gbif_link` is the GBIF search the hexagon
+  Exotic) joined with `; `. `records` is the species' GBIF records as
+  its list counts them, for the same options: in BC for a rank, in the
+  hexagon, or in every hexagon the box touches, for the years asked for,
+  merged keys included, as on the maps (the rank card's `record_count`,
+  the hexagon panel's and area panel's `records`). Header line 2 ends by
+  saying so, for example `records: GBIF records counted by BCBN from the
+  GBIF download of 2026-10-04, for this list's area and years` (for a
+  rank, `in BC, for this list's years`), so there are still 4 header
+  lines. The date is the date of the download's timestamp in `/api/meta`
+  in UTC, the date GBIF cites it by and the species card shows. `gbif_link` is the GBIF search the hexagon
   panel links to for that species: its card key and every key merged into
   it, the hexagon, and the years counted.
 - **The file.** UTF-8 with a byte order mark (BOM) at the very start, so
@@ -1249,7 +1261,8 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   `"# BCBN species list for hexagon 8712d2a94ffffff, exported 2026-11-09"`.
   The 4 lines are: what the file is and the
   export date; how the list was made (the search words, filters, years,
-  rank path or hexagon, and order used); the sources (for datasets the
+  rank path or hexagon, and order used, and for species what `records`
+  means); the sources (for datasets the
   Lunaris records, for species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
   `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a

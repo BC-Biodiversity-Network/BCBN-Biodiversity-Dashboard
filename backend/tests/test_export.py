@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 import api.cells
 import api.ranks
-from api.export import BOM, export_date, file_name, km2_text, one_line
+from api.export import BOM, download_date, export_date, file_name, km2_text, one_line
 from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.main import create_app
 from api.settings import Settings
@@ -128,14 +128,17 @@ def test_the_rank_file(client):
                                                phylum="Chordata", year_from=2019, year_to=2020)
     assert header[0] == f"# BCBN species list for phylum Chordata, exported {export_date()}"
     assert header[1] == ("# List: species of phylum Chordata (kingdom Animalia > phylum Chordata); "
-                         "records from 2019 to 2020; sorted by most records first")
+                         "records from 2019 to 2020; sorted by most records first; records: GBIF records "
+                         "counted by BCBN from the GBIF download of 2026-10-04, in BC, for this list's years")
     assert header[2] == ("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test; names: "
                          "Catalogue of Life COL26.6 XR (ChecklistBank 315557); English names and BC "
                          "status: BC Species and Ecosystems Explorer (BCSEE), provincial export of "
                          "2026-05-05, accessed 2026-09-26")
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
+    # The robin's records in 2019 and 2020, as the rank card counts them:
+    # 3 of its 5 (the other 2 have no year).
     assert rows == [{"specieskey": "AAAA", "scientific_name": "Turdus migratorius",
-                     "english_name": "American Robin", "bcsee_status": "Yellow"}]
+                     "english_name": "American Robin", "bcsee_status": "Yellow", "records": "3"}]
     assert response.headers["content-disposition"] == (
         f'attachment; filename="bcbn_species_Chordata_2019-2020_{export_date()}.csv"')
 
@@ -146,12 +149,14 @@ def test_the_hexagon_file(client):
     # The hexagon's own size, never its resolution number.
     size = km2_text(h3.cell_area(CELL_A, "km^2"))
     assert header[1] == (f"# List: species in H3 hexagon {CELL_A}, a hexagon of about {size}; "
-                         "sorted by most records first")
+                         "sorted by most records first; records: GBIF records counted by BCBN from the GBIF "
+                         "download of 2026-10-04, for this list's area and years")
     assert size == "5.1 km²"
     assert "resolution" not in "".join(header)
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "gbif_link"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records", "gbif_link"]
     assert keys(rows) == ["AAAA", "CCCC"]
+    assert [row["records"] for row in rows] == ["5", "1"]
     # The card's name without its authorship, and empty values where the
     # species has no English name or shown status.
     assert rows[1]["scientific_name"] == "Bombus (Pyrobombus) vosnesenskii"
@@ -339,6 +344,47 @@ def test_the_species_files_hold_the_lists_in_their_order(client, params):
     _, _, _, rows = download(client, f"/api/export/hexes/{CELL_A}", **params)
     assert len(rows) == panel["matching"]
     assert keys(rows) == [result["specieskey"] for result in panel["results"]]
+
+
+@pytest.mark.parametrize("params", [{}, {"year_from": 2021}, {"year_from": 2019, "year_to": 2020},
+                                    {"year_to": 2019}, {"q": "robin"}, {"sort": "fewest_records"}])
+def test_the_records_column_is_the_lists_own_count(client, params):
+    """Each species' records in a rank file and a hexagon file are the
+    number its list gives it, for the same years, name filter and order."""
+    card = client.get("/api/ranks/kingdom", params={**ANIMALIA, **params}).json()
+    _, _, _, rows = download(client, "/api/export/ranks/kingdom", **ANIMALIA, **params)
+    assert [(row["specieskey"], int(row["records"])) for row in rows] == \
+        [(member["specieskey"], member["record_count"]) for member in card["members"]]
+    for cell in (CELL_A, CELL_B):
+        panel = client.get(f"/api/hexes/{cell}", params={**params, "limit": 200}).json()
+        _, _, _, rows = download(client, f"/api/export/hexes/{cell}", **params)
+        assert [(row["specieskey"], int(row["records"])) for row in rows] == \
+            [(result["specieskey"], result["records"]) for result in panel["results"]]
+
+
+def test_the_records_column_sits_after_bcsee_status_and_counts_merged_keys(client):
+    """records comes after bcsee_status and before gbif_link; a species
+    with an old key merged into it counts both, as the maps do (BBBB, with
+    OLD1 merged into it, in hexagon B)."""
+    _, _, columns, rows = download(client, f"/api/export/hexes/{CELL_B}")
+    assert columns.index("records") == columns.index("bcsee_status") + 1 == columns.index("gbif_link") - 1
+    panel = client.get(f"/api/hexes/{CELL_B}").json()
+    willow = next(row for row in rows if row["specieskey"] == "BBBB")
+    assert int(willow["records"]) == next(result["records"] for result in panel["results"]
+                                          if result["specieskey"] == "BBBB")
+
+
+def test_the_download_date_is_gbifs_utc_date():
+    """The header names the GBIF download by the date of its UTC timestamp,
+    as GBIF cites it and the species card shows it, even when it is still
+    the day before in Vancouver."""
+    assert download_date({"gbif_download": {"date": "2026-10-04T03:10:39Z"}}) == "2026-10-04"
+
+
+def test_the_datasets_file_has_no_records_column(client):
+    _, header, columns, _ = download(client, "/api/export/datasets")
+    assert columns == ["title", "creators", "published", "catalogue", "doi", "link"]
+    assert "records:" not in "".join(header)
 
 
 def test_filters_and_sort_change_the_rows(client):

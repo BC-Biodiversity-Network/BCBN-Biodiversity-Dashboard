@@ -172,10 +172,12 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
     # The hexagons' size, never their resolution number.
     assert header[1] == (f"# List: species in the {count:,} hexagons of about 1,770 km² each that touch the box "
                          "west -131, south 39.5, east -124.5, north 49.5; only kingdom Animalia "
-                         "(kingdom Animalia); records from 2020 to 2021; sorted by most records first")
+                         "(kingdom Animalia); records from 2020 to 2021; sorted by most records first; "
+                         "records: GBIF records counted by BCBN from the GBIF download of 2026-10-04, "
+                         "for this list's area and years")
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
     assert header[3] == "# To read in R: read.csv(file, skip = 4)"
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "gbif_link"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records", "gbif_link"]
     # Paging options never cut the download.
     assert [row["specieskey"] for row in rows] == ["AAAA", "CCCC"]
     assert rows[0]["scientific_name"] == "Turdus migratorius" and rows[0]["bcsee_status"] == "Yellow"
@@ -186,10 +188,13 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
 
 
 def test_the_download_matches_the_list(client):
-    for options in ({}, {"q": "robin"}, {"sort": "english"}, {"status": "yellow"}):
+    """The same species in the same order as the list, each with the record
+    count the list gives it, with and without a year range."""
+    for options in ({}, {"q": "robin"}, {"sort": "english"}, {"status": "yellow"}, {"year_from": 2020},
+                    {"year_from": 2019, "year_to": 2020}, {**ANIMALIA, "year_to": 2020}):
         answer = area(client, **BOTH, **options, limit=200)
         _, _, rows = read_download(client.get("/api/export/area", params={**BOTH, **options}))
-        assert [row["specieskey"] for row in rows] == [key for key, _ in listed(answer)]
+        assert [(row["specieskey"], int(row["records"])) for row in rows] == listed(answer)
     response = client.get("/api/export/area", params=NEAR_A)
     assert response.headers["content-disposition"] == f'attachment; filename="bcbn_species_area_{export_date()}.csv"'
 

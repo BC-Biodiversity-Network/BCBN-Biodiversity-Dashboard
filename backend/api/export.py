@@ -17,22 +17,28 @@ ranks.rank_card and cells.cell_species with no page limit), so a download
 always holds exactly what the list holds, the species sensitive.py hides
 left out the same way, and a bad request gets the same answer.
 
-Only what comes from the sources, as it is: no record counts, years or
-anything else BCBN worked out.
+What comes from the sources, as it is, and for the species lists one
+number BCBN works out: each species' record count, the same number the list
+shows (asked for by Evan on 2026-11-10). Nothing else BCBN computes (years,
+first and last records, and so on) goes in a file.
 
     Datasets (6 columns): title, creators, published, catalogue, doi, link
         title and creators as harvested (creators joined with "; "), the
         issued date as stored, the catalogue name the page shows, the DOI
         when the record's identifier is one (never another kind of id), and
         the link to the original catalogue the page uses.
-    Species lists (4 columns): specieskey, scientific_name, english_name,
-        bcsee_status: the card's Catalogue of Life name (no authorship),
-        the English name the card shows, and the BC statuses the list chips
-        show (Red, Blue, Yellow, Exotic) joined with "; ".
-    Hexagon species list (5 columns): the same 4 and gbif_link, the GBIF
+    Species lists (5 columns): specieskey, scientific_name, english_name,
+        bcsee_status, records: the card's Catalogue of Life name (no
+        authorship), the English name the card shows, the BC statuses the
+        list chips show (Red, Blue, Yellow, Exotic) joined with "; ", and
+        the species' GBIF records as the list counts them (in BC for a
+        rank, in the hexagon or the box's hexagons, for the years asked
+        for; merged keys included, as on the maps). Line 2 of the header
+        says what records means and names the GBIF download's date.
+    Hexagon species list (6 columns): the same 5 and gbif_link, the GBIF
         search the hexagon panel links to for that species, hexagon and
         years (gbif_links.py).
-    Area species list (5 columns): the same 5, gbif_link being the GBIF
+    Area species list (6 columns): the same 6, gbif_link being the GBIF
         search for that species inside the box (area.py).
 
 The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
@@ -79,7 +85,7 @@ R_LINE = "To read in R: read.csv(file, skip = 4)"
 
 # The columns of each file.
 DATASET_COLUMNS = ["title", "creators", "published", "catalogue", "doi", "link"]
-SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status"]
+SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
 
 # What each dataset row is read from (d is lunaris_datasets).
@@ -253,10 +259,26 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
 # --- Species lists ---------------------------------------------------------------
 
 
-def species_row(result):
-    """Return one species' 4 columns from a list result (species_list.py)."""
+def species_row(result, records):
+    """Return one species' 5 columns from a list result (species_list.py)
+    and its record count as the list shows it (records)."""
     return [result["specieskey"], result["col_name"], result["english_name"],
-            "; ".join(result["statuses"]) or None]
+            "; ".join(result["statuses"]) or None, records]
+
+
+def download_date(meta):
+    """Return the GBIF download's date, YYYY-MM-DD: the date of its
+    timestamp in /api/meta in UTC, the date GBIF cites it by and the
+    species card shows ("GBIF.org (4 October 2026)")."""
+    return meta["gbif_download"]["date"][:10]
+
+
+def records_column_text(meta, where):
+    """Return the end of header line 2 saying what the records column
+    holds, without adding a line: GBIF records counted by BCBN from the GBIF
+    download of its date, where (for example "for this list's area and
+    years")."""
+    return f"records: GBIF records counted by BCBN from the GBIF download of {download_date(meta)}, {where}"
 
 
 def species_source_line(meta):
@@ -299,9 +321,9 @@ def export_rank(data, date, rank, given, q=None, statuses=None, sort=None, year_
     for these options, in its order. The list is the card's own (rank_card
     with no page limit), so it raises what the card raises."""
     card = rank_card(data, rank, given, 0, None, q, statuses, sort, year_from, year_to)
-    rows = [species_row(member) for member in card["members"]]
+    rows = [species_row(member, member["record_count"]) for member in card["members"]]
     parts = [f"species of {card['rank']} {card['name']} ({path_text(card['path'])})",
-             *species_options_text(card)]
+             *species_options_text(card), records_column_text(data.meta, "in BC, for this list's years")]
     header = [f"BCBN species list for {card['rank']} {card['name']}, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species", [card["name"], years_part(card)], date)
@@ -318,13 +340,15 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
     answer = cell_species(data, cell, year_from, year_to, q, None, 0, None, rank, rank_given, statuses, sort)
     years = answer["years_counted"]
     keys = cards_gbif_keys(data.cursor(), [result["specieskey"] for result in answer["results"]])
-    rows = [species_row(result) + [gbif_cell_search_url(keys[result["specieskey"]], answer["cell"], years)]
+    rows = [species_row(result, result["records"])
+            + [gbif_cell_search_url(keys[result["specieskey"]], answer["cell"], years)]
             for result in answer["results"]]
     parts = [f"species in H3 hexagon {answer['cell']}, a hexagon of about {km2_text(h3.cell_area(answer['cell'], 'km^2'))}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
+    parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for hexagon {answer['cell']}, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species_hexagon",
@@ -357,7 +381,7 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
     (area_species with no page limit), so it raises what that raises."""
     answer = area_species(data, west, south, east, north, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
-    rows = [species_row(result) + [result["gbif_link"]] for result in answer["results"]]
+    rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
     box = answer["box"]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
@@ -368,6 +392,7 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
+    parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for an area, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)

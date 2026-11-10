@@ -39,14 +39,41 @@ export function cellWkt(cell) {
   return `POLYGON((${corners.join(',')}))`
 }
 
-// The address of a GBIF occurrence search for some species keys (a card's
-// own key and every key merged into it) inside a hexagon, PRESENT records
+// The address of a GBIF occurrence search inside a hexagon, PRESENT records
 // only (as in our download), for a year range ([from, to], both included)
-// or every year (null). The parameters are those of GBIF's occurrence
-// search: checklistKey, taxonKey (once per key), geometry, occurrenceStatus
-// and year ("from,to").
-export function gbifCellSearchUrl({ keys, cell, years = null }) {
+// or every year (null). With keys (a card's own key and every key merged
+// into it) it finds only that species; with none (the all-species hexagon
+// panel's link) every species in the hexagon. The parameters are those of
+// GBIF's occurrence search: checklistKey, taxonKey (once per key),
+// geometry, occurrenceStatus and year ("from,to").
+export function gbifCellSearchUrl({ keys = [], cell, years = null }) {
   return gbifSearchUrl({ keys, geometry: cellWkt(cell), years })
+}
+
+// The note beside a GBIF link for a list of species (a hexagon's), when the
+// list has filters the link cannot carry, or null when it has none. The
+// link carries the place and the years; a rank (rank, { rank, name }, or
+// null) cannot go yet, as the site has no GBIF key for a rank, and neither
+// can a name filter or a BC status filter (list, { q, status }), which are
+// our own. place says where GBIF searches ("hexagon").
+export function gbifLeftOutNote({ place, rank = null, list = null }) {
+  const leftOut = []
+  if (rank) {
+    leftOut.push(`${rank.rank} ${rank.name}`)
+  }
+  if (list?.q) {
+    leftOut.push('name filter')
+  }
+  if (list?.status?.length) {
+    leftOut.push('BC status filter')
+  }
+  if (leftOut.length === 0) {
+    return null
+  }
+  const named = leftOut.length === 1
+    ? leftOut[0]
+    : `${leftOut.slice(0, -1).join(', ')} and ${leftOut[leftOut.length - 1]}`
+  return `GBIF shows every species in the ${place}: the link leaves out this list's ${named}.`
 }
 
 // The address of a GBIF occurrence search for some species keys (a card's

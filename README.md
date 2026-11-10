@@ -1213,15 +1213,20 @@ downloads" below).
 
 At the November 4, 2026 meeting Diane and Evan asked for search results as
 a table to read into R. Four endpoints give them as CSV files
-(`backend/api/export.py`; the area one since the area search below). Only what comes from the sources goes in, as it
-is: no record counts, years, abstracts or anything else BCBN worked out.
+(`backend/api/export.py`; the area one since the area search below). What
+comes from the sources goes in as it is, plus one number BCBN works out
+for the species lists: each species' record count, the number the list
+shows (Evan agreed on 2026-11-10 that the lists should have it). The
+Datasets file also has each record's own metadata as harvested from
+Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too). Nothing
+else BCBN or its models work out goes in.
 
 | Endpoint | Options | Columns |
 | --- | --- | --- |
-| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `creators`, `published`, `catalogue`, `doi`, `link` |
-| `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status` |
-| `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` |
-| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 4 and `gbif_link` (the species inside the box) |
+| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `publisher`, `places`, `boxes`, `points`, `rights`, `lunaris_id` |
+| `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
+| `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1229,15 +1234,60 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   `rank_card` and `cell_species` with no page limit), so a download always
   matches its list, leaves out the species `sensitive.py` hides (none for
   now), and gets the list's 400 or 404 answer for a bad request.
-- **Columns.** `title` and `creators` as harvested (creators joined with
-  `; `); `published` is the issued date as stored; `catalogue` the
+- **Columns.** `title`, `abstract`, `subjects`, `creators` and
+  `publisher` as harvested; `places` the record's own DataCite
+  `geoLocationPlace` names (not the places we looked up in GeoNames);
+  `boxes` and `points` its DataCite `geoLocationBox` (each `west W, east
+  E, south S, north N`, unchanged even when the edges are swapped) and
+  `geoLocationPoint` (each `lon X, lat Y`); `rights` its DataCite
+  `rightsList`, each entry `name (uri)` or whichever of the two it has
+  (some names are a whole licence in HTML; this is not the licence or
+  access we checked); `lunaris_id` the record's OAI identifier. Creators
+  are joined with `; `; every other list with ` | `, which no harvested
+  value holds (the code refuses a value that does, rather than write a
+  cell that cannot be split again; `;` would not do, as 248 records have a
+  place such as "British Columbia; Canada"). Text is never shortened: on
+  the 2026-11-10 data the longest abstract is 15,967 characters and the
+  longest cell (a subjects list) 21,851, under Excel's 32,767. "As
+  harvested" means as our 2026-10-20 harvest stored it: it took HTML tags
+  out of 762 abstracts and 14 titles and collapsed runs of spaces and line
+  breaks (1,103 abstracts, 54 titles, 38 subject lists), kept one
+  description per record as the abstract (1,684 records have two or more,
+  often an English and a French one), and stored coordinates as numbers,
+  so trailing zeros can differ from the source's text (`52.0125` for
+  `52.01250`; 4,858 of 5,488 coordinates match it exactly). Header line 3
+  of the Datasets file says so in short: `Source: Lunaris dataset records
+  from our harvest of 2026-10-20 (HTML tags removed from titles and
+  abstracts, extra spaces from titles, abstracts and subjects; one
+  description per record); rights are as the source gives them, not
+  checked by BCBN; each row links to the original catalogue`. The API's
+  data files do not store the harvest date, so it is written in
+  `backend/api/export.py` (`LUNARIS_HARVEST_DATE`), and a test checks it
+  against the harvest folder `export_lunaris_datasets.py` reads
+  (`DEFAULT_HARVEST`); change both when the datasets are rebuilt from a
+  new harvest. The source
+  records also have fields the data file does not keep (publication year,
+  resource type, contributors, affiliations, related items, translated
+  titles); there is no language field, only `xml:lang` on some texts.
+  The BC class, organisms, looked-up places, hand decisions and checked
+  licences are never exported. `published` is the issued date as stored; `catalogue` the
   catalogue name the Datasets page shows; `doi` the DOI when the record's
   identifier is one (from the `https://doi.org/` link), else empty, never
   another kind of id; `link` the link to the original catalogue the page
   uses. `scientific_name` is the card's Catalogue of Life name without
   authorship, `english_name` the English name the card shows, and
   `bcsee_status` the statuses the list chips show (Red, Blue, Yellow,
-  Exotic) joined with `; `. `gbif_link` is the GBIF search the hexagon
+  Exotic) joined with `; `. `records` is the species' GBIF records as
+  its list counts them, for the same options: in BC for a rank, in the
+  hexagon, or in every hexagon the box touches, for the years asked for,
+  merged keys included, as on the maps (the rank card's `record_count`,
+  the hexagon panel's and area panel's `records`). Header line 2 says so
+  after the list's options (and before the reserve reminder, when there is
+  one; see the reserves section), for example `records: GBIF records counted by BCBN from the
+  GBIF download of 2026-10-04, for this list's area and years` (for a
+  rank, `in BC, for this list's years`), so there are still 4 header
+  lines. The date is the date of the download's timestamp in `/api/meta`
+  in UTC, the date GBIF cites it by and the species card shows. `gbif_link` is the GBIF search the hexagon
   panel links to for that species: its card key and every key merged into
   it, the hexagon, and the years counted.
 - **The file.** UTF-8 with a byte order mark (BOM) at the very start, so
@@ -1255,8 +1305,10 @@ is: no record counts, years, abstracts or anything else BCBN worked out.
   `"# BCBN species list for hexagon 8712d2a94ffffff, exported 2026-11-09"`.
   The 4 lines are: what the file is and the
   export date; how the list was made (the search words, filters, years,
-  rank path or hexagon, and order used); the sources (for datasets the
-  Lunaris records, for species the GBIF download DOI, the Catalogue of
+  rank path or hexagon, and order used, and for species what `records`
+  means); the sources (for datasets the
+  Lunaris records, the harvest date and what the harvest changed, and that
+  rights are the source's own, not checked by BCBN; for species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
   `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a
   visitor typed are turned into spaces, so they never add a line. The BOM
@@ -1375,7 +1427,8 @@ touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
   `reserve_names`: the names of the reserves the hexagon, or any of the
   box's hexagons, touches, sorted, each once (empty when none).
 - Their downloads (`/api/export/hexes/{cell}`, `/api/export/area`) end
-  header line 2 with "This area includes First Nations reserve land
+  header line 2, after the list's options and the note on the `records`
+  column, with a full stop and "This area includes First Nations reserve land
   (NAMES). Some of these records may have been collected on a reserve. If
   you use them, check whether they were, and if so, whether the Nation
   agreed to the collection. See the Indigenous data page of the site." when
@@ -1502,6 +1555,18 @@ hand on 2026-11-03, and it showed Turdus migratorius, the years 2000 to
 2020, one location filter around 48.43N 123.35W and 372 results, the same
 as the API. The panel says GBIF shows its current data,
 without our snapshot's cleaning, so its count may differ a little. The
+overview's and a rank map's panel (every species in the hexagon) has one
+link "See these records on GBIF" with the same parameters and no
+`taxonKey`, so GBIF shows every species in the hexagon, for the years
+counted (`gbifCellSearchUrl` with no keys). A rank, a name filter or a BC
+status filter cannot go in the link (the site has no GBIF key for a rank
+yet; the other two are our own), so when the list has any of them a note
+names what the link leaves out (`gbifLeftOutNote`), for example "GBIF
+shows every species in the hexagon: the link leaves out this list's genus
+Turdus." Checked against GBIF's occurrence API on 2026-11-10 for the
+hexagon of about 30 km² by Whistler (8628da99fffffff): all years GBIF
+1,022 records, ours 1,002; 2000 to 2020 GBIF 422, ours 428. (gbif.org
+blocks headless browsers, so the page itself needs checking by hand.) The
 species card's link to all of the species' BC records on GBIF
 (`gbifBcSearchUrl`) uses the same parameters with no year, and as its
 geometry the polygon our GBIF download used, unchanged:
@@ -1540,7 +1605,13 @@ rotate, touch zoom, box zoom and double-click zoom are switched off), the
 cursor is a crosshair (set through deck.gl's `getCursor`, which would
 otherwise put its own back), the hover box is hidden, and the hint "Drag to
 draw a box. Esc to cancel." shows; dragging with the mouse or one finger
-draws the box, Esc or the button ("Cancel drawing") cancels. The box's
+draws the box, Esc or the button ("Cancel drawing") cancels, and so does
+any change of page (Back or Forward, a link, another hexagon, area, species
+or rank), so the map never stays in drawing mode on a page it was not
+started on. Whenever the address names a hexagon, the map shows it as it
+was when clicked: it moves to the hexagon when it is off screen and zooms
+to hexagons of its size when the map shows another size (`HexMap.jsx`),
+so the panel and the outline on the map always agree. The box's
 edges keep 4 decimals (about 11 m). The hexagons it selects are those at
 the resolution the map showed when it was drawn that overlap it even by a
 corner (`boxCells` in `frontend/src/area.js`: h3-js
@@ -1595,7 +1666,9 @@ so a shared link opens the same box, fitted in view.
 **The area stays until it is cleared.** Once drawn, the area (its box, the
 outline and the faded hexagons around it) stays on the map and in the
 address until the map's "Clear area" button (beside "Draw a box" while an
-area exists) removes it; drawing a new box replaces it. Every other move
+area exists) removes it; a new box drawn anywhere on the map replaces it
+(one area at a time; a box too small or too big keeps the old area and
+says why). Every other move
 keeps it: clicking a hexagon opens that hexagon's panel on top of the area
 panel, which stays loaded under it; opening a species (from the area's
 list, a hexagon's list or the search box) keeps the area in the address,
@@ -1609,14 +1682,24 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 
 | After | The address entry | Back then |
 | --- | --- | --- |
-| Drawing the first box | added (marked `AREA_FROM_DRAW`; closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
-| Drawing another box | replaced | returns to before the first box |
+| Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
+| Drawing another box (anywhere on the map) | goes back past every entry holding the old box, then added as the area's first entry (closes an open hexagon panel) | returns to before the first box, never to the old box |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
 | Opening a species from the area's list | added | returns to the area panel; the card also offers "Back to this area's species" |
-| "Clear area" on the entry the first box added | acts like Back | (it was Back) |
-| "Clear area" anywhere else (a shared link, or a hexagon's panel open on top) | replaced, keeping a hexagon's panel | goes to the entry before, which may still hold the area (for example the area panel under the hexagon's) |
+| "Clear area" right after drawing (nothing opened since) | goes back to the entry from before the box | returns to what was there before that |
+| "Clear area" with a hexagon's panel or a rank opened over the area | goes back past every entry holding the area, then adds the address without it (a hexagon's panel stays open) | the same as the hexagon panel's x: the map as it was before the box, never the cleared area |
+| "Clear area" on a shared link's area | the link's entry, and any entry added since, become one entry without the area (a hexagon's panel stays open) | leaves the page, as from the link |
+
+"Clear area" takes the area out of the history, not only out of the
+address, and so does a new box for the old one: every entry that holds an
+area records how far it is from the entry before the area began
+(`withAreaHistory`, `clearAreaMove` and `newAreaMove` in
+`frontend/src/route.js`), so neither a panel's x nor Back can bring a
+cleared or replaced area back. A shared link's area is replaced on the
+link's own entry. Forward cannot either once a hexagon's panel or a rank
+was open; right after drawing, Forward can redo the box, as for any Back.
 
 **Download CSV.** Four lists have a "Download CSV" button (the area panel's,
 described above, as well as these three)

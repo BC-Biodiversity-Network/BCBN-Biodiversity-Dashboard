@@ -9,9 +9,9 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  AREA_FROM_DRAW, AREA_LIST, CELL_LIST, INDIGENOUS_PAGE_SEARCH, PANEL_FROM_CLICK, isPlainMap, keptListChoices,
-  mapSearch, rankKey, readArea, readAreaPanelOpen, readCell, readList, readMapYears, readRank, readReservesShown,
-  readSpeciesKey, speciesDatasetsSearch, withReserves, withYears,
+  AREA_LIST, CELL_LIST, INDIGENOUS_PAGE_SEARCH, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices,
+  mapSearch, newAreaMove, rankKey, readArea, readAreaPanelOpen, readCell, readList, readMapYears, readRank,
+  readReservesShown, readSpeciesKey, speciesDatasetsSearch, withAreaHistory, withReserves, withYears,
 } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
@@ -91,16 +91,25 @@ const HEX_DATA_URLS = {
 // (a hexagon, a species, a rank, the years) keeps it. On a single species'
 // map it stays in the address but is not shown, and it is back when the
 // card closes. History:
-//   - drawing the first box adds an entry (marked AREA_FROM_DRAW), and
-//     closes an open hexagon panel; drawing another replaces the entry
-//     (the new box replaces the old one);
+//   - drawing the first box adds an entry, and closes an open hexagon
+//     panel; drawing another box (anywhere on the map) replaces the old
+//     one, there is only one area at a time: like "Clear area" below, it
+//     goes back past every entry holding the old box and adds the new box
+//     after the entry from before the first box, so Back then returns to
+//     what was there before either box, never to the old box;
 //   - clicking a hexagon opens its panel on top of the area panel, by the
 //     hexagon rules above (a new entry for the first click), so its x or
 //     Back returns to the area panel;
 //   - the area panel's x only closes the panel (area_panel=closed), in
 //     place; the map's "Show area" button opens it again, in place;
-//   - "Clear area" acts like Back when the entry is the one the first box
-//     added, else removes the area in place (keeping a hexagon's panel);
+//   - "Clear area" takes the area out of the history, not only out of the
+//     current address: every entry holding the area keeps its place in the
+//     history (withAreaHistory in route.js), so "Clear area" goes back past
+//     all of them to the entry from before the box was drawn, then adds the
+//     current address without the area after it when that is different (a
+//     hexagon's panel stays open). The x's and Back then never bring the
+//     cleared area back. An area that came with the page (a shared link) is
+//     taken out of the entries since the page opened in the same way;
 //   - changing the area's list replaces the entry.
 // A box too small or too big is not asked about: the map says why instead
 // (areaProblem in area.js).
@@ -117,9 +126,20 @@ const HEX_DATA_URLS = {
 // historyState reads the current history entry's state (the browser's
 // window.history.state; the tests give their own).
 export default function App({
-  search = '', navigate = () => {}, goBack = () => window.history.back(),
+  search = '', navigate: navigateTo = () => {}, goBack = () => window.history.back(),
   historyState = () => window.history.state,
 }) {
+  // Every move below goes through navigate, which adds the area's place in
+  // the history to the new or replaced entry's state when the address holds
+  // an area (see withAreaHistory in route.js), so "Clear area" can find
+  // every entry that holds it.
+  function navigate(target, { replace = false, state = null } = {}) {
+    navigateTo(target, {
+      replace,
+      state: withAreaHistory(state, { target, replace, currentSearch: search, currentState: historyState() }),
+    })
+  }
+
   const [overviewRows, setOverviewRows] = useState({})
   const [overviewError, setOverviewError] = useState(null)
   // The species whose card is open, or null for the plain overview:
@@ -321,11 +341,12 @@ export default function App({
   }
 
   // Selects the hexagons under a box drawn on the map (box, at resolution
-  // res), on the overview or a rank map, and opens the area panel (closing
-  // an open hexagon panel): the first box as a new address entry, marked as
-  // added by drawing; a box drawn while an area exists replaces it in the
-  // same entry. A box too small or too big selects nothing: the map shows
-  // why instead.
+  // res), anywhere on the overview or a rank map, and opens the area panel
+  // (closing an open hexagon panel): the first box as a new address entry
+  // (navigate records that the area starts there); a box drawn while an
+  // area exists replaces it, and the old area is taken out of the history
+  // (see newAreaMove in route.js). A box too small or too big selects
+  // nothing and keeps any old area: the map shows why instead.
   function drawArea(box, res) {
     const problem = areaProblem(box, res)
     setAreaMessage(problem)
@@ -337,25 +358,27 @@ export default function App({
       areaList: keptListChoices(addressAreaList), ...view,
     })
     if (keptArea) {
-      navigate(target, { replace: true, state: historyState() })
+      const move = newAreaMove(target, historyState())
+      navigateTo(move.search, { back: move.back, replace: move.replace, state: move.state })
     } else {
-      navigate(target, { state: AREA_FROM_DRAW })
+      navigate(target)
     }
   }
 
-  // Removes the area ("Clear area"): like Back when the entry is the one the
-  // first box added (so no dead entry is left), else in place, keeping a
-  // hexagon's panel and the entry's mark.
+  // Removes the area ("Clear area") from the address and from the history
+  // (see clearAreaMove in route.js): no earlier entry still holds it, so
+  // closing a hexagon's panel or pressing Back afterwards never brings it
+  // back. A hexagon's panel open on top of the area stays open.
   function clearArea() {
     setAreaMessage(null)
-    if (historyState()?.areaFromDraw) {
-      goBack()
-    } else {
-      navigate(mapSearch({
-        species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell,
-        cellList: addressCellList, ...view,
-      }), { replace: true, state: historyState() })
-    }
+    // The map's view settings (years, the reserve layer's switch) stay,
+    // as on every other move.
+    const target = mapSearch({
+      species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell,
+      cellList: addressCellList, ...view,
+    })
+    const move = clearAreaMove(target, historyState())
+    navigateTo(move.search, { back: move.back, replace: move.replace, state: move.state })
   }
 
   // Closes the area panel (its x) or opens it again (the map's "Show

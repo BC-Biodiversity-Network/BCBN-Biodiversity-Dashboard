@@ -5,7 +5,7 @@ import { cellToBoundary } from 'h3-js'
 import { describe, expect, it } from 'vitest'
 
 import {
-  BC_BOUNDARY_WKT, GBIF_CHECKLIST_KEY, GBIF_COUNT_NOTE, cellWkt, gbifBcSearchUrl, gbifCellSearchUrl,
+  BC_BOUNDARY_WKT, GBIF_CHECKLIST_KEY, GBIF_COUNT_NOTE, cellWkt, gbifBcSearchUrl, gbifCellSearchUrl, gbifLeftOutNote,
 } from './gbifLinks'
 
 const CELL = '8728d1aacffffff'
@@ -53,6 +53,61 @@ describe('the GBIF search link', () => {
     const url = new URL(gbifCellSearchUrl({ keys: ['59PMB'], cell: CELL, years: [2000, 2020] }))
     expect(url.searchParams.get('year')).toBe('2000,2020')
     expect(url.searchParams.getAll('taxonKey')).toEqual(['59PMB'])
+  })
+})
+
+describe("the all-species hexagon panel's GBIF link", () => {
+  it('with no keys and no years, finds every species in the hexagon, every year', () => {
+    const url = new URL(gbifCellSearchUrl({ cell: CELL }))
+    expect(url.origin + url.pathname).toBe('https://www.gbif.org/occurrence/search')
+    expect([...url.searchParams.keys()]).toEqual(['checklistKey', 'geometry', 'occurrenceStatus'])
+    expect(url.searchParams.get('checklistKey')).toBe(GBIF_CHECKLIST_KEY)
+    expect(url.searchParams.get('geometry')).toBe(cellWkt(CELL))
+    expect(url.searchParams.get('occurrenceStatus')).toBe('PRESENT')
+  })
+
+  it('carries a year range, both years included', () => {
+    const url = new URL(gbifCellSearchUrl({ cell: CELL, years: [2000, 2020] }))
+    expect([...url.searchParams.keys()]).toEqual(['checklistKey', 'geometry', 'occurrenceStatus', 'year'])
+    expect(url.searchParams.get('year')).toBe('2000,2020')
+    expect(url.searchParams.has('taxonKey')).toBe(false)
+  })
+
+  it('is exactly this address for this hexagon and 2000 to 2020', () => {
+    // On a rank map the panel gives the link the same cell and years: the
+    // rank goes in the note instead (see gbifLeftOutNote).
+    expect(gbifCellSearchUrl({ cell: CELL, years: [2000, 2020] })).toBe(
+      'https://www.gbif.org/occurrence/search?checklistKey=7ddf754f-d193-4cc9-b351-99906754a03b'
+      + '&geometry=POLYGON%28%28-123.346457+48.419051%2C-123.338215+48.429769%2C-123.348150+48.438713'
+      + '%2C-123.366327+48.436938%2C-123.374565+48.426220%2C-123.364631+48.417276%2C-123.346457+48.419051%29%29'
+      + '&occurrenceStatus=PRESENT&year=2000%2C2020')
+  })
+})
+
+describe('the note on what a GBIF link leaves out', () => {
+  const TURDUS = { rank: 'genus', name: 'Turdus' }
+  const NO_FILTER = { q: '', status: [], sort: 'english', page: 3 }
+
+  it('is null when the list has no filter the link cannot carry (order and page are not filters)', () => {
+    expect(gbifLeftOutNote({ place: 'hexagon' })).toBeNull()
+    expect(gbifLeftOutNote({ place: 'hexagon', list: NO_FILTER })).toBeNull()
+  })
+
+  it('names each filter left out: a rank, a name filter, a BC status filter', () => {
+    expect(gbifLeftOutNote({ place: 'hexagon', rank: TURDUS, list: NO_FILTER }))
+      .toBe("GBIF shows every species in the hexagon: the link leaves out this list's genus Turdus.")
+    expect(gbifLeftOutNote({ place: 'hexagon', list: { ...NO_FILTER, status: ['red', 'blue'] } }))
+      .toBe("GBIF shows every species in the hexagon: the link leaves out this list's BC status filter.")
+    expect(gbifLeftOutNote({ place: 'hexagon', list: { ...NO_FILTER, q: 'thrush' } }))
+      .toBe("GBIF shows every species in the hexagon: the link leaves out this list's name filter.")
+    expect(gbifLeftOutNote({ place: 'hexagon', rank: TURDUS, list: { q: 'thrush', status: ['red'] } }))
+      .toBe('GBIF shows every species in the hexagon: the link leaves out this list\'s genus Turdus, name filter '
+        + 'and BC status filter.')
+  })
+
+  it('never names the hexagon size number', () => {
+    const note = gbifLeftOutNote({ place: 'hexagon', rank: TURDUS, list: { q: 'a', status: ['red'] } })
+    expect(note).not.toMatch(/resolution/i)
   })
 })
 

@@ -591,6 +591,16 @@ export default function HexMap({
     return () => window.removeEventListener('keydown', cancelOnEscape)
   }, [drawing, species])
 
+  // Ends drawing whenever the map turns to another page: another species,
+  // rank, hexagon or area, whether by Back or Forward, a link, a list or a
+  // panel's x. Drawing belongs to the page it was started on, so after Back
+  // the map never stays waiting for a box the visitor no longer expects.
+  // (A box drawn changes the area too, which ends drawing as it should.)
+  const pageKey = [species?.id ?? null, rankId, selectedCell, selectedArea ? areaId(selectedArea) : null].join('|')
+  useEffect(() => {
+    stopDrawing()
+  }, [pageKey])
+
   // Moves the map to a newly picked species once its first hexagons arrive:
   // fits them in view beside the card, but no closer than FIT_MAX_ZOOM, so a
   // species with one or two records does not fill the screen. Only the
@@ -635,17 +645,39 @@ export default function HexMap({
     })
   }, [rankOpen, rank, rankData, selectedCell])
 
-  // Brings the open hexagon into view when it is not on screen, for example
-  // after the back button returns to its panel from another species' map.
-  // A clicked hexagon is on screen already, so the map does not move then.
+  // Whether the map has loaded (handleLoad has run), and the resolution of
+  // the hexagons it draws now, for the effect below without making it run on
+  // every zoom. A species', rank's or year range's map keeps drawing its
+  // last hexagons while those of a new zoom tier load, so a hexagon clicked
+  // meanwhile is of their size, not the tier's.
+  const mapReady = useRef(false)
+  const resolutionNow = useRef(resolution)
+  const shownData = species ? speciesData : rankOpen ? rankData : overviewFiltered ? overviewHexes.data : null
+  resolutionNow.current = shownData?.resolution ?? resolution
+
+  // Shows the open hexagon as it was when it was clicked, whenever the
+  // address names a hexagon the map does not show that way, for example
+  // after the back button returns to its panel from another box or another
+  // species' map: the map moves to it when it is off screen, and zooms to
+  // hexagons of its size when the map shows another size. The outline itself
+  // comes from the address (selectedCell), so the panel and the outline
+  // always name the same hexagon. A clicked hexagon is on screen at its own
+  // size already, so the map does not move then. Before the map has loaded,
+  // handleLoad places it instead. (map.loaded() is not used here: MapLibre
+  // says false while any source is still updating, which it is right after
+  // Back as the area's outline goes, so the map never moved.)
   useEffect(() => {
     const map = mapRef.current
-    if (!selectedCell || !map || !map.loaded()) {
+    if (!selectedCell || !map || !mapReady.current) {
       return
     }
     const [lat, lng] = cellToLatLng(selectedCell)
-    if (!map.getBounds().contains([lng, lat])) {
-      map.easeTo({ center: [lng, lat], duration: 900 })
+    const cellResolution = getResolution(selectedCell)
+    const otherSize = cellResolution !== resolutionNow.current
+    if (otherSize || !map.getBounds().contains([lng, lat])) {
+      map.easeTo({
+        center: [lng, lat], ...(otherSize ? { zoom: zoomShowingResolution(cellResolution) } : {}), duration: 900,
+      })
     }
   }, [selectedCell, species?.id])
 
@@ -654,6 +686,7 @@ export default function HexMap({
   // area, fits its whole group of hexagons (which reaches past the box) in
   // view beside the panel.
   function handleLoad() {
+    mapReady.current = true
     const map = mapRef.current
     if (map && selectedArea) {
       const container = map.getContainer()

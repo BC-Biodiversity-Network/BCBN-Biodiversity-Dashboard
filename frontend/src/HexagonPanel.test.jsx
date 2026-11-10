@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { gbifCellSearchUrl } from './gbifLinks'
+import { GBIF_COUNT_NOTE, gbifCellSearchUrl } from './gbifLinks'
 import HexagonPanel, { hexagonSizeText, totalsText } from './HexagonPanel'
 import { NO_LIST } from './route'
 import { chartSummary, fillYears } from './YearBars'
@@ -282,6 +282,74 @@ describe('the hexagon panel on a species map', () => {
     expect(link.getAttribute('href')).toBe(`?cell=${CELL}`)
     fireEvent.click(link)
     expect(onShowAllSpecies).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("the all-species panel's GBIF link", () => {
+  const TURDUS = { rank: 'genus', name: 'Turdus', path: [
+    { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+    { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
+  ] }
+
+  // The panel's GBIF link, once the answer has arrived.
+  async function gbifLink() {
+    return screen.findByRole('link', { name: 'See these records on GBIF' })
+  }
+
+  // The panel's notes, as text.
+  function notes(container) {
+    return [...container.querySelectorAll('.hexagon-note')].map((node) => node.textContent)
+  }
+
+  it('links to every record in the hexagon, in a new tab, with no note on filters', async () => {
+    stubCell(() => answer())
+    const { container } = show()
+    const link = await gbifLink()
+    expect(link.getAttribute('href')).toBe(gbifCellSearchUrl({ cell: CELL }))
+    expect(new URL(link.getAttribute('href')).searchParams.has('taxonKey')).toBe(false)
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(notes(container)).toEqual([GBIF_COUNT_NOTE])
+  })
+
+  it('carries the years the answer counted', async () => {
+    stubCell(() => answer({ years_counted: [2018, 2020], records: 3, species: 1, matching: 1 }))
+    show({ years: { from: 2018, to: 2020 } })
+    const link = await gbifLink()
+    expect(link.getAttribute('href')).toBe(gbifCellSearchUrl({ cell: CELL, years: [2018, 2020] }))
+    expect(new URL(link.getAttribute('href')).searchParams.get('year')).toBe('2018,2020')
+  })
+
+  it('on a rank map, links to every species and says the rank is left out', async () => {
+    stubCell(() => answer({ records: 5, species: 1, matching: 1, results: answer().results.slice(0, 1) }))
+    const { container } = show({ rank: TURDUS })
+    const link = await gbifLink()
+    expect(link.getAttribute('href')).toBe(gbifCellSearchUrl({ cell: CELL }))
+    expect(notes(container)).toEqual([GBIF_COUNT_NOTE,
+      "GBIF shows every species in the hexagon: the link leaves out this list's genus Turdus."])
+  })
+
+  it('says when the name or BC status filter is left out, and only then', async () => {
+    stubCell(() => answer({ status: ['red'], matching: 0, results: [] }))
+    const { container } = show({ list: { ...NO_LIST, q: 'thrush', status: ['red'] } })
+    await gbifLink()
+    expect(notes(container)).toContain(
+      "GBIF shows every species in the hexagon: the link leaves out this list's name filter and BC status filter.")
+    cleanup()
+    stubCell(() => answer())
+    const again = show({ list: { ...NO_LIST, sort: 'english', page: 2 } })
+    await gbifLink()
+    expect(notes(again.container).some((text) => text.includes('leaves out'))).toBe(false)
+  })
+
+  it('keeps the one-species panel\'s own link, with its keys', async () => {
+    stubCell(() => answer({ species_asked_for: { specieskey: '59PMB', col_name: 'Turdus migratorius', records: 5,
+      records_per_year: [{ year: 2019, records: 5 }], first_year: 2019, last_year: 2019, records_no_year: 0,
+      gbif_keys: ['59PMB', 'OLDKEY'] } }))
+    show({ species: { key: '59PMB', name: 'Turdus migratorius' } })
+    const link = await screen.findByRole('link', { name: 'See these 5 records on GBIF' })
+    expect(link.getAttribute('href')).toBe(gbifCellSearchUrl({ keys: ['59PMB', 'OLDKEY'], cell: CELL }))
+    expect(screen.queryByRole('link', { name: 'See these records on GBIF' })).toBeNull()
   })
 })
 

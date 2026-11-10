@@ -17,22 +17,41 @@ ranks.rank_card and cells.cell_species with no page limit), so a download
 always holds exactly what the list holds, the species sensitive.py hides
 left out the same way, and a bad request gets the same answer.
 
-Only what comes from the sources, as it is: no record counts, years or
-anything else BCBN worked out.
+What comes from the sources, as it is, and for the species lists one
+number BCBN works out: each species' record count, the same number the list
+shows (asked for by Evan on 2026-11-10). Nothing else BCBN computes (years,
+first and last records, and so on) goes in a file.
 
-    Datasets (6 columns): title, creators, published, catalogue, doi, link
-        title and creators as harvested (creators joined with "; "), the
-        issued date as stored, the catalogue name the page shows, the DOI
-        when the record's identifier is one (never another kind of id), and
-        the link to the original catalogue the page uses.
-    Species lists (4 columns): specieskey, scientific_name, english_name,
-        bcsee_status: the card's Catalogue of Life name (no authorship),
-        the English name the card shows, and the BC statuses the list chips
-        show (Red, Blue, Yellow, Exotic) joined with "; ".
-    Hexagon species list (5 columns): the same 4 and gbif_link, the GBIF
+    Datasets (14 columns): title, abstract, subjects, creators, published,
+        catalogue, doi, link, publisher, places, boxes, points, rights,
+        lunaris_id. The record's own metadata, as harvested from Lunaris
+        (public, and Lunaris shows it too; Evan, 2026-11-10): title,
+        abstract and subjects (the harvest took out HTML tags and extra
+        spaces), creators (joined with "; "), publisher, places (the
+        record's DataCite geoLocationPlace names, not the places we looked
+        up), boxes and points (its DataCite geoLocationBox and
+        geoLocationPoint, unchanged even when a box's edges are swapped),
+        rights (its DataCite rightsList, name and URI as given, not the
+        licences we checked) and lunaris_id (the record's OAI identifier).
+        Lists of several values are joined with " | ", which no harvested
+        value holds. Then the issued date as stored, the catalogue name the
+        page shows, the DOI when the record's identifier is one (never
+        another kind of id), and the link to the original catalogue the
+        page uses. Nothing BCBN or its models made (the BC class, the
+        organisms, looked-up places, hand decisions, checked licences or
+        access) goes in.
+    Species lists (5 columns): specieskey, scientific_name, english_name,
+        bcsee_status, records: the card's Catalogue of Life name (no
+        authorship), the English name the card shows, the BC statuses the
+        list chips show (Red, Blue, Yellow, Exotic) joined with "; ", and
+        the species' GBIF records as the list counts them (in BC for a
+        rank, in the hexagon or the box's hexagons, for the years asked
+        for; merged keys included, as on the maps). Line 2 of the header
+        says what records means and names the GBIF download's date.
+    Hexagon species list (6 columns): the same 5 and gbif_link, the GBIF
         search the hexagon panel links to for that species, hexagon and
         years (gbif_links.py).
-    Area species list (5 columns): the same 5, gbif_link being the GBIF
+    Area species list (6 columns): the same 6, gbif_link being the GBIF
         search for that species inside the box (area.py).
 
 The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
@@ -82,12 +101,39 @@ HEADER_LINE_COUNT = 4
 R_LINE = "To read in R: read.csv(file, skip = 4)"
 
 # The columns of each file.
-DATASET_COLUMNS = ["title", "creators", "published", "catalogue", "doi", "link"]
-SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status"]
+DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                   "publisher", "places", "boxes", "points", "rights", "lunaris_id"]
+SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
 
-# What each dataset row is read from (d is lunaris_datasets).
-DATASET_SQL_COLUMNS = "d.title, d.creators, d.issued, d.source_name, d.link, d.link_type"
+# What each dataset row is read from (d is lunaris_datasets), in the order
+# dataset_row takes them.
+DATASET_SQL_COLUMNS = ("d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, d.link_type, "
+                       "d.publisher, d.places, d.boxes, d.points, d.licences, d.id")
+
+# The date of the Lunaris harvest the datasets come from. The API's data
+# files do not store it (lunaris_datasets.parquet has no date), so it is
+# written here, from the harvest folder export_lunaris_datasets.py reads
+# (DEFAULT_HARVEST, exploration/lunaris/harvest_2026_10_20/); a test checks
+# the two still agree. Change both when the datasets are rebuilt from a new
+# harvest.
+LUNARIS_HARVEST_DATE = "2026-10-20"
+
+# Header line 3 of the Datasets file: where the text comes from and what
+# the harvest did to it (checked against the raw XML on 2026-11-10: HTML
+# tags taken out of 762 abstracts and 14 titles, runs of spaces and line
+# breaks made one space in abstracts, titles and 38 subject lists, one
+# description kept per record), and that rights are the source's own.
+DATASETS_SOURCE_LINE = (
+    f"Source: Lunaris dataset records from our harvest of {LUNARIS_HARVEST_DATE} (HTML tags removed from "
+    "titles and abstracts, extra spaces from titles, abstracts and subjects; one description per record); "
+    "rights are as the source gives them, not checked by BCBN; each row links to the original catalogue")
+
+# How a dataset column with several values joins them. No harvested value
+# holds it (checked on 2026-11-10 for subjects, places, rights and
+# publisher), so a list can always be split again; joined_values refuses a
+# value that holds it rather than write a list that cannot be.
+LIST_SEPARATOR = " | "
 
 # A link the Datasets page follows (isWebLink in datasetText.js), and the
 # start of a DOI written as a link (the export's link for a DOI record).
@@ -213,10 +259,60 @@ def dataset_doi(link, link_type):
     return None
 
 
-def dataset_row(title, creators, issued, source_name, link, link_type):
-    """Return one dataset's row: the 6 columns (see the top of this file)."""
-    return [title, "; ".join(creators or []), issued, source_name, dataset_doi(link, link_type),
-            link if WEB_LINK.match(link or "") else None]
+def joined_values(values):
+    """Return a list of harvested values as one cell, joined with
+    LIST_SEPARATOR, or None for none. Raises ValueError for a value that
+    holds the separator, since the cell could not be split back."""
+    values = list(values or [])
+    for value in values:
+        if LIST_SEPARATOR.strip() in value:
+            raise ValueError(f"a harvested value holds {LIST_SEPARATOR.strip()!r}: {value[:80]!r}")
+    return LIST_SEPARATOR.join(values) or None
+
+
+def number_text(value):
+    """Write a harvested coordinate: Python's shortest exact text for the
+    number ("-125.134589", "48.0"). The data file keeps the number, not the
+    source's own text, so trailing zeros can differ from it ("52.0125" for
+    "52.01250"); on the 2026-10-20 harvest this text matched the source's
+    for 4,858 of 5,488 coordinates (dropping ".0" matched only 4,333)."""
+    return repr(float(value))
+
+
+def boxes_text(boxes):
+    """Return a record's harvested boxes as one cell, each "west W, east E,
+    south S, north N" (DataCite's order), or None for none."""
+    return joined_values(f"west {number_text(box['w'])}, east {number_text(box['e'])}, "
+                         f"south {number_text(box['s'])}, north {number_text(box['n'])}" for box in boxes or [])
+
+
+def points_text(points):
+    """Return a record's harvested points as one cell, each "lon X, lat Y"
+    (DataCite's order), or None for none."""
+    return joined_values(f"lon {number_text(point['lon'])}, lat {number_text(point['lat'])}"
+                         for point in points or [])
+
+
+def rights_text(licences):
+    """Return a record's harvested rightsList as one cell: each entry its
+    name and its URI in brackets, "name (uri)", or whichever of the two it
+    has; or None for none."""
+    entries = []
+    for entry in licences or []:
+        name, uri = entry["name"], entry["uri"]
+        entries.append(f"{name} ({uri})" if name and uri else (name or uri or ""))
+    return joined_values(entry for entry in entries if entry)
+
+
+def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type, publisher, places,
+                boxes, points, licences, record_id):
+    """Return one dataset's row: the 14 columns (see the top of this file),
+    from the values DATASET_SQL_COLUMNS reads. Text is written as stored,
+    never shortened."""
+    return [title, abstract, joined_values(subjects), "; ".join(creators or []), issued, source_name,
+            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None,
+            publisher, joined_values(places), boxes_text(boxes), points_text(points), rights_text(licences),
+            record_id]
 
 
 def datasets_search_line(data, request):
@@ -260,7 +356,7 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
     rows = [dataset_row(*row) for row in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
     header = [f"BCBN Datasets search results, exported {date}",
               datasets_search_line(data, request),
-              "Source: Lunaris dataset records, as harvested; each row links to the original catalogue",
+              DATASETS_SOURCE_LINE,
               R_LINE]
     name = file_name("datasets", [" ".join(request["words"])], date)
     return name, csv_text(header, DATASET_COLUMNS, rows)
@@ -269,10 +365,26 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
 # --- Species lists ---------------------------------------------------------------
 
 
-def species_row(result):
-    """Return one species' 4 columns from a list result (species_list.py)."""
+def species_row(result, records):
+    """Return one species' 5 columns from a list result (species_list.py)
+    and its record count as the list shows it (records)."""
     return [result["specieskey"], result["col_name"], result["english_name"],
-            "; ".join(result["statuses"]) or None]
+            "; ".join(result["statuses"]) or None, records]
+
+
+def download_date(meta):
+    """Return the GBIF download's date, YYYY-MM-DD: the date of its
+    timestamp in /api/meta in UTC, the date GBIF cites it by and the
+    species card shows ("GBIF.org (4 October 2026)")."""
+    return meta["gbif_download"]["date"][:10]
+
+
+def records_column_text(meta, where):
+    """Return the end of header line 2 saying what the records column
+    holds, without adding a line: GBIF records counted by BCBN from the GBIF
+    download of its date, where (for example "for this list's area and
+    years")."""
+    return f"records: GBIF records counted by BCBN from the GBIF download of {download_date(meta)}, {where}"
 
 
 def species_source_line(meta):
@@ -315,9 +427,9 @@ def export_rank(data, date, rank, given, q=None, statuses=None, sort=None, year_
     for these options, in its order. The list is the card's own (rank_card
     with no page limit), so it raises what the card raises."""
     card = rank_card(data, rank, given, 0, None, q, statuses, sort, year_from, year_to)
-    rows = [species_row(member) for member in card["members"]]
+    rows = [species_row(member, member["record_count"]) for member in card["members"]]
     parts = [f"species of {card['rank']} {card['name']} ({path_text(card['path'])})",
-             *species_options_text(card)]
+             *species_options_text(card), records_column_text(data.meta, "in BC, for this list's years")]
     header = [f"BCBN species list for {card['rank']} {card['name']}, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species", [card["name"], years_part(card)], date)
@@ -334,13 +446,15 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
     answer = cell_species(data, cell, year_from, year_to, q, None, 0, None, rank, rank_given, statuses, sort)
     years = answer["years_counted"]
     keys = cards_gbif_keys(data.cursor(), [result["specieskey"] for result in answer["results"]])
-    rows = [species_row(result) + [gbif_cell_search_url(keys[result["specieskey"]], answer["cell"], years)]
+    rows = [species_row(result, result["records"])
+            + [gbif_cell_search_url(keys[result["specieskey"]], answer["cell"], years)]
             for result in answer["results"]]
     parts = [f"species in H3 hexagon {answer['cell']}, a hexagon of about {km2_text(h3.cell_area(answer['cell'], 'km^2'))}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
+    parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for hexagon {answer['cell']}, exported {date}",
               list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_hexagon",
@@ -397,7 +511,7 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
     (area_species with no page limit), so it raises what that raises."""
     answer = area_species(data, west, south, east, north, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
-    rows = [species_row(result) + [result["gbif_link"]] for result in answer["results"]]
+    rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
     box = answer["box"]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
@@ -408,6 +522,7 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
     parts += species_options_text(answer)
+    parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for an area, exported {date}",
               list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)

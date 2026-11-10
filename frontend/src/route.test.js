@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  CELL_LIST, NO_LIST, isPlainMap, keptListChoices, mapSearch, rankKey, readCell, readList, readMapYears, readRank,
-  speciesDatasetsSearch, speciesMapSearch, withYears,
+  CELL_LIST, NO_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey, readCell,
+  newAreaMove, readList, readMapYears, readRank, sameAddress, speciesDatasetsSearch, speciesMapSearch, withAreaHistory,
+  withYears,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -179,5 +180,79 @@ describe('the page state in the address', () => {
     const busy = { ...PLAIN, catalogues: ['a', 'b'], yearTo: 2020, organism: 'salmon', access: ['open'], mappable: true }
     expect(activeFilterCount(busy)).toBe(5)
     expect(activeFilterCount({ ...busy, ...NO_FILTERS })).toBe(0)
+  })
+})
+
+describe("an area's place in the history", () => {
+  const AREA = '?area=-120.6,50.55,-120.1,50.8&area_res=6'
+  const CELL = '872800b30ffffff'
+
+  it('compares addresses whatever the order of their parameters', () => {
+    expect(sameAddress('', '?')).toBe(true)
+    expect(sameAddress('?year_to=2020&year_from=2000', '?year_from=2000&year_to=2020')).toBe(true)
+    expect(sameAddress('?cell=a', '')).toBe(false)
+  })
+
+  it('starts at the first entry with an area and counts the entries after it', () => {
+    const drawn = withAreaHistory(null, { target: AREA, replace: false, currentSearch: '', currentState: null })
+    expect(drawn).toEqual({ areaDepth: 0, areaBefore: '' })
+    const clicked = withAreaHistory(PANEL_FROM_CLICK,
+      { target: `?cell=${CELL}&${AREA.slice(1)}`, replace: false, currentSearch: AREA, currentState: drawn })
+    expect(clicked).toEqual({ panelFromClick: true, areaDepth: 1, areaBefore: '' })
+    // A replaced entry keeps its place, even when no state is asked for.
+    expect(withAreaHistory(null, { target: AREA, replace: true, currentSearch: AREA, currentState: clicked }))
+      .toEqual({ areaDepth: 1, areaBefore: '' })
+    // An area that came with the page has nothing before it.
+    expect(withAreaHistory(null, { target: AREA, replace: false, currentSearch: AREA, currentState: null }))
+      .toEqual({ areaDepth: 1 })
+    // An address without an area has no place, and keeps its own marks.
+    expect(withAreaHistory(clicked, { target: `?cell=${CELL}`, replace: true, currentSearch: AREA, currentState: clicked }))
+      .toEqual(PANEL_FROM_CLICK)
+    expect(withAreaHistory({ areaDepth: 2 }, { target: '?', replace: true, currentSearch: AREA, currentState: null }))
+      .toBeNull()
+  })
+
+  it('clears an area by going back past every entry that holds it', () => {
+    // Drawn, then cleared straight away: only back.
+    expect(clearAreaMove('?', { areaDepth: 0, areaBefore: '' }))
+      .toEqual({ back: 1, search: null, replace: false, state: null })
+    // Drawn, a hexagon clicked over it, then cleared: back to before the
+    // area, then the hexagon as a click's entry after it.
+    expect(clearAreaMove(`?cell=${CELL}`, { panelFromClick: true, areaDepth: 1, areaBefore: '' }))
+      .toEqual({ back: 2, search: `?cell=${CELL}`, replace: false, state: PANEL_FROM_CLICK })
+    // The same, when the entry before the area showed another hexagon: the
+    // x then closes the panel in place.
+    expect(clearAreaMove(`?cell=${CELL}`, { panelFromClick: true, areaDepth: 1, areaBefore: '?cell=8728c9b40ffffff' }))
+      .toEqual({ back: 2, search: `?cell=${CELL}`, replace: false, state: null })
+    // A rank opened over the area: its entry remembers where it came from.
+    expect(clearAreaMove('?rank=kingdom&kingdom=Plantae', { rankOpenedFrom: AREA, areaDepth: 1, areaBefore: '' }))
+      .toEqual({ back: 2, search: '?rank=kingdom&kingdom=Plantae', replace: false, state: { rankOpenedFrom: '' } })
+    // A shared area: in place on its own entry, keeping the entry's marks;
+    // else back to that entry, replacing it.
+    expect(clearAreaMove(`?cell=${CELL}`, { panelFromClick: true, areaDepth: 0 }))
+      .toEqual({ back: 0, search: `?cell=${CELL}`, replace: true, state: PANEL_FROM_CLICK })
+    expect(clearAreaMove(`?cell=${CELL}`, null)).toEqual({ back: 0, search: `?cell=${CELL}`, replace: true, state: null })
+    expect(clearAreaMove(`?cell=${CELL}`, { panelFromClick: true, areaDepth: 1 }))
+      .toEqual({ back: 1, search: `?cell=${CELL}`, replace: true, state: null })
+  })
+})
+
+describe('a new box over an old area', () => {
+  const NEW = '?area=-123,53.8,-122.5,54&area_res=6'
+
+  it('goes back past every entry holding the old area, then adds the new box', () => {
+    // Drawn in this visit, nothing opened since: back to before it, then the
+    // new box as the area's first entry.
+    expect(newAreaMove(NEW, { areaDepth: 0, areaBefore: '' }))
+      .toEqual({ back: 1, search: NEW, replace: false, state: { areaDepth: 0, areaBefore: '' } })
+    // With a hexagon opened over the old area.
+    expect(newAreaMove(NEW, { panelFromClick: true, areaDepth: 1, areaBefore: '?species=59PMB' }))
+      .toEqual({ back: 2, search: NEW, replace: false, state: { areaDepth: 0, areaBefore: '?species=59PMB' } })
+  })
+
+  it("replaces a shared link's area on the link's own entry", () => {
+    expect(newAreaMove(NEW, null)).toEqual({ back: 0, search: NEW, replace: true, state: { areaDepth: 0 } })
+    expect(newAreaMove(NEW, { panelFromClick: true, areaDepth: 1 }))
+      .toEqual({ back: 1, search: NEW, replace: true, state: { areaDepth: 0 } })
   })
 })

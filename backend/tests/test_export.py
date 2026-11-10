@@ -10,9 +10,11 @@ and CCCC (1 record), Plantae BBBB (3, old key OLD1 merged into it) and DDDD
 import csv
 import io
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 import h3
 import pandas
@@ -21,7 +23,8 @@ from fastapi.testclient import TestClient
 
 import api.cells
 import api.ranks
-from api.export import BOM, export_date, file_name, km2_text, one_line
+from api.export import (BOM, DATASET_COLUMNS, DATASETS_SOURCE_LINE, LIST_SEPARATOR, LUNARIS_HARVEST_DATE,
+                        download_date, export_date, file_name, joined_values, km2_text, number_text, one_line)
 from api.gbif_links import gbif_cell_search_url, to_fixed
 from api.main import create_app
 from api.settings import Settings
@@ -52,6 +55,54 @@ BOM_BYTES = b"\xef\xbb\xbf"
 TRICKY_TITLE = 'Bald Eagle, "nest" survey à l\'île\nsecond line, with a comma (été)'
 TRICKY_SQL = ("'Bald Eagle, \"nest\" survey à l''île' || chr(10) || "
               "'second line, with a comma (été)'")
+
+# A made-up record's own metadata with every awkward thing (commas, quote
+# marks, CR LF and LF line breaks, accents, ";" inside a value, HTML), and an
+# abstract longer than Excel's 32,767-character cell, which must come back
+# whole: nothing is ever shortened.
+TRICKY_ABSTRACT = ('Nests, "active" and old,\r\non the coast; Haida Gwaii (été)\nsecond paragraph. '
+                   + "x" * 40000 + " end.")
+TRICKY_SUBJECTS = ['Birds, "raptors"', "Ospreys; eagles", "Pygargue à tête blanche"]
+TRICKY_PLACES = ["British Columbia; Canada", 'Haida Gwaii, "Xaayda Gwaay"']
+TRICKY_LICENCE = '<p>Open Government Licence, "BC"</p>'
+EAGLE_ID = "oai:catalogue.data.gov.bc.ca:eagle-nests"
+
+
+def sql_text(text):
+    """Return text as a DuckDB string expression: quote marks doubled and
+    each line break written with chr(), so the test data holds it exactly."""
+    parts = []
+    for piece in text.replace("\r\n", "\0crlf\0").replace("\n", "\0lf\0").split("\0"):
+        if piece == "crlf":
+            parts.append("chr(13) || chr(10)")
+        elif piece == "lf":
+            parts.append("chr(10)")
+        else:
+            parts.append("'" + piece.replace("'", "''") + "'")
+    return " || ".join(parts)
+
+
+def sql_list(values):
+    """Return a list of texts as a DuckDB list expression."""
+    return "[" + ", ".join(sql_text(value) for value in values) + "]"
+
+
+def tricky_datasets_sql():
+    """Return the test datasets with the eagle-nests record's title,
+    abstract, subjects, places and licence name made awkward (see
+    TRICKY_TITLE and TRICKY_ABSTRACT)."""
+    sql = DATASETS_SQL.replace("'Bald Eagle nest survey'", TRICKY_SQL)
+    replacements = [
+        ("'Nest locations of Haliaeetus leucocephalus on the coast.', ['Birds', 'Raptors']",
+         f"{sql_text(TRICKY_ABSTRACT)}, {sql_list(TRICKY_SUBJECTS)}"),
+        ("[]::VARCHAR[] AS places",
+         f"CASE WHEN id LIKE '%eagle-nests' THEN {sql_list(TRICKY_PLACES)} ELSE []::VARCHAR[] END AS places"),
+        ("'Open Government Licence - British Columbia'", sql_text(TRICKY_LICENCE)),
+    ]
+    for old, new in replacements:
+        assert sql.count(old) == 1, old
+        sql = sql.replace(old, new)
+    return sql
 
 
 def download(client, path, **params):
@@ -108,19 +159,44 @@ def test_the_datasets_file(client):
     response, header, columns, rows = download(client, "/api/export/datasets", q="eagle")
     assert header[0] == f"# BCBN Datasets search results, exported {export_date()}"
     assert header[1] == '# Search: words "eagle"; BC data only; sorted by relevance'
-    assert header[2] == ("# Source: Lunaris dataset records, as harvested; each row links to the "
-                         "original catalogue")
-    assert columns == ["title", "creators", "published", "catalogue", "doi", "link"]
+    assert header[2] == ("# Source: Lunaris dataset records from our harvest of 2026-10-20 (HTML tags "
+                         "removed from titles and abstracts, extra spaces from titles, abstracts and subjects; "
+                         "one description per record); rights are as the source gives them, not checked by "
+                         "BCBN; each row links to the original catalogue")
+    assert len(header) == 4
+    assert columns == ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                       "publisher", "places", "boxes", "points", "rights", "lunaris_id"]
     assert rows[0] == {"title": "Bald Eagle nest survey",
+                       "abstract": "Nest locations of Haliaeetus leucocephalus on the coast.",
+                       "subjects": "Birds | Raptors",
                        "creators": "SBOT Requests;  Blackburn, Ian ; SBOT Requests",
                        "published": "2020-05-01", "catalogue": "BC Data Catalogue", "doi": "",
-                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests"}
+                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests",
+                       "publisher": "A publisher", "places": "",
+                       "boxes": "west -139.5, east -113.5, south 48.0, north 60.0", "points": "",
+                       "rights": ("Open Government Licence - British Columbia "
+                                  "(https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)"
+                                  " | info:eu-repo/semantics/openAccess"),
+                       "lunaris_id": EAGLE_ID}
     salmon = next(row for row in rows if row["title"].startswith("Salmon"))
     assert (salmon["doi"], salmon["link"]) == ("10.1/salmon", "https://doi.org/10.1/salmon")
+    assert (salmon["points"], salmon["boxes"], salmon["subjects"]) == ("lon -128.1, lat 51.6", "", "")
+    assert salmon["rights"] == "info:eu-repo/semantics/restrictedAccess"
     plots = next(row for row in rows if row["title"] == "Forest plots")
-    assert (plots["published"], plots["creators"], plots["doi"]) == ("", "", "")
+    assert (plots["published"], plots["creators"], plots["doi"], plots["rights"]) == ("", "", "", "")
     assert response.headers["content-disposition"] == (
         f'attachment; filename="bcbn_datasets_eagle_{export_date()}.csv"')
+
+
+def test_the_harvest_date_is_the_one_the_datasets_were_built_from():
+    """The date header line 3 names is the date of the harvest folder the
+    pipeline step that writes lunaris_datasets.parquet reads (the data file
+    does not store it), so the two cannot drift apart unnoticed."""
+    script = (Path(__file__).parent.parent / "pipeline" / "lunaris" / "export_lunaris_datasets.py").read_text()
+    folder = re.search(r'^DEFAULT_HARVEST = "exploration/lunaris/harvest_(\d{4})_(\d{2})_(\d{2})/', script, re.M)
+    assert folder, "DEFAULT_HARVEST no longer names a dated harvest folder"
+    assert LUNARIS_HARVEST_DATE == "-".join(folder.groups())
+    assert f"our harvest of {LUNARIS_HARVEST_DATE} " in DATASETS_SOURCE_LINE
 
 
 def test_the_rank_file(client):
@@ -128,14 +204,17 @@ def test_the_rank_file(client):
                                                phylum="Chordata", year_from=2019, year_to=2020)
     assert header[0] == f"# BCBN species list for phylum Chordata, exported {export_date()}"
     assert header[1] == ("# List: species of phylum Chordata (kingdom Animalia > phylum Chordata); "
-                         "records from 2019 to 2020; sorted by most records first")
+                         "records from 2019 to 2020; sorted by most records first; records: GBIF records "
+                         "counted by BCBN from the GBIF download of 2026-10-04, in BC, for this list's years")
     assert header[2] == ("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test; names: "
                          "Catalogue of Life COL26.6 XR (ChecklistBank 315557); English names and BC "
                          "status: BC Species and Ecosystems Explorer (BCSEE), provincial export of "
                          "2026-05-05, accessed 2026-09-26")
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
+    # The robin's records in 2019 and 2020, as the rank card counts them:
+    # 3 of its 5 (the other 2 have no year).
     assert rows == [{"specieskey": "AAAA", "scientific_name": "Turdus migratorius",
-                     "english_name": "American Robin", "bcsee_status": "Yellow"}]
+                     "english_name": "American Robin", "bcsee_status": "Yellow", "records": "3"}]
     assert response.headers["content-disposition"] == (
         f'attachment; filename="bcbn_species_Chordata_2019-2020_{export_date()}.csv"')
 
@@ -146,12 +225,14 @@ def test_the_hexagon_file(client):
     # The hexagon's own size, never its resolution number.
     size = km2_text(h3.cell_area(CELL_A, "km^2"))
     assert header[1] == (f"# List: species in H3 hexagon {CELL_A}, a hexagon of about {size}; "
-                         "sorted by most records first")
+                         "sorted by most records first; records: GBIF records counted by BCBN from the GBIF "
+                         "download of 2026-10-04, for this list's area and years")
     assert size == "5.1 km²"
     assert "resolution" not in "".join(header)
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "gbif_link"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records", "gbif_link"]
     assert keys(rows) == ["AAAA", "CCCC"]
+    assert [row["records"] for row in rows] == ["5", "1"]
     # The card's name without its authorship, and empty values where the
     # species has no English name or shown status.
     assert rows[1]["scientific_name"] == "Bombus (Pyrobombus) vosnesenskii"
@@ -185,8 +266,8 @@ def tricky_download(tmp_path):
     """Return the bytes of the Datasets download (sorted by title, so the
     tricky title comes first) from test data whose eagle-nests title is
     TRICKY_TITLE."""
-    sql = DATASETS_SQL.replace("'Bald Eagle nest survey'", TRICKY_SQL)
-    settings = Settings(data_dir=write_test_data(tmp_path, datasets_sql=sql), sensitive_max_res=None)
+    settings = Settings(data_dir=write_test_data(tmp_path, datasets_sql=tricky_datasets_sql()),
+                        sensitive_max_res=None)
     with TestClient(create_app(settings)) as client:
         return download(client, "/api/export/datasets", sort="title")[0].content
 
@@ -194,7 +275,7 @@ def tricky_download(tmp_path):
 def test_a_value_with_commas_quotes_a_line_break_and_accents_round_trips(tmp_path):
     content = tricky_download(tmp_path)
     _, columns, rows = read_back(content.decode("utf-8-sig"))
-    assert columns == ["title", "creators", "published", "catalogue", "doi", "link"]
+    assert columns == DATASET_COLUMNS
     assert rows[0]["title"] == TRICKY_TITLE
     assert rows[0]["creators"] == "SBOT Requests;  Blackburn, Ian ; SBOT Requests"
     # Quoted, the quote marks inside written twice.
@@ -266,7 +347,7 @@ def test_pandas_skipping_four_lines_reads_the_same_table(client, path, params):
 def test_pandas_reads_the_file_skipping_four_lines(tmp_path):
     content = tricky_download(tmp_path)
     frame = pandas.read_csv(io.BytesIO(content), skiprows=4, keep_default_na=False)
-    assert list(frame.columns) == ["title", "creators", "published", "catalogue", "doi", "link"]
+    assert list(frame.columns) == DATASET_COLUMNS
     assert len(frame) == 3
     assert frame["title"][0] == TRICKY_TITLE
 
@@ -284,7 +365,7 @@ def test_r_reads_the_file_with_skip_4(tmp_path):
               "cat(utf8ToInt(enc2utf8(d$title[1])), sep = ',')\n")
     output = subprocess.run(["Rscript", "-e", script], capture_output=True, text=True, check=True).stdout
     names, count, codes = output.splitlines()
-    assert names == "title,creators,published,catalogue,doi,link"
+    assert names == ",".join(DATASET_COLUMNS)
     assert count == "3"
     assert [int(code) for code in codes.split(",")] == [ord(letter) for letter in TRICKY_TITLE]
 
@@ -339,6 +420,123 @@ def test_the_species_files_hold_the_lists_in_their_order(client, params):
     _, _, _, rows = download(client, f"/api/export/hexes/{CELL_A}", **params)
     assert len(rows) == panel["matching"]
     assert keys(rows) == [result["specieskey"] for result in panel["results"]]
+
+
+@pytest.mark.parametrize("params", [{}, {"year_from": 2021}, {"year_from": 2019, "year_to": 2020},
+                                    {"year_to": 2019}, {"q": "robin"}, {"sort": "fewest_records"}])
+def test_the_records_column_is_the_lists_own_count(client, params):
+    """Each species' records in a rank file and a hexagon file are the
+    number its list gives it, for the same years, name filter and order."""
+    card = client.get("/api/ranks/kingdom", params={**ANIMALIA, **params}).json()
+    _, _, _, rows = download(client, "/api/export/ranks/kingdom", **ANIMALIA, **params)
+    assert [(row["specieskey"], int(row["records"])) for row in rows] == \
+        [(member["specieskey"], member["record_count"]) for member in card["members"]]
+    for cell in (CELL_A, CELL_B):
+        panel = client.get(f"/api/hexes/{cell}", params={**params, "limit": 200}).json()
+        _, _, _, rows = download(client, f"/api/export/hexes/{cell}", **params)
+        assert [(row["specieskey"], int(row["records"])) for row in rows] == \
+            [(result["specieskey"], result["records"]) for result in panel["results"]]
+
+
+def test_the_records_column_sits_after_bcsee_status_and_counts_merged_keys(client):
+    """records comes after bcsee_status and before gbif_link; a species
+    with an old key merged into it counts both, as the maps do (BBBB, with
+    OLD1 merged into it, in hexagon B)."""
+    _, _, columns, rows = download(client, f"/api/export/hexes/{CELL_B}")
+    assert columns.index("records") == columns.index("bcsee_status") + 1 == columns.index("gbif_link") - 1
+    panel = client.get(f"/api/hexes/{CELL_B}").json()
+    willow = next(row for row in rows if row["specieskey"] == "BBBB")
+    assert int(willow["records"]) == next(result["records"] for result in panel["results"]
+                                          if result["specieskey"] == "BBBB")
+
+
+def test_the_download_date_is_gbifs_utc_date():
+    """The header names the GBIF download by the date of its UTC timestamp,
+    as GBIF cites it and the species card shows it, even when it is still
+    the day before in Vancouver."""
+    assert download_date({"gbif_download": {"date": "2026-10-04T03:10:39Z"}}) == "2026-10-04"
+
+
+def test_the_datasets_file_has_no_records_column(client):
+    _, header, columns, _ = download(client, "/api/export/datasets")
+    assert "records" not in columns
+    assert "records:" not in "".join(header)
+
+
+# What the tricky record's own metadata cells must read back as, exactly.
+TRICKY_CELLS = {
+    "title": TRICKY_TITLE,
+    "abstract": TRICKY_ABSTRACT,
+    "subjects": " | ".join(TRICKY_SUBJECTS),
+    "places": " | ".join(TRICKY_PLACES),
+    "rights": (f"{TRICKY_LICENCE} (https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)"
+               " | info:eu-repo/semantics/openAccess"),
+    "lunaris_id": EAGLE_ID,
+}
+
+
+def test_the_new_dataset_columns_follow_title_and_keep_the_old_ones_in_order(client):
+    """abstract and subjects come right after title; the 6 columns the file
+    always had keep their order; the record's other harvested fields follow.
+    None of our own fields (class, organisms, looked-up places, checked
+    licences) is a column."""
+    _, header, columns, _ = download(client, "/api/export/datasets")
+    assert columns[:3] == ["title", "abstract", "subjects"]
+    old = ["title", "creators", "published", "catalogue", "doi", "link"]
+    assert [column for column in columns if column in old] == old
+    assert columns[8:] == ["publisher", "places", "boxes", "points", "rights", "lunaris_id"]
+    for ours in ("final_class", "frontend_group", "organisms", "looked_up_places", "location_type", "mappable",
+                 "access", "licences", "copy_count"):
+        assert ours not in columns
+    assert len(header) == 4
+
+
+def test_the_tricky_record_reads_back_unchanged_with_the_csv_module(tmp_path):
+    """Every awkward cell of the made-up record (commas, quote marks, CR LF
+    and LF line breaks, accents, ";" and HTML inside a value, a 40,000
+    character abstract) comes back exactly, each in one cell, with the 4
+    header lines before the column names."""
+    content = tricky_download(tmp_path)
+    header, columns, rows = read_back(content.decode("utf-8-sig"))
+    assert len(header) == 4
+    eagle = next(row for row in rows if row["lunaris_id"] == EAGLE_ID)
+    for column, expected in TRICKY_CELLS.items():
+        assert eagle[column] == expected, column
+    assert len(eagle["abstract"]) > 32767
+    assert len(rows) == 3 and all(len(row) == len(columns) for row in rows)
+
+
+def test_the_tricky_record_reads_back_unchanged_with_pandas(tmp_path):
+    """pandas.read_csv(file, skiprows=4) gives the same cells, the line
+    breaks inside the abstract included, and 3 rows."""
+    content = tricky_download(tmp_path)
+    frame = pandas.read_csv(io.BytesIO(content), skiprows=4, encoding="utf-8-sig", dtype=str,
+                            keep_default_na=False)
+    assert list(frame.columns) == DATASET_COLUMNS
+    assert len(frame) == 3
+    eagle = frame[frame["lunaris_id"] == EAGLE_ID].iloc[0]
+    for column, expected in TRICKY_CELLS.items():
+        assert eagle[column] == expected, column
+    assert "\r\n" in eagle["abstract"] and eagle["abstract"].count("\n") == 2
+
+
+def test_lists_are_joined_so_they_can_be_split_again():
+    """A list cell is joined with " | ", and a value holding "|" is refused
+    rather than written as a cell that cannot be split back."""
+    assert LIST_SEPARATOR == " | "
+    assert joined_values(["a, b", "c; d"]) == "a, b | c; d"
+    assert joined_values([]) is None and joined_values(None) is None
+    with pytest.raises(ValueError):
+        joined_values(["a | b"])
+    with pytest.raises(ValueError):
+        joined_values(["a|b"])
+
+
+def test_coordinates_are_written_as_harvested_numbers():
+    """A coordinate is Python's shortest exact text for it, the text most
+    sources use too (see number_text)."""
+    assert [number_text(value) for value in (-125.134589, 48.0, -139.5, 60, 0.0001)] == \
+        ["-125.134589", "48.0", "-139.5", "60.0", "0.0001"]
 
 
 def test_filters_and_sort_change_the_rows(client):

@@ -228,11 +228,13 @@ def test_names_are_sorted_ignoring_case_and_given_once():
 
 def test_hexagon_download_has_the_note_at_the_end_of_line_2(rclient):
     """A hexagon download whose hexagon touches reserves ends line 2 with
-    the note naming them, and still has exactly 4 header lines."""
+    the note naming them, after the list's options and what the records
+    column means (from main), and still has exactly 4 header lines."""
     header = header_lines(rclient, f"/api/export/hexes/{A[7]}")
     note = RESERVE_NOTE.format(names="ALPHA LAKE 2, Made-up Creek 1")
     assert header[1].startswith("# List: species in H3 hexagon 872800b30ffffff")
-    assert header[1].endswith("sorted by most records first." + note)
+    assert header[1].endswith("sorted by most records first; records: GBIF records counted by BCBN from the GBIF "
+                              "download of 2026-10-04, for this list's area and years." + note)
     assert header[1].endswith(
         " This area includes First Nations reserve land (ALPHA LAKE 2, Made-up Creek 1). Some of these "
         "records may have been collected on a reserve. If you use them, check whether they were, and if "

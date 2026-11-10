@@ -879,15 +879,6 @@ body {
   color: #555;
 }
 
-/* The line under the GBIF datasets' heading naming the download they were
-   counted from, small and grey like the card's other notes. */
-.card-section .card-datasets-source {
-  margin: 0 0 4px;
-  font-size: 11.5px;
-  color: #555;
-  overflow-wrap: anywhere;
-}
-
 .card-datasets {
   margin: 0;
   padding: 0;

@@ -112,7 +112,7 @@ function CardBody({ card, meta, onOpenDatasets, onOpenRank }) {
       <SpeciesImage image={card.image} name={card.name.col_name} />
       <BcseeSection bcsee={card.bcsee} />
       <DatasetsLine card={card} onOpen={onOpenDatasets} />
-      <RecordsSection card={card} meta={meta} />
+      <RecordsSection card={card} />
       <SourcesSection card={card} meta={meta} />
     </>
   )
@@ -489,11 +489,10 @@ function MergedRecordsNote({ card }) {
 
 // The records section: how many, over which years, from how many datasets,
 // how many have no date, and the GBIF datasets with the most records of the
-// species. Says how many records came from keys merged into this one. meta
-// is /api/meta (or null while it loads): the line under the datasets'
-// heading names the GBIF download they were counted from, the same one the
-// Sources section cites.
-function RecordsSection({ card, meta }) {
+// species. Says how many records came from keys merged into this one. The
+// GBIF download the records were counted from is cited in the Sources
+// section, so it is not repeated here.
+function RecordsSection({ card }) {
   const { records } = card
   const years = records.first_year === null ? '' : `, ${records.first_year} to ${records.last_year}`
   const noDate = noDateSentence(records.records_no_year)
@@ -510,7 +509,6 @@ function RecordsSection({ card, meta }) {
       {card.top_datasets.length > 0 && (
         <>
           <h4>GBIF datasets with the most records of this species</h4>
-          <CountedFromLine download={meta?.gbif_download} />
           <ul className="card-datasets">
             {card.top_datasets.map((dataset) => (
               <li key={dataset.datasetkey}>
@@ -525,22 +523,6 @@ function RecordsSection({ card, meta }) {
         </>
       )}
     </section>
-  )
-}
-
-// The line under the GBIF datasets' heading: the counts are BCBN's own,
-// made from the GBIF download, named by its date and DOI link as /api/meta
-// gives them (the date written as the Sources section's citation writes
-// it). Nothing until /api/meta arrives, so no date is ever typed in.
-function CountedFromLine({ download }) {
-  if (!download) {
-    return null
-  }
-  return (
-    <p className="card-datasets-source">
-      Records counted by BCBN from the GBIF download of {citationDate(download.date)}{' '}
-      (<a href={download.doi_url} target="_blank" rel="noreferrer">{download.doi_url}</a>).
-    </p>
   )
 }
 

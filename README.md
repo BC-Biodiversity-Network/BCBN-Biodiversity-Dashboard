@@ -1592,11 +1592,9 @@ shows, top to bottom:
   message.
 - the records: count, years, how many have no date, datasets, and the GBIF
   datasets with the most records of the species (linked to GBIF), under the
-  heading "GBIF datasets with the most records of this species" and the line
-  "Records counted by BCBN from the GBIF download of <date> (<DOI link>).",
-  whose date and DOI come from `/api/meta` (the same download the Sources
-  section cites; the line is left out until `/api/meta` arrives), and how
-  many came from merged keys and
+  heading "GBIF datasets with the most records of this species" (the GBIF
+  download they were counted from is cited in the Sources section only),
+  and how many came from merged keys and
   why each was merged: the same species name, or a name the Catalogue of
   Life lists as a synonym of this species (placeholder wording). A card
   opened from a typed old key says the same.

@@ -421,36 +421,17 @@ describe('records and merged keys', () => {
       .toBe('https://www.gbif.org/dataset/d-ebird')
   })
 
-  it('heads the datasets "GBIF datasets with the most records of this species", with the download from /api/meta', async () => {
+  it('heads the datasets "GBIF datasets with the most records of this species", with no line under it', async () => {
     const { panel } = await showCard(makeCard())
     const records = within(panel).getByRole('region', { name: 'Records' })
-    expect(within(records).getByRole('heading', { level: 4 }).textContent)
-      .toBe('GBIF datasets with the most records of this species')
+    const heading = within(records).getByRole('heading', { level: 4 })
+    expect(heading.textContent).toBe('GBIF datasets with the most records of this species')
     expect(records.textContent).not.toContain('Largest datasets')
-    const line = records.querySelector('.card-datasets-source')
-    expect(line.textContent).toBe(
-      'Records counted by BCBN from the GBIF download of 4 October 2026 (https://doi.org/10.15468/dl.ge9ypx).')
-    // The same download, linked the same way, as the Sources section cites.
-    const link = within(line).getByRole('link')
-    expect(link.getAttribute('href')).toBe(META.gbif_download.doi_url)
-    expect(sourcesText()).toContain(`GBIF.org (4 October 2026) GBIF Occurrence Download ${META.gbif_download.doi_url}`)
-  })
-
-  it('takes the download date and DOI from /api/meta, never typed in', async () => {
-    const meta = { gbif_download: { ...META.gbif_download, doi: '10.15468/dl.other',
-      doi_url: 'https://doi.org/10.15468/dl.other', date: '2027-03-15T22:00:00Z' } }
-    const { panel } = await showCard(makeCard(), { meta })
-    const line = within(panel).getByRole('region', { name: 'Records' }).querySelector('.card-datasets-source')
-    expect(line.textContent).toBe(
-      'Records counted by BCBN from the GBIF download of 15 March 2027 (https://doi.org/10.15468/dl.other).')
-  })
-
-  it('leaves the line out until /api/meta arrives, keeping the heading and the list', async () => {
-    const { panel } = await showCard(makeCard(), { meta: null })
-    const records = within(panel).getByRole('region', { name: 'Records' })
-    expect(records.querySelector('.card-datasets-source')).toBe(null)
-    expect(records.textContent).toContain('GBIF datasets with the most records of this species')
-    expect(records.textContent).toContain('EOD – eBird Observation Dataset940,502')
+    // The list comes straight after the heading: the download is cited in
+    // Sources only, never in the Records section.
+    expect(heading.nextElementSibling.className).toBe('card-datasets')
+    expect(records.textContent).not.toContain('GBIF download')
+    expect(within(records).queryByRole('link', { name: META.gbif_download.doi_url })).toBe(null)
   })
 
   it('writes the no-date sentence for one, several and none', () => {
@@ -586,9 +567,7 @@ describe('the Sources section', () => {
       'https://www2.gov.bc.ca/gov/content/data/policy-standards/data-policies/open-data/open-government-licence-bc')
     expect(text).toContain('Occurrence records: GBIF.org (4 October 2026) GBIF Occurrence Download https://doi.org/10.15468/dl.ge9ypx')
     expect(text).toContain('Species key: 7NFJR')
-    // The Records section links the same download too, so look in Sources only.
-    expect(within(screen.getByRole('region', { name: 'Sources' }))
-      .getByRole('link', { name: 'https://doi.org/10.15468/dl.ge9ypx' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'https://doi.org/10.15468/dl.ge9ypx' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'CC BY 4.0' }).href).toBe('https://creativecommons.org/licenses/by/4.0/')
   })
 

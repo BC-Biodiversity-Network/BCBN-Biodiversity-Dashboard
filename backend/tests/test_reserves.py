@@ -24,7 +24,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from api.db import open_data
-from api.export import RESERVE_NOTE
+from api.export import RESERVE_NOTE, RESERVE_NOTE_MAX_NAMES
 from api.main import create_app
 from api.reserves import CELLS_FILE, INFO_FILE, OUTLINES_FILE, ReserveData, reserve_names
 from api.settings import RESERVE_REMINDER_RULE, Settings, SettingsError
@@ -253,6 +253,35 @@ def test_no_note_without_a_reserve(rclient, rule_b_client):
     response = rclient.get("/api/export/datasets")
     assert response.status_code == 200
     assert "reserve" not in response.content.decode("utf-8-sig").split("\r\n", 4)[1]
+
+
+def many_reserves(count):
+    """count made-up reserves, all touching hexagon A at res 7, named so
+    that they sort in number order: "Test Reserve 0001" and up."""
+    names = {f"8{i:04d}": f"Test Reserve {i:04d}" for i in range(1, count + 1)}
+    return names, [(7, A[7], code) for code in names]
+
+
+@pytest.mark.parametrize("count, listed, more", [
+    (10, 10, ""),
+    (11, 10, ", and 1 more reserve"),
+    (1500, 10, ", and 1,490 more reserves"),
+])
+def test_the_note_lists_at_most_10_names(tmp_path, count, listed, more):
+    """The note names at most RESERVE_NOTE_MAX_NAMES reserves, the first
+    ones in sorted order, then how many more ("1 more reserve" for one);
+    10 or fewer are all listed. The header keeps exactly 4 lines, and the
+    API answer still holds every name."""
+    assert RESERVE_NOTE_MAX_NAMES == 10
+    names, rows = many_reserves(count)
+    folder = write_reserve_files(write_test_data(tmp_path), cell_rows=rows, names=names)
+    with make_client(folder) as client:
+        header = header_lines(client, f"/api/export/hexes/{A[7]}")
+        assert names_for(client, f"/api/hexes/{A[7]}") == sorted(names.values())
+    first = ", ".join(f"Test Reserve {i:04d}" for i in range(1, listed + 1))
+    assert header[1].endswith(RESERVE_NOTE.format(names=first + more))
+    assert header[1].count("Test Reserve") == listed
+    assert ("more reserve" in header[1]) == (count > 10)
 
 
 # --- Without the reserve files ----------------------------------------------------------

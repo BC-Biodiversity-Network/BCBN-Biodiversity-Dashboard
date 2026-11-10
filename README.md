@@ -1374,7 +1374,10 @@ touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
   (NAMES). If these data were collected on a reserve, check where they came
   from and whether the Nation agreed to the work. See the Indigenous data
   page of the site." when the list is not empty, still with exactly 4
-  header lines. Dataset and rank downloads do not change.
+  header lines. It names at most 10 reserves (`RESERVE_NOTE_MAX_NAMES` in
+  `backend/api/export.py`), then "and N more reserves" ("and 1 more
+  reserve" for one); `reserve_names` in the API answers always has them
+  all. Dataset and rank downloads do not change.
 - The rule is `RESERVE_REMINDER_RULE` in `backend/api/settings.py`: `"A"`
   (the default) names reserves at every hexagon size; `"B"` only at the two
   smallest (res 6 and 7), with empty lists at the larger sizes. Any other

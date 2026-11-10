@@ -351,3 +351,71 @@ describe('the chart of records per year', () => {
     expect(container.querySelector('.year-bars-readout').textContent).toBe('2021: 3 records')
   })
 })
+
+describe("the hexagon panel's Download CSV button", () => {
+  // The panel's download link.
+  function downloadLink() {
+    return screen.queryByRole('link', { name: 'Download the species in this hexagon as a CSV file' })
+  }
+
+  // The genus Turdus, as App gives it for a rank map.
+  const TURDUS = { rank: 'genus', name: 'Turdus', path: [
+    { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
+    { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
+  ] }
+
+  it('downloads the whole list on the overview, with its years and cell_ options, never one page of it', async () => {
+    stubCell(() => answer({ offset: 50, matching: 60 }))
+    show({ years: { from: 2000, to: null }, list: { q: 'robin', sort: 'english', status: ['yellow'], page: 2 } })
+    await screen.findByText(/records of 2 species/)
+    expect(downloadLink().getAttribute('href'))
+      .toBe(`/api/export/hexes/${CELL}?year_from=2000&q=robin&status=yellow&sort=english`)
+    expect(screen.queryByText(/lines of notes|read\.csv/)).toBe(null)
+  })
+
+  it('downloads only the rank\'s species on a rank map', async () => {
+    stubCell(() => answer({ rank: { rank: 'genus', name: 'Turdus', path: TURDUS.path } }))
+    show({ rank: TURDUS })
+    await screen.findByText(/records of 2 species/)
+    expect(downloadLink().getAttribute('href')).toBe(`/api/export/hexes/${CELL}?rank=genus&kingdom=Animalia`
+      + '&phylum=Chordata&class=Aves&order=Passeriformes&family=Turdidae&genus=Turdus')
+  })
+
+  it('has no button on a species map, whose panel is about one species', async () => {
+    stubCell(() => answer({ species_asked_for: {
+      specieskey: '59PMB', requested_key: '59PMB', merged_from: null, col_name: 'Turdus migratorius',
+      name_source: 'Catalogue of Life, via GBIF', english_name: 'American Robin', statuses: ['Yellow'],
+      records: 5, records_per_year: [{ year: 2020, records: 3 }], first_year: 2020, last_year: 2020,
+      records_no_year: 2, gbif_keys: ['59PMB'],
+    } }))
+    show({ species: { key: '59PMB', name: 'Turdus migratorius' } })
+    await screen.findByText(/See these 5 records on GBIF/)
+    expect(screen.queryByText('Download CSV')).toBe(null)
+  })
+
+  it('is greyed out while a new list loads and when nothing matches, and gone after an error', async () => {
+    // The first answer arrives; the next one never does.
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(() => {
+      calls += 1
+      return calls === 1 ? Promise.resolve({ ok: true, status: 200, json: async () => answer() }) : new Promise(() => {})
+    }))
+    show()
+    await screen.findByText(/records of 2 species/)
+    expect(downloadLink().getAttribute('aria-disabled')).toBe(null)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'scientific' } })
+    await waitFor(() => expect(downloadLink().getAttribute('aria-disabled')).toBe('true'))
+    cleanup()
+
+    stubCell(() => answer({ q: 'zz', matching: 0, results: [] }))
+    show({ list: { ...NO_LIST, q: 'zz' } })
+    await screen.findByText(/records of 2 species/)
+    expect(downloadLink().getAttribute('aria-disabled')).toBe('true')
+    cleanup()
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: 'broken' }) })))
+    show()
+    await screen.findByText(/could not be loaded/)
+    expect(downloadLink()).toBe(null)
+  })
+})

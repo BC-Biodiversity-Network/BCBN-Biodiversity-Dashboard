@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
-import { fetchRank } from './api'
+import { fetchRank, rankExportUrl } from './api'
+import CsvDownload from './CsvDownload'
 import { InPageLink, SpeciesRow } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
 import { NO_LIST, mapSearch, rankKey } from './route'
@@ -205,6 +206,11 @@ export default function RankCard({
               <SpeciesListControls list={list} data={card} onChange={onListChange}
                 filterLabel={`Filter the species of this ${rankRef.rank} by name`} />
               {shown && <p className="species-list-shown">{shown}</p>}
+              {/* The whole list as a CSV file, for the options asked for;
+                  not while they load, after an error, or with nothing to list. */}
+              <CsvDownload href={rankExportUrl(rankRef, { years, list })}
+                disabled={!current || Boolean(current.error) || card.matching === 0}
+                label={`Download the species of this ${rankRef.rank} as a CSV file`} />
               {card.matching === 0
                 ? <p className="hexagon-note">{noMatchText(list)}</p>
                 : (

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { MIN_SEARCH_CHARACTERS, fetchDataset, fetchDatasets, searchWords, searchableLength } from './api'
+import { MIN_SEARCH_CHARACTERS, datasetsExportUrl, fetchDataset, fetchDatasets, searchWords, searchableLength } from './api'
+import CsvDownload from './CsvDownload'
 import DatasetDetail from './DatasetDetail'
 import SortAndFilters from './DatasetFilters'
 import DatasetMap from './DatasetMap'
@@ -147,8 +148,10 @@ function SpeciesChip({ speciesKey, named, onRemove }) {
 }
 
 // Fetches one page of datasets for a state, again whenever the search, the
-// filters or the page change. Returns { data, error, loading }; data stays
-// the last answer while a new one loads, so the list does not flash empty.
+// filters or the page change. Returns { data, error, loading, exportUrl };
+// data stays the last answer while a new one loads, so the list does not
+// flash empty. exportUrl is the CSV download of the whole list, made from
+// the very state the list is fetched with.
 function useDatasets(state) {
   const [answer, setAnswer] = useState({ data: null, error: null, loading: true })
   // The state without the selected dataset: opening a dataset does not
@@ -168,7 +171,8 @@ function useDatasets(state) {
     return () => controller.abort()
   }, [key])
 
-  return answer
+  const exportUrl = useMemo(() => datasetsExportUrl(readDatasetsState(key)), [key])
+  return { ...answer, exportUrl }
 }
 
 // Fetches the selected dataset, or nothing when none is selected. Returns
@@ -321,6 +325,8 @@ export default function DatasetsPage({ search, navigate }) {
                       : `${data.total.toLocaleString()} ${data.total === 1 ? 'dataset' : 'datasets'}`}
                     {list.loading && ' (updating...)'}
                   </p>
+                  <CsvDownload href={list.exportUrl} disabled={list.loading || data.total === 0}
+                    label="Download these datasets as a CSV file" />
                   <ol className="dataset-list">
                     {data.results.map((result) => (
                       <ResultItem

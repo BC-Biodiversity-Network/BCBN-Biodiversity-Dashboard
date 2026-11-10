@@ -541,3 +541,46 @@ describe('the Datasets page', () => {
     expect(screen.getByText(/the site's API did not answer/)).toBeTruthy()
   })
 })
+
+describe("the Datasets page's Download CSV button", () => {
+  // The page's download link.
+  function downloadLink() {
+    return screen.queryByRole('link', { name: 'Download these datasets as a CSV file' })
+  }
+
+  it('downloads the whole list for the search and filters, never one page of it', async () => {
+    stubList()
+    await showPage('?view=datasets&q=salmon&sort=title&access=open&page=2')
+    expect(downloadLink().getAttribute('href'))
+      .toBe('/api/export/datasets?q=salmon&sort=title&access=open&frontend_group=bc_data')
+    expect(screen.queryByText(/lines of notes|read\.csv/)).toBe(null)
+  })
+
+  it('is greyed out while a new list loads and when nothing matches, and gone after an error', async () => {
+    // The first list arrives; the second never does.
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(() => {
+      calls += 1
+      return calls === 1 ? Promise.resolve({ ok: true, status: 200, json: async () => LIST }) : new Promise(() => {})
+    }))
+    const { rerender } = render(<DatasetsPage search="?view=datasets" navigate={vi.fn()} />)
+    await act(async () => {})
+    expect(downloadLink().getAttribute('aria-disabled')).toBe(null)
+    rerender(<DatasetsPage search="?view=datasets&q=eagle" navigate={vi.fn()} />)
+    await act(async () => {})
+    expect(downloadLink().getAttribute('aria-disabled')).toBe('true')
+    expect(downloadLink().hasAttribute('href')).toBe(false)
+    cleanup()
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ ...LIST, total: 0, pages: 0, results: [] }),
+    })))
+    await showPage('?view=datasets&q=nothing')
+    expect(downloadLink().getAttribute('aria-disabled')).toBe('true')
+    cleanup()
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: 'broken' }) })))
+    await showPage('?view=datasets')
+    expect(downloadLink()).toBe(null)
+  })
+})

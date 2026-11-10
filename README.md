@@ -1389,6 +1389,28 @@ size, and while a panel is open the map stays on the hexagon rather than
 moving to a newly opened species. The page tests the history rules on a
 real browser history (`frontend/src/AppHexagon.test.jsx`).
 
+**Download CSV.** Three lists have a "Download CSV" button
+(`frontend/src/CsvDownload.jsx`) for the CSV downloads of the API (see "The
+CSV downloads" above): the Datasets page, under the result count, for the
+current search, filters and order; a rank card, above its species list, for
+that list with its name filter, BC status filter, order and the year range;
+and a hexagon's panel, above its species list, on the overview and on a
+rank map (only the rank's species), with its `cell_` options and the year
+range. A species map's panel has none: it is about one species, and the API
+refuses `species=` there. The button is a plain link to the export address,
+so the browser downloads the file under the name the API gives and the page
+never loads the file itself. It is greyed out and goes nowhere while the
+list loads or when nothing matches, and is not shown when the list could not
+be loaded. Nothing is written beside it: the file's own 4th line says how
+to read it in R (`read.csv(file, skip = 4)`). The address is
+built in one place in `frontend/src/api.js`: `datasetsQuery`, `rankQuery`
+and `cellQuery` write a list's options the way the API takes them, the list
+requests (`fetchDatasets`, `fetchRank`, `fetchCell`) add the page to them,
+and `datasetsExportUrl`, `rankExportUrl` and `cellExportUrl` never do, so a
+download always asks for exactly what its list shows, every page of it.
+`frontend/src/CsvDownload.test.jsx` checks that, and the three list tests
+check where the button is and when it is greyed out.
+
 While a species card is open, the map shows that species' own hexagons
 instead of the overview (`GET /api/species/{key}/hexes?res=N`). It uses the same zoom tiers as the overview (resolution 4 to 7,
 `frontend/src/zoomTiers.js`). Each resolution is fetched the first time its
@@ -1568,8 +1590,13 @@ shows, top to bottom:
   `classification_level`) is said once at the top when every entry is the
   same, and under each entry when they differ. "Not in BCSEE" has its own
   message.
-- the records: count, years, how many have no date, datasets and the
-  largest datasets (linked to GBIF), and how many came from merged keys and
+- the records: count, years, how many have no date, datasets, and the GBIF
+  datasets with the most records of the species (linked to GBIF), under the
+  heading "GBIF datasets with the most records of this species" and the line
+  "Records counted by BCBN from the GBIF download of <date> (<DOI link>).",
+  whose date and DOI come from `/api/meta` (the same download the Sources
+  section cites; the line is left out until `/api/meta` arrives), and how
+  many came from merged keys and
   why each was merged: the same species name, or a name the Catalogue of
   Life lists as a synonym of this species (placeholder wording). A card
   opened from a typed old key says the same.

@@ -172,15 +172,24 @@ export function fetchSpeciesHexes(key, resolution, { signal, years = null } = {}
   return fetchJson(`/species/${encodeURIComponent(key)}/hexes?${mapParams(resolution, years)}`, signal)
 }
 
-// Fetches one page of Lunaris datasets (/api/datasets). state is the
-// Datasets page's state (see route.js): q, sort, the filters (catalogues,
-// yearFrom, yearTo, organism, access, mappable, species), wider (also datasets that
-// may include BC, the pending group) and page. Relevance is only sent with
-// a search. The page does not filter by the location classes, so
-// final_class is never sent. Returns the API's answer: { total, pages,
-// sort, results, options, ... }.
-export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
-  const params = new URLSearchParams({ page: String(state.page ?? 1), page_size: String(pageSize) })
+// An address under the API with its query string, or without the "?" when
+// there is nothing to ask. This is how the download links are written.
+function apiAddress(path, params) {
+  const query = params.toString()
+  return `${API_BASE}${path}${query ? `?${query}` : ''}`
+}
+
+// The query string of the Datasets list, without paging: the one place
+// that writes the page's search, filters and order the way the API takes
+// them, for the list (fetchDatasets) and for its CSV download
+// (datasetsExportUrl), so the two always ask for the same datasets. state
+// is the Datasets page's state (see route.js): q, sort, the filters
+// (catalogues, yearFrom, yearTo, organism, access, mappable, species) and
+// wider (also datasets that may include BC, the pending group). Relevance
+// is only sent with a search. The page does not filter by the location
+// classes, so final_class is never sent. params is where to add them
+// (a new, empty query string when not given).
+function datasetsQuery(state, params = new URLSearchParams()) {
   if (state.q?.trim()) {
     params.set('q', state.q.trim())
   }
@@ -212,7 +221,23 @@ export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
   if (state.wider) {
     params.append('frontend_group', 'pending')
   }
-  return fetchJson(`/datasets?${params}`, signal)
+  return params
+}
+
+// Fetches one page of Lunaris datasets (/api/datasets) for the Datasets
+// page's state (see datasetsQuery): the page number first, then the search
+// and filters. Returns the API's answer: { total, pages, sort, results,
+// options, ... }.
+export function fetchDatasets(state, { pageSize = 20, signal } = {}) {
+  const params = new URLSearchParams({ page: String(state.page ?? 1), page_size: String(pageSize) })
+  return fetchJson(`/datasets?${datasetsQuery(state, params)}`, signal)
+}
+
+// The address of the CSV download of the Datasets list
+// (/api/export/datasets): every dataset the list has for the same search,
+// filters and order (see datasetsQuery), never a page of them.
+export function datasetsExportUrl(state) {
+  return apiAddress('/export/datasets', datasetsQuery(state))
 }
 
 // Fetches one Lunaris dataset with every field (/api/datasets/{id}). The id
@@ -238,10 +263,19 @@ export function fetchOverviewHexes(resolution, { signal, years = null } = {}) {
 // LIST_SORTS in route.js), species asks for that species' own records in
 // the hexagon, rank ({ rank, path }) keeps that rank's species only, and
 // offset and limit choose the page.
-export function fetchCell(cell, {
-  years = null, q = '', status = [], sort = null, species = null, rank = null, offset = 0, limit = 50, signal,
-} = {}) {
+export function fetchCell(cell, { offset = 0, limit = 50, signal, ...options } = {}) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  return fetchJson(`/hexes/${encodeURIComponent(cell)}?${cellQuery(options, params)}`, signal)
+}
+
+// The query string of a hexagon's answer, without paging: the one place
+// that writes a hexagon's options the way the API takes them, for the
+// panel (fetchCell) and for the CSV download of its species list
+// (cellExportUrl). The options are those of fetchCell: years, q, status,
+// sort, species and rank. params is where to add them (a new, empty query
+// string when not given).
+function cellQuery({ years = null, q = '', status = [], sort = null, species = null, rank = null },
+  params = new URLSearchParams()) {
   if (rank) {
     params.set('rank', rank.rank)
     addRankPath(params, rank)
@@ -256,7 +290,16 @@ export function fetchCell(cell, {
   if (species) {
     params.set('species', species)
   }
-  return fetchJson(`/hexes/${encodeURIComponent(cell)}?${params}`, signal)
+  return params
+}
+
+// The address of the CSV download of a hexagon's species list
+// (/api/export/hexes/{cell}): every species the panel's list has for the
+// same options (years, q, status, sort, rank; see cellQuery), never a page
+// of them. A species map's panel is about one species, not a list, and the
+// API refuses species= here, so a species is never sent.
+export function cellExportUrl(cell, options = {}) {
+  return apiAddress(`/export/hexes/${encodeURIComponent(cell)}`, cellQuery({ ...options, species: null }))
 }
 
 // Adds a species list's options to a query string, as the API takes them:
@@ -294,6 +337,17 @@ function addRankPath(params, rank) {
 // status, sort }, as for fetchCell) filters and orders its species, and
 // offset and limit choose the page of them.
 export function fetchRank(rank, { years = null, list = null, offset = 0, limit = 50, signal } = {}) {
+  const params = rankQuery(rank, { years, list })
+  params.set('offset', String(offset))
+  params.set('limit', String(limit))
+  return fetchJson(`/ranks/${encodeURIComponent(rank.rank)}?${params}`, signal)
+}
+
+// The query string of a rank card, without paging: the one place that
+// writes a rank's path, years and list options the way the API takes them,
+// for the card (fetchRank) and for the CSV download of its species list
+// (rankExportUrl).
+function rankQuery(rank, { years = null, list = null } = {}) {
   const params = addRankPath(new URLSearchParams(), rank)
   if (years?.from != null) {
     params.set('year_from', String(years.from))
@@ -301,10 +355,15 @@ export function fetchRank(rank, { years = null, list = null, offset = 0, limit =
   if (years?.to != null) {
     params.set('year_to', String(years.to))
   }
-  addListOptions(params, list)
-  params.set('offset', String(offset))
-  params.set('limit', String(limit))
-  return fetchJson(`/ranks/${encodeURIComponent(rank.rank)}?${params}`, signal)
+  return addListOptions(params, list)
+}
+
+// The address of the CSV download of a rank card's species list
+// (/api/export/ranks/{rank}): every species the card's list has for the
+// same path, years, name filter, BC status filter and order (see
+// rankQuery), never a page of them.
+export function rankExportUrl(rank, { years = null, list = null } = {}) {
+  return apiAddress(`/export/ranks/${encodeURIComponent(rank.rank)}`, rankQuery(rank, { years, list }))
 }
 
 // Fetches a rank's map at one resolution (/api/ranks/{rank}/hexes), for a

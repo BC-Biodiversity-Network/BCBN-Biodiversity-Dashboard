@@ -282,3 +282,45 @@ describe('the rank card', () => {
       .toBe('2 species in BC, 3 records.')
   })
 })
+
+describe("the rank card's Download CSV button", () => {
+  // The card's download link.
+  function downloadLink() {
+    return screen.queryByRole('link', { name: 'Download the species of this family as a CSV file' })
+  }
+
+  it('downloads the whole species list for its path, years, filters and order, never one page of it', async () => {
+    stubRank(() => ({ body: answer({ q: 'thrush', status: ['none'], sort: 'english', offset: 50, matching: 60 }) }))
+    show({ years: { from: 2000, to: 2020 }, list: { q: 'thrush', sort: 'english', status: ['none'], page: 2 } })
+    await screen.findByText('Species (3)')
+    expect(downloadLink().getAttribute('href')).toBe('/api/export/ranks/family?kingdom=Animalia&phylum=Chordata'
+      + '&class=Aves&order=Passeriformes&family=Turdidae&year_from=2000&year_to=2020&q=thrush&status=none&sort=english')
+    expect(screen.queryByText(/lines of notes|read\.csv/)).toBe(null)
+  })
+
+  it('is greyed out while a new list loads and when nothing matches, and gone after an error', async () => {
+    // The first card arrives; the next one never does.
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(() => {
+      calls += 1
+      return calls === 1 ? Promise.resolve({ ok: true, status: 200, json: async () => answer() }) : new Promise(() => {})
+    }))
+    show()
+    await screen.findByText('Species (3)')
+    expect(downloadLink().getAttribute('aria-disabled')).toBe(null)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'scientific' } })
+    await waitFor(() => expect(downloadLink().getAttribute('aria-disabled')).toBe('true'))
+    cleanup()
+
+    stubRank(() => ({ body: answer({ q: 'zz', matching: 0, members: [] }) }))
+    show({ list: { ...NO_LIST, q: 'zz' } })
+    await screen.findByText('Species (3)')
+    expect(downloadLink().getAttribute('aria-disabled')).toBe('true')
+    cleanup()
+
+    stubRank(() => ({ status: 500, body: { detail: 'broken' } }))
+    show()
+    await screen.findByText(/could not be loaded/)
+    expect(downloadLink()).toBe(null)
+  })
+})

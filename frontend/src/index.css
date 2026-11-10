@@ -879,6 +879,15 @@ body {
   color: #555;
 }
 
+/* The line under the GBIF datasets' heading naming the download they were
+   counted from, small and grey like the card's other notes. */
+.card-section .card-datasets-source {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  color: #555;
+  overflow-wrap: anywhere;
+}
+
 .card-datasets {
   margin: 0;
   padding: 0;
@@ -1710,4 +1719,41 @@ body {
 .rank-child-count,
 .rank-missing {
   color: #666;
+}
+
+/* The "Download CSV" button of a list (CsvDownload.jsx): an outlined
+   button like the Datasets page's Filters button, on its own line. Two
+   classes, so the button's colours win over the panels' link colour. */
+.csv-download {
+  margin: 4px 0 8px;
+}
+
+.csv-download .csv-download-button {
+  display: inline-block;
+  padding: 3px 12px;
+  border: 1px solid #184f95;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #184f95;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.csv-download .csv-download-button:hover {
+  background: #eef3f9;
+}
+
+.csv-download .csv-download-button:focus-visible {
+  outline: 2px solid #184f95;
+  outline-offset: 2px;
+}
+
+/* Greyed out while the list loads, after an error, or with nothing in it. */
+.csv-download .csv-download-button.disabled {
+  border-color: #bbb;
+  background: #fff;
+  color: #888;
+  cursor: default;
 }

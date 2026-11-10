@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { cellArea, getResolution } from 'h3-js'
 
-import { fetchCell } from './api'
+import { cellExportUrl, fetchCell } from './api'
+import CsvDownload from './CsvDownload'
 import { gbifCellSearchUrl } from './gbifLinks'
 import RankName, { rankTitle } from './RankName'
 import { NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
@@ -153,10 +154,12 @@ export function SpeciesRow({ item, onOpen }) {
 function AllSpeciesPanel({
   cell, years, rank = null, list, onListChange, onClose, onOpenSpecies, onShowAllSpecies,
 }) {
-  const { current, data } = useCellAnswer(cell, {
-    years, q: list.q, status: list.status, sort: list.sort, offset: (list.page - 1) * PAGE_SIZE, limit: PAGE_SIZE,
-    rank: rank ? { rank: rank.rank, path: rank.path } : null,
-  })
+  // The list's options: the same ones give the page shown and the CSV
+  // download of the whole list.
+  const options = {
+    years, q: list.q, status: list.status, sort: list.sort, rank: rank ? { rank: rank.rank, path: rank.path } : null,
+  }
+  const { current, data } = useCellAnswer(cell, { ...options, offset: (list.page - 1) * PAGE_SIZE, limit: PAGE_SIZE })
   const shown = data ? shownText(data, list) : null
   const notCounted = data?.years_counted ? notCountedText(data.records_no_year_left_out) : null
 
@@ -181,6 +184,11 @@ function AllSpeciesPanel({
               <SpeciesListControls list={list} data={data} onChange={onListChange}
                 filterLabel="Filter the species in this hexagon by name" />
               {shown && <p className="species-list-shown">{shown}</p>}
+              {/* The whole list as a CSV file, for the options asked for;
+                  not while they load, after an error, or with nothing to list. */}
+              <CsvDownload href={cellExportUrl(cell, options)}
+                disabled={!current || Boolean(current.error) || data.matching === 0}
+                label="Download the species in this hexagon as a CSV file" />
               {data.matching === 0
                 ? <p className="hexagon-note">{noMatchText(list)}</p>
                 : (

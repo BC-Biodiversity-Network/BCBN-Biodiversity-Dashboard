@@ -195,6 +195,29 @@ export function clearAreaMove(target, currentState) {
   return { back: depth + 1, search: target, replace: false, state }
 }
 
+// How a new box drawn while an area exists (target, the address with the
+// new area) moves through the history: like "Clear area" (see
+// clearAreaMove), it goes back past every entry that holds the old area, so
+// neither Back nor a panel's x can bring the old box back, then the new box
+// takes the old one's place. Returns { back, search, replace, state } for
+// navigate:
+//   - old area drawn in this visit: go back to the entry before it, then add
+//     target as a new entry after it, as the first entry of the new area
+//     (so Back returns to what was there before either box);
+//   - old area that came with the page: go back to the first entry holding
+//     it and put target in its place (in place when that is the current
+//     entry, keeping its other marks).
+// currentState is the current entry's history state.
+export function newAreaMove(target, currentState) {
+  const depth = currentState?.areaDepth ?? 0
+  const before = currentState?.areaBefore
+  if (before === undefined) {
+    const own = depth === 0 ? withoutAreaHistory(currentState) : null
+    return { back: depth, search: target, replace: true, state: { ...own, areaDepth: 0 } }
+  }
+  return { back: depth + 1, search: target, replace: false, state: { areaDepth: 0, areaBefore: before } }
+}
+
 // The resolutions an area can be drawn at (those of the maps).
 const AREA_RESOLUTIONS = [4, 5, 6, 7]
 

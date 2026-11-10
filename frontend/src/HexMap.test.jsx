@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // source id (the box, "area-box"; the selected group's outline, "area-group").
 const mapState = vi.hoisted(() => ({
   layers: [], getTooltip: null, onMove: null, fitBounds: null, onClick: null, onLoad: null, easeTo: null,
-  jumpTo: null, bounds: [[-140, 47], [-113, 61]], props: {}, sources: {},
+  jumpTo: null, bounds: [[-140, 47], [-113, 61]], props: {}, sources: {}, loaded: true,
 }))
 
 vi.mock('react-map-gl/maplibre', async () => {
@@ -22,7 +22,7 @@ vi.mock('react-map-gl/maplibre', async () => {
     React.useImperativeHandle(ref, () => ({
       fitBounds: (...args) => mapState.fitBounds(...args),
       getContainer: () => ({ clientWidth: 1280, clientHeight: 800 }),
-      loaded: () => true,
+      loaded: () => mapState.loaded,
       getBounds: () => ({
         contains: ([lng, lat]) => lng >= mapState.bounds[0][0] && lng <= mapState.bounds[1][0]
           && lat >= mapState.bounds[0][1] && lat <= mapState.bounds[1][1],
@@ -68,7 +68,7 @@ vi.mock('@deck.gl/geo-layers', () => ({
 }))
 
 // Imported after the stand-ins above, which vitest puts in place first.
-import { cellToLatLng } from 'h3-js'
+import { cellToLatLng, latLngToCell } from 'h3-js'
 
 import { boxCells, groupOutline } from './area'
 import HexMap, { DRAW_HINT, DRAW_UNAVAILABLE, FADED_SHARE, outlineBounds, overviewLayerId } from './HexMap'
@@ -124,6 +124,7 @@ beforeEach(() => {
   mapState.easeTo = vi.fn()
   mapState.jumpTo = vi.fn()
   mapState.bounds = [[-140, 47], [-113, 61]]
+  mapState.loaded = true
 })
 
 afterEach(() => {
@@ -418,12 +419,34 @@ describe('the clicked hexagon', () => {
     expect(zoom).toBe(zoomShowingResolution(7))
   })
 
-  it('brings the open hexagon into view only when it is off screen', () => {
-    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedCell="8728c9b40ffffff" />)
+  it('shows the open hexagon from the address as when it was clicked: on screen, at its own size', () => {
+    // The map shows the resolution of its first zoom; three hexagons of it,
+    // two on screen and one off it, and one of a finer resolution on screen.
+    const shown = pickResolution(4.5, null)
+    const onScreen = latLngToCell(54.5, -125, shown)
+    const alsoOnScreen = latLngToCell(50.7, -120.3, shown)
+    const offScreen = latLngToCell(59.5, -135, shown)
+    const finer = latLngToCell(50.7, -120.3, shown + 2)
+    mapState.bounds = [[-130, 49], [-118, 57]]
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedCell={onScreen} />)
+    // Before the map has loaded, handleLoad places it instead.
     expect(mapState.easeTo).not.toHaveBeenCalled()
-    mapState.bounds = [[-130, 53], [-125, 56]]
-    rerender(<HexMap overview={OVERVIEW} species={null} selectedCell="8628c9b47ffffff" />)
+    // MapLibre says it has not loaded while a source is updating, as right
+    // after Back: the map must move all the same.
+    mapState.loaded = false
+    act(() => mapState.onLoad())
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedCell={alsoOnScreen} />)
+    expect(mapState.easeTo).not.toHaveBeenCalled()
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedCell={offScreen} />)
     expect(mapState.easeTo).toHaveBeenCalledTimes(1)
+    const [lat, lng] = cellToLatLng(offScreen)
+    expect(mapState.easeTo.mock.calls[0][0]).toEqual({ center: [lng, lat], duration: 900 })
+    // A hexagon of another size: the map zooms to hexagons of its size.
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedCell={finer} />)
+    expect(mapState.easeTo).toHaveBeenCalledTimes(2)
+    expect(mapState.easeTo.mock.calls[1][0].zoom).toBe(zoomShowingResolution(shown + 2))
+    // Its outline is the one the address names.
+    expect(mapState.layers.at(-1).id).toBe(`selected-cell-${finer}`)
   })
 
   it('stays on the hexagon instead of moving to the species while the panel is open, and does not jump on closing', async () => {
@@ -621,6 +644,42 @@ describe('drawing a box', () => {
     expect(onAreaDrawn).not.toHaveBeenCalled()
   })
 
+  it('ends drawing when the map turns to another page (Back, a link, a panel), and not otherwise', () => {
+    const props = { overview: OVERVIEW, species: null }
+    const { rerender } = render(<HexMap {...props} />)
+    // Starts drawing with the button and checks it is on.
+    function startDrawing() {
+      fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+      expect(screen.getByText(DRAW_HINT)).toBeTruthy()
+      expect(mapState.props.dragPan).toBe(false)
+    }
+    // Checks drawing is off: the button, the hint and the map's dragging.
+    function expectNotDrawing() {
+      expect(screen.getByRole('button', { name: 'Draw a box' })).toBeTruthy()
+      expect(screen.queryByText(DRAW_HINT)).toBeNull()
+      expect(mapState.props.dragPan).toBe(true)
+    }
+    startDrawing()
+    // The same page again (for example a list's filter): still drawing.
+    rerender(<HexMap {...props} />)
+    expect(screen.getByText(DRAW_HINT)).toBeTruthy()
+    // A hexagon's panel (as after Back to it).
+    rerender(<HexMap {...props} selectedCell="8628c9b47ffffff" />)
+    expectNotDrawing()
+    // Another area.
+    startDrawing()
+    rerender(<HexMap {...props} selectedCell="8628c9b47ffffff" selectedArea={AREA} />)
+    expectNotDrawing()
+    // No hexagon and no area.
+    startDrawing()
+    rerender(<HexMap {...props} />)
+    expectNotDrawing()
+    // A rank.
+    startDrawing()
+    rerender(<HexMap {...props} rank={{ rank: 'genus', name: 'Turdus', path: [], id: 1 }} rankId="genus-turdus" />)
+    expectNotDrawing()
+  })
+
   it('does not open a hexagon while drawing, nor when the mouse is let go', () => {
     const onCellClick = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} onCellClick={onCellClick} />)
@@ -671,6 +730,32 @@ describe('drawing a box', () => {
       [[-130.4, 48.8], [-130.25, 48.8], [-130.25, 48.9], [-130.4, 48.9], [-130.4, 48.8]])
     expect(mapState.layers.some((layer) => layer.id.startsWith('selected-area'))).toBe(false)
     expect(mapState.layers.every((layer) => layer.props.stroked === false || layer.props.filled !== false)).toBe(true)
+  })
+
+  it('draws a new box anywhere while an area is selected: outside it, over part of it, or too small', () => {
+    const onAreaDrawn = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} onAreaDrawn={onAreaDrawn} />)
+    // Draws one box from corner to corner and returns what was handed on.
+    function draw(from, to) {
+      fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+      act(() => mapState.props.onMouseDown(at(...from)))
+      act(() => mapState.props.onMouseMove(at(...to)))
+      // The new box shows while it is dragged, instead of the old one.
+      expect(mapState.sources['area-box'].geometry.coordinates[2]).toEqual(to)
+      expect(mapState.sources['area-group']).toBeUndefined()
+      act(() => mapState.props.onMouseUp(at(...to)))
+      expect(mapState.props.dragPan).toBe(true)
+      return onAreaDrawn.mock.calls.at(-1)[0]
+    }
+    // Fully outside the area (around Kamloops, far from it).
+    expect(draw([-120.6, 50.55], [-120.1, 50.8])).toEqual({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 })
+    // Over part of it.
+    expect(draw([-130.3, 48.85], [-130.0, 49.1])).toEqual({ west: -130.3, south: 48.85, east: -130, north: 49.1 })
+    // Too small: still handed on, for App to keep the old area and say why.
+    expect(draw([-125, 52], [-124.999, 52.001])).toEqual({ west: -125, south: 52, east: -124.999, north: 52.001 })
+    expect(onAreaDrawn).toHaveBeenCalledTimes(3)
+    // Once drawing ends, the selected area shows again.
+    expect(mapState.sources['area-group']).toBe(AREA.outline)
   })
 
   it('fits the whole group in view when the page opens on an area', () => {

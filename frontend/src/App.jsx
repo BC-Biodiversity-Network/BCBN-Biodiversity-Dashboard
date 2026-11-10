@@ -9,7 +9,8 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey, readArea,
+  AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, newAreaMove, rankKey,
+  readArea,
   readAreaPanelOpen, readCell, readList, readMapYears, readRank, readSpeciesKey, speciesDatasetsSearch,
   withAreaHistory, withYears,
 } from './route'
@@ -92,8 +93,11 @@ const HEX_DATA_URLS = {
 // map it stays in the address but is not shown, and it is back when the
 // card closes. History:
 //   - drawing the first box adds an entry, and closes an open hexagon
-//     panel; drawing another replaces the entry (the new box replaces the
-//     old one);
+//     panel; drawing another box (anywhere on the map) replaces the old
+//     one, there is only one area at a time: like "Clear area" below, it
+//     goes back past every entry holding the old box and adds the new box
+//     after the entry from before the first box, so Back then returns to
+//     what was there before either box, never to the old box;
 //   - clicking a hexagon opens its panel on top of the area panel, by the
 //     hexagon rules above (a new entry for the first click), so its x or
 //     Back returns to the area panel;
@@ -305,11 +309,12 @@ export default function App({
   }
 
   // Selects the hexagons under a box drawn on the map (box, at resolution
-  // res), on the overview or a rank map, and opens the area panel (closing
-  // an open hexagon panel): the first box as a new address entry (navigate
-  // records that the area starts there); a box drawn while an area exists
-  // replaces it in the same entry. A box too small or too big selects
-  // nothing: the map shows why instead.
+  // res), anywhere on the overview or a rank map, and opens the area panel
+  // (closing an open hexagon panel): the first box as a new address entry
+  // (navigate records that the area starts there); a box drawn while an
+  // area exists replaces it, and the old area is taken out of the history
+  // (see newAreaMove in route.js). A box too small or too big selects
+  // nothing and keeps any old area: the map shows why instead.
   function drawArea(box, res) {
     const problem = areaProblem(box, res)
     setAreaMessage(problem)
@@ -321,7 +326,8 @@ export default function App({
       areaList: keptListChoices(addressAreaList), years,
     })
     if (keptArea) {
-      navigate(target, { replace: true, state: historyState() })
+      const move = newAreaMove(target, historyState())
+      navigateTo(move.search, { back: move.back, replace: move.replace, state: move.state })
     } else {
       navigate(target)
     }

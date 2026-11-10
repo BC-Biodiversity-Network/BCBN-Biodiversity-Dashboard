@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
   CELL_LIST, NO_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey, readCell,
-  readList, readMapYears, readRank, sameAddress, speciesDatasetsSearch, speciesMapSearch, withAreaHistory, withYears,
+  newAreaMove, readList, readMapYears, readRank, sameAddress, speciesDatasetsSearch, speciesMapSearch, withAreaHistory,
+  withYears,
 } from './route'
 
 // The state of a plain Datasets page.
@@ -233,5 +234,25 @@ describe("an area's place in the history", () => {
     expect(clearAreaMove(`?cell=${CELL}`, null)).toEqual({ back: 0, search: `?cell=${CELL}`, replace: true, state: null })
     expect(clearAreaMove(`?cell=${CELL}`, { panelFromClick: true, areaDepth: 1 }))
       .toEqual({ back: 1, search: `?cell=${CELL}`, replace: true, state: null })
+  })
+})
+
+describe('a new box over an old area', () => {
+  const NEW = '?area=-123,53.8,-122.5,54&area_res=6'
+
+  it('goes back past every entry holding the old area, then adds the new box', () => {
+    // Drawn in this visit, nothing opened since: back to before it, then the
+    // new box as the area's first entry.
+    expect(newAreaMove(NEW, { areaDepth: 0, areaBefore: '' }))
+      .toEqual({ back: 1, search: NEW, replace: false, state: { areaDepth: 0, areaBefore: '' } })
+    // With a hexagon opened over the old area.
+    expect(newAreaMove(NEW, { panelFromClick: true, areaDepth: 1, areaBefore: '?species=59PMB' }))
+      .toEqual({ back: 2, search: NEW, replace: false, state: { areaDepth: 0, areaBefore: '?species=59PMB' } })
+  })
+
+  it("replaces a shared link's area on the link's own entry", () => {
+    expect(newAreaMove(NEW, null)).toEqual({ back: 0, search: NEW, replace: true, state: { areaDepth: 0 } })
+    expect(newAreaMove(NEW, { panelFromClick: true, areaDepth: 1 }))
+      .toEqual({ back: 1, search: NEW, replace: true, state: { areaDepth: 0 } })
   })
 })

@@ -1493,7 +1493,13 @@ rotate, touch zoom, box zoom and double-click zoom are switched off), the
 cursor is a crosshair (set through deck.gl's `getCursor`, which would
 otherwise put its own back), the hover box is hidden, and the hint "Drag to
 draw a box. Esc to cancel." shows; dragging with the mouse or one finger
-draws the box, Esc or the button ("Cancel drawing") cancels. The box's
+draws the box, Esc or the button ("Cancel drawing") cancels, and so does
+any change of page (Back or Forward, a link, another hexagon, area, species
+or rank), so the map never stays in drawing mode on a page it was not
+started on. Whenever the address names a hexagon, the map shows it as it
+was when clicked: it moves to the hexagon when it is off screen and zooms
+to hexagons of its size when the map shows another size (`HexMap.jsx`),
+so the panel and the outline on the map always agree. The box's
 edges keep 4 decimals (about 11 m). The hexagons it selects are those at
 the resolution the map showed when it was drawn that overlap it even by a
 corner (`boxCells` in `frontend/src/area.js`: h3-js
@@ -1548,7 +1554,9 @@ so a shared link opens the same box, fitted in view.
 **The area stays until it is cleared.** Once drawn, the area (its box, the
 outline and the faded hexagons around it) stays on the map and in the
 address until the map's "Clear area" button (beside "Draw a box" while an
-area exists) removes it; drawing a new box replaces it. Every other move
+area exists) removes it; a new box drawn anywhere on the map replaces it
+(one area at a time; a box too small or too big keeps the old area and
+says why). Every other move
 keeps it: clicking a hexagon opens that hexagon's panel on top of the area
 panel, which stays loaded under it; opening a species (from the area's
 list, a hexagon's list or the search box) keeps the area in the address,
@@ -1563,7 +1571,7 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | After | The address entry | Back then |
 | --- | --- | --- |
 | Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
-| Drawing another box | replaced | returns to before the first box |
+| Drawing another box (anywhere on the map) | goes back past every entry holding the old box, then added as the area's first entry (closes an open hexagon panel) | returns to before the first box, never to the old box |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
@@ -1573,10 +1581,12 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | "Clear area" on a shared link's area | the link's entry, and any entry added since, become one entry without the area (a hexagon's panel stays open) | leaves the page, as from the link |
 
 "Clear area" takes the area out of the history, not only out of the
-address: every entry that holds an area records how far it is from the
-entry before the area began (`withAreaHistory` and `clearAreaMove` in
+address, and so does a new box for the old one: every entry that holds an
+area records how far it is from the entry before the area began
+(`withAreaHistory`, `clearAreaMove` and `newAreaMove` in
 `frontend/src/route.js`), so neither a panel's x nor Back can bring a
-cleared area back. Forward cannot either once a hexagon's panel or a rank
+cleared or replaced area back. A shared link's area is replaced on the
+link's own entry. Forward cannot either once a hexagon's panel or a rank
 was open; right after drawing, Forward can redo the box, as for any Back.
 
 **Download CSV.** Four lists have a "Download CSV" button (the area panel's,

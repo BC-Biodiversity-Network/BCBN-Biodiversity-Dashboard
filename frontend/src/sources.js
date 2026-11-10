@@ -43,6 +43,14 @@ export const OGL_BC_PREFIX = 'Contains information licensed under the '
 export const OGL_BC_NAME = 'Open Government Licence – British Columbia'
 export const OGL_BC_STATEMENT = `${OGL_BC_PREFIX}${OGL_BC_NAME}.`
 
+// The reserve outlines on the map: Natural Resources Canada's "Aboriginal
+// Lands of Canada Legislative Boundaries" on the Open Government Portal,
+// under the Open Government Licence – Canada, which asks for the statement
+// "Contains information licensed under the Open Government Licence –
+// Canada." (in the footer, with this link to the licence).
+export const RESERVES_DATASET_URL = 'https://open.canada.ca/data/en/dataset/522b07b9-78e2-4819-b736-ad9208eb1067'
+export const OGL_CANADA_URL = 'https://open.canada.ca/en/open-government-licence-canada'
+
 // The Open Government Licences of the catalogues whose dataset descriptions
 // the Datasets page shows, in the footer's attribution line, each with the
 // page of its text found in the November 2026 licence and source checks:
@@ -51,7 +59,7 @@ export const OGL_BC_STATEMENT = `${OGL_BC_PREFIX}${OGL_BC_NAME}.`
 // Squamish is named without a link (Lucia's decision, November 2026).
 export const DATASETS_OGL_LICENCES = [
   { name: 'Open Government Licence – British Columbia', url: OGL_BC_URL },
-  { name: 'Open Government Licence – Canada', url: 'https://open.canada.ca/en/open-government-licence-canada' },
+  { name: 'Open Government Licence – Canada', url: OGL_CANADA_URL },
   {
     name: 'Open Government License – City of Prince George',
     url: 'https://pgmap.princegeorge.ca/opendata/CityofPrinceGeorge_Open_Government_License_Open_Data.pdf',

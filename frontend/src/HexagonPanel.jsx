@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { cellArea } from 'h3-js'
 
 import { cellExportUrl, fetchCell } from './api'
 import CsvDownload from './CsvDownload'
 import { GBIF_COUNT_NOTE, gbifCellSearchUrl } from './gbifLinks'
 import RankName, { rankTitle } from './RankName'
-import { NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
+import { reminderNamesText } from './reserves'
+import { INDIGENOUS_PAGE_SEARCH, NO_LIST, mapSearch, rankKey, speciesMapSearch } from './route'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 import YearBars from './YearBars'
 import { yearsLabel } from './yearRange'
@@ -79,6 +80,33 @@ export function InPageLink({ href, onFollow, children, ...rest }) {
     >
       {children}
     </a>
+  )
+}
+
+// The reserve reminder, under a species list: a quiet note (not a pop-up)
+// that the hexagons chosen include First Nations reserve land, naming the
+// reserves (names, from the API's reserve_names, shown exactly as given; the
+// first few, see reminderNamesText), and linking to the Indigenous data page
+// (onOpenPage opens it in place of following the link). Nothing at all
+// when names is empty or missing.
+export function ReserveReminder({ names, onOpenPage }) {
+  // The title's id, its own in each panel (the area panel can be on the
+  // page, hidden, under a hexagon's).
+  const titleId = useId()
+  if (!names || names.length === 0) {
+    return null
+  }
+  return (
+    <section className="reserve-reminder" aria-labelledby={titleId}>
+      <h3 id={titleId} className="reserve-reminder-title">First Nations reserve land</h3>
+      <p>
+        This area includes First Nations reserve land ({reminderNamesText(names)}). If these data were collected
+        on a reserve, check where they came from and whether the Nation agreed to the work.
+      </p>
+      <p>
+        <InPageLink href={INDIGENOUS_PAGE_SEARCH} onFollow={onOpenPage}>Indigenous data</InPageLink>
+      </p>
+    </section>
   )
 }
 
@@ -162,9 +190,11 @@ export function SpeciesRow({ item, onOpen }) {
 // page }, from the address) and onListChange(list) changes them.
 // onOpenSpecies(key) opens a species' card and map. On a rank map (rank is
 // { rank, name, path }), only the rank's species, with a link to every
-// species in the hexagon (onShowAllSpecies).
+// species in the hexagon (onShowAllSpecies). Under the list, the reserve
+// reminder when the hexagon touches a reserve (onOpenIndigenousPage opens
+// the page it links to).
 function AllSpeciesPanel({
-  cell, years, rank = null, list, onListChange, onClose, onOpenSpecies, onShowAllSpecies,
+  cell, years, rank = null, list, onListChange, onClose, onOpenSpecies, onShowAllSpecies, onOpenIndigenousPage,
 }) {
   // The list's options: the same ones give the page shown and the CSV
   // download of the whole list.
@@ -218,6 +248,7 @@ function AllSpeciesPanel({
               No species of this {rank.rank} in this hexagon{data.years_counted ? ' for these years' : ''}.
             </p>
           )}
+          <ReserveReminder names={data.reserve_names} onOpenPage={onOpenIndigenousPage} />
           {rank && (
             <p className="hexagon-show-all">
               <InPageLink href={mapSearch({ cell })} onFollow={onShowAllSpecies}>
@@ -277,8 +308,9 @@ function SpeciesRecords({ asked, cell, yearsCounted }) {
 // records for the chosen years (or that it has none, or, when the
 // sensitive-species rule hides it at this size, nothing about them), and a
 // link to show every species in the hexagon on the overview
-// (onShowAllSpecies).
-function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies }) {
+// (onShowAllSpecies), then the reserve reminder when the hexagon touches a
+// reserve.
+function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies, onOpenIndigenousPage }) {
   const { current, data } = useCellAnswer(cell, { years, species: species.key, limit: 1 })
   const asked = data?.species_asked_for ?? null
   const name = asked?.col_name ?? species.name
@@ -314,6 +346,7 @@ function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies }) {
           </InPageLink>
         </p>
       )}
+      {data && !current?.error && <ReserveReminder names={data.reserve_names} onOpenPage={onOpenIndigenousPage} />}
       {asked && (
         <p className="hexagon-sources">
           Name from the Catalogue of Life, via GBIF. Records counted after merging keys, as on the maps.
@@ -332,17 +365,22 @@ function SpeciesPanel({ cell, years, species, onClose, onShowAllSpecies }) {
 // species' card and map, onShowAllSpecies switches to the overview's panel
 // for the same hexagon, and onClose closes the panel. list and
 // onListChange are the options of its species list (see AllSpeciesPanel).
-// The page gives the panel the hexagon id as its React key, so each hexagon
-// starts afresh.
+// onOpenIndigenousPage opens the Indigenous data page, from the reserve
+// reminder. The page gives the panel the hexagon id as its React key, so
+// each hexagon starts afresh.
 export default function HexagonPanel({
   cell, years, species, rank = null, list = NO_LIST, onListChange = () => {}, onClose, onOpenSpecies,
-  onShowAllSpecies,
+  onShowAllSpecies, onOpenIndigenousPage = () => {},
 }) {
   if (species) {
-    return <SpeciesPanel cell={cell} years={years} species={species} onClose={onClose} onShowAllSpecies={onShowAllSpecies} />
+    return (
+      <SpeciesPanel cell={cell} years={years} species={species} onClose={onClose} onShowAllSpecies={onShowAllSpecies}
+        onOpenIndigenousPage={onOpenIndigenousPage} />
+    )
   }
   return (
     <AllSpeciesPanel key={rank ? rankKey(rank) : 'all'} cell={cell} years={years} rank={rank} list={list}
-      onListChange={onListChange} onClose={onClose} onOpenSpecies={onOpenSpecies} onShowAllSpecies={onShowAllSpecies} />
+      onListChange={onListChange} onClose={onClose} onOpenSpecies={onOpenSpecies} onShowAllSpecies={onShowAllSpecies}
+      onOpenIndigenousPage={onOpenIndigenousPage} />
   )
 }

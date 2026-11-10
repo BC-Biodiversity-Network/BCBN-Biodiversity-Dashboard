@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { fetchMeta } from './api'
+import { fetchMeta, fetchReserves } from './api'
 import { areaProblem, boxCells, groupOutline } from './area'
 import AreaPanel from './AreaPanel'
 import HexagonPanel from './HexagonPanel'
@@ -9,8 +9,9 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  AREA_FROM_DRAW, AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, isPlainMap, keptListChoices, mapSearch, rankKey, readArea,
-  readAreaPanelOpen, readCell, readList, readMapYears, readRank, readSpeciesKey, speciesDatasetsSearch, withYears,
+  AREA_FROM_DRAW, AREA_LIST, CELL_LIST, INDIGENOUS_PAGE_SEARCH, PANEL_FROM_CLICK, isPlainMap, keptListChoices,
+  mapSearch, rankKey, readArea, readAreaPanelOpen, readCell, readList, readMapYears, readRank, readReservesShown,
+  readSpeciesKey, speciesDatasetsSearch, withReserves, withYears,
 } from './route'
 import SearchBox from './SearchBox'
 import SiteFooter from './SiteFooter'
@@ -106,7 +107,12 @@ const HEX_DATA_URLS = {
 //
 // Years: the year range is in the address too, and every move between maps,
 // cards and hexagons keeps it. Changing it replaces the entry in the same
-// way, so the map, the hexagon panel and the rank card all follow it.
+// way, so the map, the hexagon panel and the rank card all follow it. The
+// reserve layer's switch (reserves=off) is kept and changed the same way.
+//
+// Reserves: the outlines come from /api/reserves, fetched once. They can be
+// seen but not clicked (see reserves.js); the panels name the reserves the
+// chosen hexagons touch and link to the Indigenous data page.
 //
 // historyState reads the current history entry's state (the browser's
 // window.history.state; the tests give their own).
@@ -170,6 +176,14 @@ export default function App({
   const addressYearsKey = yearsKey(addressYears)
   // addressYearsKey stands for addressYears, which is a new object each time.
   const years = useMemo(() => addressYears, [addressYearsKey])
+  // Whether the reserve layer is on, from the address (reserves=off), kept
+  // like the years on every move, and the map's view settings together, as
+  // every move between maps, cards and hexagons passes them on.
+  const reservesShown = readReservesShown(search)
+  const view = { years, reservesShown }
+  // The reserve layer from /api/reserves, fetched once: null until it
+  // arrives, and if it fails (the map then simply has no reserves).
+  const [reserves, setReserves] = useState(null)
   // The species last opened from a hexagon's list or a rank card ({ key,
   // rank }: rank null for a hexagon's list), so its card can offer the way
   // back; null when none was.
@@ -184,6 +198,15 @@ export default function App({
     fetchMeta()
       .then(setMeta)
       .catch((metaError) => console.error(metaError))
+  }, [])
+
+  // Fetches the reserve layer once, when the page first appears. If the API
+  // is not there, or has no reserve files, the map has no reserve layer and
+  // no switch for it.
+  useEffect(() => {
+    fetchReserves()
+      .then(setReserves)
+      .catch((reservesError) => console.error(reservesError))
   }, [])
 
   // Downloads the four overview files once, when the page first appears, and
@@ -238,13 +261,13 @@ export default function App({
     picks.current += 1
     const key = result.merged_from ?? result.specieskey
     setSpecies({ key, name: result.col_name, id: picks.current })
-    navigate(mapSearch({ species: key, ...keepArea, years }), { replace: true })
+    navigate(mapSearch({ species: key, ...keepArea, ...view }), { replace: true })
   }
 
   // Closes the card, back to the overview (and the area, when there is one).
   function closeCard() {
     setSpecies(null)
-    navigate(mapSearch({ ...keepArea, years }), { replace: true })
+    navigate(mapSearch({ ...keepArea, ...view }), { replace: true })
   }
 
   // Changes the year range (null for all years) in place, keeping
@@ -252,6 +275,17 @@ export default function App({
   // and the x's work as before.
   function changeYears(next) {
     navigate(withYears(search, next), { replace: true, state: historyState() })
+  }
+
+  // Switches the reserve layer on or off in place, in the same way.
+  function changeReservesShown(shown) {
+    navigate(withReserves(search, shown), { replace: true, state: historyState() })
+  }
+
+  // Opens the Indigenous data page (the panels' reminder links to it), as a
+  // new address entry, so Back returns to the map as it was.
+  function openIndigenousPage() {
+    navigate(INDIGENOUS_PAGE_SEARCH)
   }
 
   // Opens the panel of a clicked hexagon, keeping the species map if one is
@@ -265,7 +299,7 @@ export default function App({
     }
     const target = mapSearch({
       species: addressKey, rank: addressRank, rankList: addressRankList, cell,
-      cellList: keptListChoices(addressCellList), ...keepArea, years,
+      cellList: keptListChoices(addressCellList), ...keepArea, ...view,
     })
     if (addressCell) {
       navigate(target, { replace: true, state: historyState() })
@@ -281,7 +315,7 @@ export default function App({
     if (historyState()?.panelFromClick) {
       goBack()
     } else {
-      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList, ...keepArea, years }),
+      navigate(mapSearch({ species: addressKey, rank: addressRank, rankList: addressRankList, ...keepArea, ...view }),
         { replace: true })
     }
   }
@@ -300,7 +334,7 @@ export default function App({
     }
     const target = mapSearch({
       rank: addressRank, rankList: addressRankList, area: { box, res },
-      areaList: keptListChoices(addressAreaList), years,
+      areaList: keptListChoices(addressAreaList), ...view,
     })
     if (keptArea) {
       navigate(target, { replace: true, state: historyState() })
@@ -319,7 +353,7 @@ export default function App({
     } else {
       navigate(mapSearch({
         species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell,
-        cellList: addressCellList, years,
+        cellList: addressCellList, ...view,
       }), { replace: true, state: historyState() })
     }
   }
@@ -329,14 +363,14 @@ export default function App({
   function setAreaPanelOpen(open) {
     navigate(mapSearch({
       rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: addressCellList,
-      ...keepArea, areaPanelOpen: open, years,
+      ...keepArea, areaPanelOpen: open, ...view,
     }), { replace: true, state: historyState() })
   }
 
   // Changes the options of the area panel's list (name filter, order, BC
   // statuses, page), in place of the current entry.
   function changeAreaList(list) {
-    navigate(mapSearch({ rank: addressRank, rankList: addressRankList, ...keepArea, areaList: list, years }),
+    navigate(mapSearch({ rank: addressRank, rankList: addressRankList, ...keepArea, areaList: list, ...view }),
       { replace: true, state: historyState() })
   }
 
@@ -346,20 +380,20 @@ export default function App({
   // overview's panel then closes it in place rather than going back to the
   // species panel.
   function showAllSpecies() {
-    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList), ...keepArea, years }))
+    navigate(mapSearch({ cell: addressCell, cellList: keptListChoices(addressCellList), ...keepArea, ...view }))
   }
 
   // Changes the options of the rank card's species list, or of the hexagon
   // panel's, in place (see the top of this component).
   function changeRankList(list) {
     navigate(mapSearch({
-      rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList, ...keepArea, years,
+      rank: addressRank, rankList: list, cell: addressCell, cellList: addressCellList, ...keepArea, ...view,
     }), { replace: true, state: historyState() })
   }
   function changeCellList(list) {
     navigate(mapSearch({
       species: addressKey, rank: addressRank, rankList: addressRankList, cell: addressCell, cellList: list,
-      ...keepArea, years,
+      ...keepArea, ...view,
     }), { replace: true, state: historyState() })
   }
 
@@ -370,7 +404,7 @@ export default function App({
     picks.current += 1
     setSpecies({ key, name: null, id: picks.current })
     setOpenedFrom({ key, rank: from, area: fromArea })
-    navigate(mapSearch({ species: key, ...keepArea, years }))
+    navigate(mapSearch({ species: key, ...keepArea, ...view }))
   }
 
   // Opens a rank's page (see the top of this component), as a new address
@@ -383,7 +417,7 @@ export default function App({
       setRankOpen((open) => ({ ...open, id }))
       return
     }
-    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList), ...keepArea, years }),
+    navigate(mapSearch({ rank: rankRef, rankList: keptListChoices(addressRankList), ...keepArea, ...view }),
       { state: { rankOpenedFrom: search } })
   }
 
@@ -393,7 +427,7 @@ export default function App({
     if (from !== undefined && isPlainMap(from) && !addressCell && !keptArea) {
       goBack()
     } else {
-      navigate(mapSearch({ cell: addressCell, cellList: addressCellList, ...keepArea, years }), { replace: true })
+      navigate(mapSearch({ cell: addressCell, cellList: addressCellList, ...keepArea, ...view }), { replace: true })
     }
   }
 
@@ -436,6 +470,9 @@ export default function App({
           onDismissAreaMessage={() => setAreaMessage(null)}
           onClearArea={addressArea ? clearArea : null}
           onShowArea={addressArea && !areaPanelOpen && !addressCell ? () => setAreaPanelOpen(true) : null}
+          reserves={reserves}
+          reservesShown={reservesShown}
+          onReservesShownChange={changeReservesShown}
         />
 
         <div className="top-right-controls">
@@ -452,6 +489,7 @@ export default function App({
               onClose={closeCell}
               onOpenSpecies={(key) => openSpeciesFrom(key)}
               onShowAllSpecies={showAllSpecies}
+              onOpenIndigenousPage={openIndigenousPage}
             />
           )}
           {/* The area panel stays loaded under a hexagon's panel, so closing
@@ -468,6 +506,7 @@ export default function App({
                 onListChange={changeAreaList}
                 onClose={() => setAreaPanelOpen(false)}
                 onOpenSpecies={(key) => openSpeciesFrom(key, null, true)}
+                onOpenIndigenousPage={openIndigenousPage}
               />
             </div>
           )}

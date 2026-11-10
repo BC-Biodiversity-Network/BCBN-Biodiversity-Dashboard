@@ -1008,7 +1008,8 @@ body {
 }
 
 .site > .app-layout,
-.site > .datasets-page {
+.site > .datasets-page,
+.site > .indigenous-page {
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
@@ -1837,4 +1838,76 @@ body {
   line-height: 1;
   color: #555;
   cursor: pointer;
+}
+
+/* --- First Nations reserves ------------------------------------------------ */
+
+/* The "Reserves" switch in the top-left controls: the same white box as the
+   other controls, a checkbox, then a small swatch in the layer's own colours
+   (set by HexMap from RESERVE_STYLE in reserves.js), then the word. */
+.reserves-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reserves-switch input {
+  margin: 0;
+  accent-color: #184f95;
+  cursor: pointer;
+}
+
+.reserves-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border: 1.5px solid;
+  border-radius: 2px;
+}
+
+/* The reserve reminder under a panel's species list: a quiet note in the
+   layer's sand and brown, not a warning colour. */
+.reserve-reminder {
+  margin: 10px 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #6b5a2e;
+  border-radius: 2px;
+  background: #f7f2e4;
+  color: #3d3520;
+  font-size: 13px;
+}
+
+.reserve-reminder p {
+  margin: 0 0 4px;
+}
+
+.reserve-reminder p:last-child {
+  margin-bottom: 0;
+}
+
+.reserve-reminder-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The Indigenous data page: for now a heading and one line. */
+.indigenous-page {
+  box-sizing: border-box;
+  max-width: 720px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.indigenous-page h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
 }

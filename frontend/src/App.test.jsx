@@ -128,4 +128,36 @@ describe('the page', () => {
     rerender(<App search="" navigate={vi.fn()} />)
     expect(seen.map.species).toBeNull()
   })
+
+  it('fetches the reserve layer once, hands it to the map, and keeps its switch in the address', async () => {
+    const reserves = { available: true, source: { source_title: 'Test' }, outlines: { type: 'FeatureCollection', features: [] } }
+    const fetchMock = vi.fn(async (url) => ({
+      ok: true, status: 200, json: async () => (url.endsWith('/reserves') ? reserves : {}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState(null, '', '/?year_from=2000')
+    render(<Page />)
+    await act(async () => {})
+    expect(seen.map.reserves).toEqual(reserves)
+    expect(seen.map.reservesShown).toBe(true)
+
+    // Switching it off goes into the address in place, and every move keeps it.
+    const before = window.history.length
+    act(() => seen.map.onReservesShownChange(false))
+    expect(window.location.search).toBe('?year_from=2000&reserves=off')
+    expect(window.history.length).toBe(before)
+    expect(seen.map.reservesShown).toBe(false)
+    act(() => screen.getByRole('button', { name: 'Pick the robin' }).click())
+    expect(window.location.search).toBe('?species=59PMB&year_from=2000&reserves=off')
+    act(() => screen.getByRole('button', { name: 'Close the card' }).click())
+    expect(window.location.search).toBe('?year_from=2000&reserves=off')
+    act(() => seen.map.onCellClick('872800b30ffffff'))
+    expect(window.location.search).toBe('?cell=872800b30ffffff&year_from=2000&reserves=off')
+    act(() => seen.map.onReservesShownChange(true))
+    expect(window.location.search).toBe('?cell=872800b30ffffff&year_from=2000')
+
+    // Fetched only once, however the page moves.
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/reserves'))).toHaveLength(1)
+    window.history.replaceState(null, '', '/')
+  })
 })

@@ -4,7 +4,7 @@ import { areaExportUrl, fetchArea } from './api'
 import { averageHexagonKm2, boxAreaKm2 } from './area'
 import CsvDownload from './CsvDownload'
 import { AREA_GBIF_NOTE, GBIF_COUNT_NOTE, gbifBoxSearchUrl } from './gbifLinks'
-import { PAGE_SIZE, SpeciesRow, km2Text, notCountedText, totalsText, useListAnswer } from './HexagonPanel'
+import { PAGE_SIZE, ReserveReminder, SpeciesRow, km2Text, notCountedText, totalsText, useListAnswer } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 
@@ -45,8 +45,10 @@ function AreaError({ error }) {
 // the rank's species. list holds the list's options ({ q, sort, status,
 // page }, from the address) and onListChange(list) changes them;
 // onOpenSpecies(key) opens a species' card and map; onClose is the x.
+// Under the list, the reserve reminder when any of the hexagons touches a
+// reserve (onOpenIndigenousPage opens the page it links to).
 export default function AreaPanel({
-  area, cellCount, years, rank = null, list, onListChange, onClose, onOpenSpecies,
+  area, cellCount, years, rank = null, list, onListChange, onClose, onOpenSpecies, onOpenIndigenousPage = () => {},
 }) {
   // The list's options: the same ones give the page shown and the CSV
   // download of the whole list.
@@ -114,6 +116,7 @@ export default function AreaPanel({
               {data.years_counted ? ' for these years' : ''}.
             </p>
           )}
+          <ReserveReminder names={data.reserve_names} onOpenPage={onOpenIndigenousPage} />
           <p className="hexagon-gbif">
             <a href={gbifBoxSearchUrl({ box: area.box, years: data.years_counted })} target="_blank"
               rel="noopener noreferrer">

@@ -13,6 +13,7 @@ import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outli
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
 import RankName from './RankName'
+import { RESERVE_LABEL_MIN_ZOOM, RESERVE_STYLE, reserveLabelPoints, reserveOutlines } from './reserves'
 import { useOverviewHexes, useRankHexes, useSpeciesHexes } from './speciesHexes'
 import YearFilter from './YearFilter'
 import { yearsLabel } from './yearRange'
@@ -359,6 +360,53 @@ function DrawBoxControl({ drawing, unavailable, onToggle, message, onDismissMess
   )
 }
 
+// The "Reserves" switch in the top-left controls: a checkbox styled as a
+// switch, with a small swatch in the layer's colours. shown is whether the
+// layer is on; onChange(shown) changes it.
+export function ReservesSwitch({ shown, onChange }) {
+  return (
+    <label className="reserves-switch">
+      <input type="checkbox" role="switch" checked={shown} onChange={(event) => onChange(event.target.checked)} />
+      <span className="reserves-swatch" aria-hidden="true"
+        style={{ borderColor: RESERVE_STYLE.line, background: RESERVE_STYLE.fill }} />
+      Reserves
+    </label>
+  )
+}
+
+// The reserve layer: a faint fill, the outline, and the names from
+// RESERVE_LABEL_MIN_ZOOM, all MapLibre layers above the hexagons (outlines is
+// a GeoJSON FeatureCollection, see reserveOutlines; labels one point per
+// reserve with its name, see reserveLabelPoints; shown whether they are
+// visible). The map is given no click or hover handler for these layers and
+// deck.gl never picks them, so clicks and the hover box go to the hexagon
+// underneath, as if the layer were not there. The names are shown exactly
+// as the source writes them (no change of case).
+function ReserveLayers({ outlines, labels, shown }) {
+  const visibility = shown ? 'visible' : 'none'
+  return (
+    <>
+      <Source id="reserves" type="geojson" data={outlines}>
+        <Layer id="reserves-fill" type="fill" layout={{ visibility }}
+          paint={{ 'fill-color': RESERVE_STYLE.fill, 'fill-opacity': RESERVE_STYLE.fillOpacity }} />
+        <Layer id="reserves-line" type="line" layout={{ visibility }}
+          paint={{ 'line-color': RESERVE_STYLE.line, 'line-width': RESERVE_STYLE.lineWidth }} />
+      </Source>
+      <Source id="reserve-labels" type="geojson" data={labels}>
+        <Layer id="reserves-label" type="symbol" minzoom={RESERVE_LABEL_MIN_ZOOM}
+          layout={{
+            visibility,
+            'text-field': ['get', 'name'],
+            'text-font': RESERVE_STYLE.font,
+            'text-size': RESERVE_STYLE.textSize,
+            'text-max-width': 8,
+          }}
+          paint={{ 'text-color': RESERVE_STYLE.text, 'text-halo-color': RESERVE_STYLE.textHalo, 'text-halo-width': 1.5 }} />
+      </Source>
+    </>
+  )
+}
+
 // Puts the deck.gl layers onto the MapLibre map.
 //
 // useControl is react-map-gl's way of adding something to the map and taking
@@ -466,11 +514,18 @@ function apiStatus(hexes, what) {
 // when there is no area) is the "Clear area" button beside "Draw a box",
 // and onShowArea (or null when the area panel is open or covered) the
 // "Show area" button that opens the area panel again.
+//
+// Reserves: reserves is the /api/reserves answer (null while it loads or if
+// it failed). When it is available, the outlines are drawn above the
+// hexagons on every map (see ReserveLayers) and the "Reserves" switch shows
+// in the top-left controls; reservesShown is whether the layer is on and
+// onReservesShownChange(shown) switches it. When it is not available there
+// is no switch and nothing is drawn.
 export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
   selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
-  onClearArea = null, onShowArea = null,
+  onClearArea = null, onShowArea = null, reserves = null, reservesShown = true, onReservesShownChange = () => {},
 }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
@@ -500,6 +555,13 @@ export default function HexMap({
   const selection = useMemo(
     () => (selectedArea ? { test: selectionTest(selectedArea.cells, selectedArea.res), key: areaId(selectedArea) } : null),
     [selectedArea])
+
+  // The reserve outlines and one label point per reserve, worked out once
+  // per answer from /api/reserves.
+  const reserveShapes = useMemo(() => {
+    const outlines = reserveOutlines(reserves)
+    return { outlines, labels: reserveLabelPoints(outlines) }
+  }, [reserves])
 
   const layers = useMemo(
     () => buildLayers({
@@ -756,6 +818,7 @@ export default function HexMap({
           <DrawBoxControl drawing={drawing} unavailable={Boolean(species)} onToggle={toggleDrawing}
             message={areaMessage} onDismissMessage={onDismissAreaMessage}
             onClear={species ? null : onClearArea} onShow={species ? null : onShowArea} />
+          {reserves?.available && <ReservesSwitch shown={reservesShown} onChange={onReservesShownChange} />}
         </div>
       )}
 
@@ -786,6 +849,10 @@ export default function HexMap({
       >
         <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawing ? noTooltip : tooltipFor}
           onClick={handleClick} getCursor={drawing ? crosshairCursor : dragCursor} />
+        {/* The reserves, always given to the map (empty until they arrive)
+            and before the area's outlines, so those stay on top. */}
+        <ReserveLayers outlines={reserveShapes.outlines} labels={reserveShapes.labels}
+          shown={Boolean(reserves?.available) && reservesShown} />
         {/* The outline around the selected group of hexagons, then the box
             dashed above it; both are added again (a new key) whenever the
             area changes, so they always sit above the hexagons. */}

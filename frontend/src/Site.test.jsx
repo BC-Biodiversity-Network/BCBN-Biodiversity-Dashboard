@@ -67,4 +67,14 @@ describe('the top bar', () => {
     })
     expect(screen.getByText('The species map')).toBeTruthy()
   })
+
+  it('links to the Indigenous data page after Datasets, and opens it', () => {
+    render(<Site />)
+    const links = screen.getAllByRole('link').map((link) => link.textContent)
+    expect(links).toEqual(['Species map', 'Datasets', 'Indigenous data'])
+    fireEvent.click(screen.getByRole('link', { name: 'Indigenous data' }))
+    expect(window.location.search).toBe('?view=indigenous')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Indigenous data on this site')
+    expect(screen.getByRole('link', { name: 'Indigenous data' }).getAttribute('aria-current')).toBe('page')
+  })
 })

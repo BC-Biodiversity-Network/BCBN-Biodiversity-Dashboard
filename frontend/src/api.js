@@ -151,6 +151,14 @@ export function fetchMeta({ signal } = {}) {
   return fetchJson('/meta', signal)
 }
 
+// Fetches the reserve layer (/api/reserves, no parameters): { available,
+// source, outlines }, outlines a GeoJSON FeatureCollection whose features
+// carry only alcode and name. available is false (and outlines null) when
+// the API has no reserve files.
+export function fetchReserves({ signal } = {}) {
+  return fetchJson('/reserves', signal)
+}
+
 // The query string for a map at one resolution and, if years is set, a
 // range of years. years is null for all years, or { from, to } where either
 // may be null for an open end (the API fills it in from the data).

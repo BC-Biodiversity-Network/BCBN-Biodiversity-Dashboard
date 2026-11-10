@@ -360,16 +360,18 @@ function DrawBoxControl({ drawing, unavailable, onToggle, message, onDismissMess
   )
 }
 
-// The "Reserves" switch in the top-left controls: a checkbox styled as a
-// switch, with a small swatch in the layer's colours. shown is whether the
-// layer is on; onChange(shown) changes it.
+// The "First Nations reserves" switch in the top-left controls: a checkbox
+// styled as a switch, with a small swatch in the layer's colours. Its label
+// says "First Nations" because "Reserves" alone means little to most
+// visitors (Evan, 2026-11-10). shown is whether the layer is on;
+// onChange(shown) changes it.
 export function ReservesSwitch({ shown, onChange }) {
   return (
     <label className="reserves-switch">
       <input type="checkbox" role="switch" checked={shown} onChange={(event) => onChange(event.target.checked)} />
       <span className="reserves-swatch" aria-hidden="true"
         style={{ borderColor: RESERVE_STYLE.line, background: RESERVE_STYLE.fill }} />
-      Reserves
+      First Nations reserves
     </label>
   )
 }
@@ -517,7 +519,7 @@ function apiStatus(hexes, what) {
 //
 // Reserves: reserves is the /api/reserves answer (null while it loads or if
 // it failed). When it is available, the outlines are drawn above the
-// hexagons on every map (see ReserveLayers) and the "Reserves" switch shows
+// hexagons on every map (see ReserveLayers) and the "First Nations reserves" switch shows
 // in the top-left controls; reservesShown is whether the layer is on and
 // onReservesShownChange(shown) switches it. When it is not available there
 // is no switch and nothing is drawn.

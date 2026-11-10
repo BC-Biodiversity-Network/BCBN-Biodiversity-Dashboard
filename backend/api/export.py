@@ -157,10 +157,15 @@ FILE_PART_LENGTH = 40
 
 # The reserve reminder added to the end of header line 2 of a hexagon or
 # area download when its hexagons touch a First Nations reserve
-# (reserves.py). {names} is every reserve name, joined with ", ".
+# (reserves.py). {names} is every reserve name, joined with ", ". The same
+# words as the panels' reminder (ReserveReminder in
+# frontend/src/HexagonPanel.jsx), then where to read more. Placeholder
+# wording (Evan, 2026-11-10) for the steering committee: it asks users to
+# think about how the data were collected and about Indigenous data
+# governance, and does not send them to contact a Nation.
 RESERVE_NOTE = (" This area includes First Nations reserve land ({names}). Some of these records may have been "
-                "collected on a reserve. If you use them, check whether they were, and if so, whether the Nation "
-                "agreed to the collection. See the Indigenous data page of the site.")
+                "collected on reserve land. Consider how the data were collected, and follow Indigenous data "
+                "governance principles such as OCAP and CARE. See the Indigenous data page of the site.")
 
 # The most reserve names the note lists. Past this, the note gives the first
 # ones (in the same sorted order) and then how many more there are. The API

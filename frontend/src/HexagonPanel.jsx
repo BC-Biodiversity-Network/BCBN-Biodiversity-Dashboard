@@ -88,7 +88,12 @@ export function InPageLink({ href, onFollow, children, ...rest }) {
 // reserves (names, from the API's reserve_names, shown exactly as given; the
 // first few, see reminderNamesText), and linking to the Indigenous data page
 // (onOpenPage opens it in place of following the link). Nothing at all
-// when names is empty or missing.
+// when names is empty or missing. Placeholder wording (Evan, 2026-11-10)
+// for the steering committee: it asks visitors to think about how the data
+// were collected and about Indigenous data governance, and does not send
+// them to contact a Nation, which could flood Nations with requests they
+// have no capacity for. The CSV downloads say the same (RESERVE_NOTE in
+// backend/api/export.py).
 export function ReserveReminder({ names, onOpenPage }) {
   // The title's id, its own in each panel (the area panel can be on the
   // page, hidden, under a hexagon's).
@@ -101,8 +106,8 @@ export function ReserveReminder({ names, onOpenPage }) {
       <h3 id={titleId} className="reserve-reminder-title">First Nations reserve land</h3>
       <p>
         This area includes First Nations reserve land ({reminderNamesText(names)}). Some of these records may
-        have been collected on a reserve. If you use them, check whether they were, and if so, whether the Nation
-        agreed to the collection.
+        have been collected on reserve land. Consider how the data were collected, and follow Indigenous data
+        governance principles such as OCAP and CARE.
       </p>
       <p>
         <InPageLink href={INDIGENOUS_PAGE_SEARCH} onFollow={onOpenPage}>Indigenous data</InPageLink>

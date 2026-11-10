@@ -23,7 +23,7 @@ export default function SiteFooter() {
       from the{' '}
       <a href="https://www.catalogueoflife.org/" target="_blank" rel="noreferrer">Catalogue of Life</a>,
       via GBIF. Occurrence records come from{' '}
-      <a href="https://www.gbif.org/" target="_blank" rel="noreferrer">GBIF.org</a>. Reserve outlines:{' '}
+      <a href="https://www.gbif.org/" target="_blank" rel="noreferrer">GBIF.org</a>. First Nations reserve outlines:{' '}
       <a href={RESERVES_DATASET_URL} target="_blank" rel="noreferrer">
         Aboriginal Lands of Canada Legislative Boundaries
       </a>, Natural Resources Canada, simplified for display; not to be used for defining boundaries. Contains

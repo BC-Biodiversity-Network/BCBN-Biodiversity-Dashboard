@@ -24,8 +24,8 @@ const SEVEN = ['ALPHA 1', 'K’IT TSAḎẔE', 'WǪCHIIGII NANÉɁ', 'Made-up Cr
 
 // The words of the reminder before and after the names.
 const BEFORE = 'This area includes First Nations reserve land ('
-const AFTER = '). Some of these records may have been collected on a reserve. If you use them, check whether '
-  + 'they were, and if so, whether the Nation agreed to the collection.'
+const AFTER = '). Some of these records may have been collected on reserve land. Consider how the data were '
+  + 'collected, and follow Indigenous data governance principles such as OCAP and CARE.'
 
 // A pretend /api/hexes/{cell} answer (all species), with reserve_names.
 function cellAnswer(names, fields = {}) {
@@ -210,7 +210,8 @@ describe('the footer\'s reserve credit', () => {
   it('names the source, says it is simplified and not for boundaries, and carries the licence statement', () => {
     render(<SiteFooter />)
     expect(screen.getByRole('contentinfo').textContent).toContain(
-      'Reserve outlines: Aboriginal Lands of Canada Legislative Boundaries, Natural Resources Canada, simplified '
+      'First Nations reserve outlines: Aboriginal Lands of Canada Legislative Boundaries, Natural Resources Canada, '
+      + 'simplified '
       + 'for display; not to be used for defining boundaries. Contains information licensed under the Open '
       + 'Government Licence – Canada.')
     expect(screen.getByRole('link', { name: 'Aboriginal Lands of Canada Legislative Boundaries' }).href).toBe(

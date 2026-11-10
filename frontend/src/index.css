@@ -1842,7 +1842,7 @@ body {
 
 /* --- First Nations reserves ------------------------------------------------ */
 
-/* The "Reserves" switch in the top-left controls: the same white box as the
+/* The "First Nations reserves" switch in the top-left controls: the same white box as the
    other controls, a checkbox, then a small swatch in the layer's own colours
    (set by HexMap from RESERVE_STYLE in reserves.js), then the word. */
 .reserves-switch {

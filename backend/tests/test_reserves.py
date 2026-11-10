@@ -237,8 +237,8 @@ def test_hexagon_download_has_the_note_at_the_end_of_line_2(rclient):
                               "download of 2026-10-04, for this list's area and years." + note)
     assert header[1].endswith(
         " This area includes First Nations reserve land (ALPHA LAKE 2, Made-up Creek 1). Some of these "
-        "records may have been collected on a reserve. If you use them, check whether they were, and if "
-        "so, whether the Nation agreed to the collection. See the Indigenous data page of the site.")
+        "records may have been collected on reserve land. Consider how the data were collected, and follow "
+        "Indigenous data governance principles such as OCAP and CARE. See the Indigenous data page of the site.")
     assert header[3] == "# To read in R: read.csv(file, skip = 4)"
 
 

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-// The reserve layer on the map (HexMap.jsx): the "Reserves" switch, the
+// The reserve layer on the map (HexMap.jsx): the "First Nations reserves" switch, the
 // outlines handed to the map, and that the layer cannot be clicked. The real
 // map and deck.gl need a graphics card, so, as in HexMap.test.jsx, stand-ins
 // record what the map is given: sources (each GeoJSON source's data, by id),
@@ -87,9 +87,9 @@ function show(props = {}) {
   return render(<HexMap overview={OVERVIEW} species={null} {...props} />)
 }
 
-// The "Reserves" switch, or null when there is none.
+// The "First Nations reserves" switch, or null when there is none.
 function reservesSwitch() {
-  return screen.queryByRole('switch', { name: 'Reserves' })
+  return screen.queryByRole('switch', { name: 'First Nations reserves' })
 }
 
 afterEach(() => {

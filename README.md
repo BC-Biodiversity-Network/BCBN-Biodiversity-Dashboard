@@ -1429,14 +1429,25 @@ touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
 - Their downloads (`/api/export/hexes/{cell}`, `/api/export/area`) end
   header line 2, after the list's options and the note on the `records`
   column, with a full stop and "This area includes First Nations reserve land
-  (NAMES). Some of these records may have been collected on a reserve. If
-  you use them, check whether they were, and if so, whether the Nation
-  agreed to the collection. See the Indigenous data page of the site." when
+  (NAMES). Some of these records may have been collected on reserve land.
+  Consider how the data were collected, and follow Indigenous data
+  governance principles such as OCAP and CARE. See the Indigenous data page
+  of the site." when
   the list is not empty, still with exactly 4
   header lines. It names at most 10 reserves (`RESERVE_NOTE_MAX_NAMES` in
   `backend/api/export.py`), then "and N more reserves" ("and 1 more
   reserve" for one); `reserve_names` in the API answers always has them
   all. Dataset and rank downloads do not change.
+- The site's panels (`ReserveReminder` in `frontend/src/HexagonPanel.jsx`)
+  show the same words under the title "First Nations reserve land", with at
+  most 5 names, then a link to the Indigenous data page. The map's switch
+  is labelled "First Nations reserves" and the footer credit starts "First
+  Nations reserve outlines:", since "Reserves" alone means little to most
+  visitors. This wording is a placeholder for the steering committee
+  (Evan, 2026-11-10): it asks users to consider how the data were collected
+  and Indigenous data governance, and does not tell them to contact a
+  Nation, which could flood Nations with requests they have no capacity
+  for.
 - The rule is `RESERVE_REMINDER_RULE` in `backend/api/settings.py`: `"A"`
   (the default) names reserves at every hexagon size; `"B"` only at the two
   smallest (res 6 and 7), with empty lists at the larger sizes. Any other

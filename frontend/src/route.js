@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { AreaProblem, readAreaText } from './areaShapes.js'
+
 // Which page is shown, and the Datasets page's state, kept in the address
 // bar's query string so a link can be shared and the back button works.
 //
@@ -243,6 +245,30 @@ export function readArea(search) {
   const [west, south, east, north] = edges
   const inRange = west >= -180 && east <= 180 && south >= -90 && north <= 90
   return inRange && west < east && south < north ? { box: { west, south, east, north }, res } : null
+}
+
+// The area on the species map as a list of shapes, from a query string
+// (area=<area text>&area_res=6; see areaShapes.js): { shapes, res }, or null
+// for none, for a resolution not 4 to 7, or for area text the API would
+// refuse (readAreaText's checks; whether each shape is big enough is
+// checked when it is drawn, and by the API). An old address's
+// area=west,south,east,north is read as one box. Not used by the page yet:
+// readArea above still reads the single box it draws.
+export function readAreaShapes(search) {
+  const params = new URLSearchParams(search)
+  const text = params.get('area')
+  const res = Number(params.get('area_res'))
+  if (text === null || !AREA_RESOLUTIONS.includes(res)) {
+    return null
+  }
+  try {
+    return { shapes: readAreaText(text), res }
+  } catch (error) {
+    if (error instanceof AreaProblem) {
+      return null
+    }
+    throw error
+  }
 }
 
 // The ranks a rank page can be about, highest first (the same list as

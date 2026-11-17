@@ -44,9 +44,11 @@ export function boxFromCorners([lng1, lat1], [lng2, lat2]) {
   }
 }
 
-// Turns degrees into radians.
+// Turns degrees into radians the way Python's math.radians does (times
+// pi / 180), so a box's area matches the API's box_area_km2 as closely as
+// the two sine functions allow.
 function radians(degrees) {
-  return (degrees * Math.PI) / 180
+  return degrees * (Math.PI / 180)
 }
 
 // A box's area in km² on H3's sphere: the radius squared, times the width in

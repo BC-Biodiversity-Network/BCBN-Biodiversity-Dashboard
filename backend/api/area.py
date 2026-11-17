@@ -10,6 +10,17 @@ The box: west, south, east and north edges in degrees (longitude -180 to
 across the 180th meridian is not taken). Its sides follow the lines of
 longitude and latitude.
 
+The area text (read_area_shapes; the first step towards an area made of
+several shapes, not used by the routes yet): one or more shapes separated
+by ";", each "b:west,south,east,north" for a box or "p:lng,lat,lng,lat,..."
+for a polygon (its first point not repeated at the end; a repeated one is
+dropped). An old link's "west,south,east,north" with no prefix is one box.
+Every shape is checked (numbers, ranges, a box's edges in order, a polygon
+with at least 3 different points whose edges never cross or touch, nothing
+across the 180th meridian) and the whole area may have at most
+MAX_AREA_POINTS points. Each shape comes back as an AreaShape: its ring of
+(longitude, latitude) corners and whether it was a box.
+
 Which hexagons count: every hexagon at the resolution asked for (res, 4 to
 7) that overlaps the box, even by a corner, not only those whose centre is
 in it. They are found with the h3 package's polygon to cells search in its
@@ -49,6 +60,8 @@ Plain SQL only (in cells.py), so this runs on the cluster's DuckDB 0.10.3.
 """
 
 import math
+import re
+from dataclasses import dataclass
 
 import h3
 
@@ -69,9 +82,41 @@ MIN_AREA_HEXAGONS = 4
 # measurements behind it).
 MAX_AREA_HEXAGONS = 200_000
 
+# The most points a whole area may have, every shape together (a box counts
+# as its 4 corners). The area travels in the page's address and, later, in
+# the link that sends it to GBIF, so this depends on how long a GBIF link
+# gbif.org accepts: GBIF's own API refused addresses over about 4,000
+# characters in November 2026, and gbif.org itself is still to be checked
+# by hand. It may change.
+MAX_AREA_POINTS = 250
+
 # The radius of the sphere H3 measures areas on, in km (H3's authalic Earth
 # radius), so a box's area compares with h3.average_hexagon_area.
 EARTH_RADIUS_KM = 6371.007180918475
+
+# How the area text separates its shapes and names each kind of shape.
+SHAPE_SEPARATOR = ";"
+BOX_PREFIX = "b:"
+POLYGON_PREFIX = "p:"
+
+# A number of degrees as the area text writes it: an optional sign, then
+# digits with an optional decimal part ("-120.6", "50", "0.25", ".5"). No
+# exponent, no "inf" or "nan", no spaces or "_" inside, so what the page
+# writes is all that is read.
+DEGREES = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)")
+
+# How much of a value a message quotes back, at most, so one very long
+# number cannot make a very long message.
+QUOTED_LENGTH = 30
+
+# The box's edges, in the order the area text gives them.
+BOX_EDGES = ("west", "south", "east", "north")
+
+# How far apart in longitude two corners joined by an edge may be. Over 180
+# degrees, H3 (and GBIF) read the edge as going the other way round the
+# Earth, across the 180th meridian, which an area may not do; at exactly
+# 180 both ways are as short, so that is refused too.
+MAX_EDGE_LONGITUDE_SPAN = 180
 
 
 class AreaRequestError(HexesRequestError):
@@ -117,6 +162,285 @@ def read_box(west, south, east, north):
     if box[1] >= box[3]:
         raise AreaRequestError(f"south ({box[1]}) must be less than north ({box[3]}).")
     return box
+
+
+@dataclass(frozen=True)
+class AreaShape:
+    """One shape of an area, as read_area_shapes gives it. ring: its corners
+    as (longitude, latitude) in degrees, in the order given, without the
+    first corner repeated at the end (and without a corner given twice in a
+    row); a box's ring runs west-south, east-south, east-north, west-north.
+    is_box: whether the shape was given as a box. box: (west, south, east,
+    north) for a box, else None. The numbers are the ones every check was
+    run on, so the ring later steps get is the ring that was checked."""
+
+    ring: tuple
+    is_box: bool
+    box: tuple | None = None
+
+
+def shape_name(number, count, is_box):
+    """Return how a message names a shape: "The box" or "The polygon" when
+    the area has one shape, else "Shape 2 (a box)" and so on, counting
+    from 1 in the order given."""
+    kind = "box" if is_box else "polygon"
+    return f"The {kind}" if count == 1 else f"Shape {number} (a {kind})"
+
+
+def quoted(text):
+    """Return a value for a message, in quotes, cut to QUOTED_LENGTH
+    characters (with "...") when it is longer."""
+    text = text.strip()
+    return repr(text if len(text) <= QUOTED_LENGTH else text[:QUOTED_LENGTH] + "...")
+
+
+def read_degrees(name, text):
+    """Return one number of a shape as the number every later step uses (a
+    Python float, the nearest one to what was written; -0 is read as 0),
+    or stop with a clear message when it is empty or not a plain number of
+    degrees."""
+    stripped = text.strip()
+    if not DEGREES.fullmatch(stripped):
+        if not stripped:
+            raise AreaRequestError(f"{name} has an empty value where a number of degrees should be.")
+        hint = ' (separate shapes with ";")' if ":" in stripped else ""
+        raise AreaRequestError(f"{name} has {quoted(stripped)} where a number of degrees should be{hint}.")
+    return float(stripped) + 0.0
+
+
+def check_range(name, what, value, text, limit):
+    """Stop with a clear message when a longitude (limit 180) or latitude
+    (limit 90) is outside -limit to limit degrees; what says which number
+    it is, for example "west edge" or "point 3's longitude"."""
+    if not -limit <= value <= limit:
+        raise AreaRequestError(f"{name}: its {what} is {quoted(text)[1:-1]}, outside -{limit} to {limit} degrees.")
+
+
+def split_shapes(text):
+    """Return the area text's shapes as (is_box, the text after the prefix),
+    in order. An old link's text (one part, no ":", not starting with a
+    letter) is one box. Stops with a clear message for an empty text, an
+    empty shape or a shape with no known prefix."""
+    if text is None or not str(text).strip():
+        raise AreaRequestError(
+            'Give the area as area=..., one or more shapes separated by ";": b:west,south,east,north for a '
+            "box, or p:lng,lat,lng,lat,... for a polygon.")
+    parts = [part.strip() for part in str(text).strip().split(SHAPE_SEPARATOR)]
+    if len(parts) == 1 and ":" not in parts[0] and not parts[0][:1].isalpha():
+        # An old link (area=west,south,east,north): one box.
+        return [(True, parts[0])]
+    shapes = []
+    for number, part in enumerate(parts, start=1):
+        where = "The area" if len(parts) == 1 else f"Shape {number}"
+        if not part:
+            raise AreaRequestError(f'{where} is empty: remove the extra ";".')
+        if part.startswith(BOX_PREFIX):
+            shapes.append((True, part[len(BOX_PREFIX):]))
+        elif part.startswith(POLYGON_PREFIX):
+            shapes.append((False, part[len(POLYGON_PREFIX):]))
+        else:
+            prefix = part.split(":", 1)[0] + ":" if ":" in part else None
+            start = (f"starts with {quoted(prefix)}, which is not a kind of shape" if prefix
+                     else "does not say what kind of shape it is")
+            raise AreaRequestError(f"{where} {start}: start it with b: for a box or p: for a polygon.")
+    return shapes
+
+
+def read_numbers(name, body, empty):
+    """Return every number of a shape's text (after its prefix), read with
+    read_degrees, or stop with the message empty when the text is empty."""
+    if not body.strip():
+        raise AreaRequestError(empty)
+    texts = body.split(",")
+    return texts, [read_degrees(name, text) for text in texts]
+
+
+def read_box_shape(name, body):
+    """Return a box shape from its text "west,south,east,north", checking
+    there are 4 readable numbers in range, west less than east, south less
+    than north, and that it is less than 180 degrees of longitude across
+    (see MAX_EDGE_LONGITUDE_SPAN)."""
+    texts, values = read_numbers(name, body, f"{name} is empty: give it as b:west,south,east,north.")
+    if len(values) != 4:
+        raise AreaRequestError(f"{name} needs 4 numbers, west,south,east,north; it has {len(values)}.")
+    for edge, value, text in zip(BOX_EDGES, values, texts):
+        check_range(name, f"{edge} edge", value, text, 180 if edge in ("west", "east") else 90)
+    west, south, east, north = values
+    if west >= east:
+        raise AreaRequestError(f"{name}: its west edge ({quoted(texts[0])[1:-1]}) must be less than its east "
+                               f"edge ({quoted(texts[2])[1:-1]}).")
+    if south >= north:
+        raise AreaRequestError(f"{name}: its south edge ({quoted(texts[1])[1:-1]}) must be less than its north "
+                               f"edge ({quoted(texts[3])[1:-1]}).")
+    if east - west >= MAX_EDGE_LONGITUDE_SPAN:
+        raise across_meridian(name)
+    return AreaShape(ring=((west, south), (east, south), (east, north), (west, north)), is_box=True,
+                     box=(west, south, east, north))
+
+
+def across_meridian(name):
+    """The error for a shape with two joined corners 180 or more degrees of
+    longitude apart, which H3 and GBIF would read as crossing the 180th
+    meridian."""
+    return AreaRequestError(
+        f"{name} has two joined corners 180 or more degrees of longitude apart, so it would be read as "
+        "crossing the 180th meridian. An area across that meridian is not taken.")
+
+
+def read_polygon_points(name, body):
+    """Return a polygon's points from its text "lng,lat,lng,lat,..." as
+    [(number as given, longitude, latitude)], checking the numbers are
+    readable, come in pairs and are in range. A last point that repeats
+    the first is dropped."""
+    texts, values = read_numbers(name, body, f"{name} is empty: give it as p:lng,lat,lng,lat,...")
+    if len(values) % 2:
+        raise AreaRequestError(f"{name} needs its numbers in pairs, longitude then latitude; it has "
+                               f"{len(values)} {'number' if len(values) == 1 else 'numbers'}.")
+    points = []
+    for index in range(0, len(values), 2):
+        number = index // 2 + 1
+        check_range(name, f"point {number}'s longitude", values[index], texts[index], 180)
+        check_range(name, f"point {number}'s latitude", values[index + 1], texts[index + 1], 90)
+        points.append((number, values[index], values[index + 1]))
+    if len(points) > 1 and points[-1][1:] == points[0][1:]:
+        # The first point repeated at the end: the server closes the ring
+        # itself, so the copy is dropped.
+        points.pop()
+    return points
+
+
+def exact_corners(points):
+    """Return the points' (longitude, latitude) as whole numbers, all
+    multiplied by the same power of two, so the crossing checks compare
+    exactly the numbers that are returned (a float is a whole number over
+    a power of two, so nothing is rounded)."""
+    ratios = [value.as_integer_ratio() for _, lng, lat in points for value in (lng, lat)]
+    denominator = max(den for _, den in ratios)
+    numbers = [num * (denominator // den) for num, den in ratios]
+    return list(zip(numbers[0::2], numbers[1::2]))
+
+
+def orientation(a, b, c):
+    """Return which way c lies from the line a to b: positive to the left,
+    negative to the right, 0 on the line (points as whole-number pairs)."""
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def on_segment(a, b, c):
+    """True when c, already known to be on the line through a and b, lies
+    between them (ends included)."""
+    return min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(a[1], b[1])
+
+
+def segments_meet(a, b, c, d):
+    """True when the segment a-b and the segment c-d have any point in
+    common: crossing, touching at an end, or lying along each other."""
+    o1, o2, o3, o4 = orientation(a, b, c), orientation(a, b, d), orientation(c, d, a), orientation(c, d, b)
+    if ((o1 > 0 > o2) or (o1 < 0 < o2)) and ((o3 > 0 > o4) or (o3 < 0 < o4)):
+        return True
+    return ((o1 == 0 and on_segment(a, b, c)) or (o2 == 0 and on_segment(a, b, d))
+            or (o3 == 0 and on_segment(c, d, a)) or (o4 == 0 and on_segment(c, d, b)))
+
+
+def first_crossing(corners):
+    """Return the first pair of edges of a closed ring (corners as whole-
+    number pairs, the last joined back to the first) that meet anywhere
+    but at the corner two neighbouring edges share, as (i, j): edge i runs
+    from corner i to corner i + 1. None when there is no such pair. Two
+    neighbouring edges meet wrongly only when one doubles back along the
+    other."""
+    count = len(corners)
+    edges = [(corners[i], corners[(i + 1) % count]) for i in range(count)]
+    # Each edge's bounding box, so pairs far apart are skipped quickly.
+    boxes = [(min(a[0], b[0]), max(a[0], b[0]), min(a[1], b[1]), max(a[1], b[1])) for a, b in edges]
+    for i in range(count):
+        a, b = edges[i]
+        for j in range(i + 1, count):
+            box_i, box_j = boxes[i], boxes[j]
+            if box_i[1] < box_j[0] or box_j[1] < box_i[0] or box_i[3] < box_j[2] or box_j[3] < box_i[2]:
+                continue
+            c, d = edges[j]
+            if j == i + 1:
+                # Neighbours sharing b (= c): wrong only if d lies back
+                # along edge i, or a lies along edge j.
+                if (orientation(a, b, d) == 0 and on_segment(a, b, d)) or (
+                        orientation(c, d, a) == 0 and on_segment(c, d, a)):
+                    return i, j
+            elif i == 0 and j == count - 1:
+                # Neighbours sharing a (= d), the ring's closing corner.
+                if (orientation(a, b, c) == 0 and on_segment(a, b, c)) or (
+                        orientation(c, d, b) == 0 and on_segment(c, d, b)):
+                    return i, j
+            elif segments_meet(a, b, c, d):
+                return i, j
+    return None
+
+
+def read_polygon_shape(name, points):
+    """Return a polygon shape from its points (read_polygon_points),
+    dropping a point given twice in a row, and checking it has at least 3
+    different points, does not cross the 180th meridian (see
+    MAX_EDGE_LONGITUDE_SPAN) and has no edges that cross or touch."""
+    kept = []
+    for point in points:
+        if not kept or kept[-1][1:] != point[1:]:
+            kept.append(point)
+    if len(kept) > 1 and kept[-1][1:] == kept[0][1:]:
+        kept.pop()
+    different = len({point[1:] for point in points})
+    if different < 3:
+        raise AreaRequestError(f"{name} has {different} different "
+                               f"{'point' if different == 1 else 'points'}; a polygon needs at least 3.")
+    for index, point in enumerate(kept):
+        following = kept[(index + 1) % len(kept)]
+        if abs(point[1] - following[1]) >= MAX_EDGE_LONGITUDE_SPAN:
+            raise across_meridian(name)
+    crossing = first_crossing(exact_corners(kept))
+    if crossing:
+        i, j = crossing
+        raise AreaRequestError(
+            f"{name} crosses or touches itself: {edge_text(kept, i)} meets {edge_text(kept, j)}. Draw it so "
+            "that no two edges cross or touch.")
+    return AreaShape(ring=tuple((lng, lat) for _, lng, lat in kept), is_box=False)
+
+
+def edge_text(points, index):
+    """Name an edge of a polygon by the points it joins, numbered as given:
+    "the edge from point 3 to point 4" (the last edge goes back to the
+    first point)."""
+    start, end = points[index][0], points[(index + 1) % len(points)][0]
+    return f"the edge from point {start} to point {end}"
+
+
+def read_area_shapes(text):
+    """
+    Return the shapes of an area text (see the top of this file) as a list
+    of AreaShape, in the order given. Stops with AreaRequestError and a
+    message for visitors (it names shapes and points, never a resolution)
+    when the text is empty, a shape is empty or has no known prefix, a
+    number cannot be read or is out of range, a box's edges are out of
+    order, a polygon has fewer than 3 different points or edges that cross
+    or touch, a shape crosses the 180th meridian, or the area has more
+    than MAX_AREA_POINTS points in all (a box counts as 4; a polygon's
+    repeated closing point does not count). The point count comes before
+    the crossing checks, the slowest part.
+
+    Every number is read once as the float later steps use, and every check
+    runs on those floats (exactly, see exact_corners), so a number written
+    with more digits than a float holds cannot pass a check and then
+    change into something the check would refuse.
+    """
+    parts = split_shapes(text)
+    read = []
+    for number, (is_box, body) in enumerate(parts, start=1):
+        name = shape_name(number, len(parts), is_box)
+        read.append((name, read_box_shape(name, body) if is_box else read_polygon_points(name, body)))
+    total = sum(4 if isinstance(shape, AreaShape) else len(shape) for _, shape in read)
+    if total > MAX_AREA_POINTS:
+        raise AreaRequestError(
+            f"The area has {total:,} points, more than the {MAX_AREA_POINTS:,} an area can have (a box counts "
+            "as 4). Use fewer points or fewer shapes.")
+    return [shape if isinstance(shape, AreaShape) else read_polygon_shape(name, shape) for name, shape in read]
 
 
 def box_area_km2(box):

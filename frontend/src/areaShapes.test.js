@@ -6,7 +6,7 @@ import {
   MAX_AREA_POINTS, areaText, areaTextProblem, boxShapeOf, pointWouldCross, polygonAreaKm2, pyFixed, readAreaText,
   ringCrosses, roundCorner, shapeAreaKm2, shapeCells, shapeSizeProblem, shapesCells, shapesProblem,
 } from './areaShapes'
-import { readArea, readAreaShapes } from './route'
+import { readArea } from './route'
 
 // A polygon of this many points around a circle (never crossing itself),
 // as area text with 4 decimals.
@@ -107,17 +107,14 @@ describe('writing the area text', () => {
   })
 
   it('reads the area from the page address, old and new', () => {
-    expect(readAreaShapes('?area=-120.6,50.55,-120.1,50.8&area_res=6')).toEqual(
+    expect(readArea('?area=-120.6,50.55,-120.1,50.8&area_res=6')).toEqual(
       { shapes: readAreaText('b:-120.6,50.55,-120.1,50.8'), res: 6 })
     const search = `?${new URLSearchParams({ area: 'b:-121,50,-120,51;p:-120.5,50.5,-119,50.5,-119.5,52',
       area_res: '7' })}`
-    expect(readAreaShapes(search).shapes).toHaveLength(2)
-    expect(readAreaShapes('?area=p:0,0,1,1,1,0,0,1&area_res=6')).toBe(null)
-    expect(readAreaShapes('?area=b:0,0,1,1&area_res=9')).toBe(null)
-    expect(readAreaShapes('?area_res=6')).toBe(null)
-    // The single box the page draws now is still read as before.
-    expect(readArea('?area=-120.6,50.55,-120.1,50.8&area_res=6')).toEqual(
-      { box: { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, res: 6 })
+    expect(readArea(search).shapes).toHaveLength(2)
+    expect(readArea('?area=p:0,0,1,1,1,0,0,1&area_res=6')).toBe(null)
+    expect(readArea('?area=b:0,0,1,1&area_res=9')).toBe(null)
+    expect(readArea('?area_res=6')).toBe(null)
   })
 })
 

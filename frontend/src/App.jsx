@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
-import { areaProblem, boxCells, groupOutline } from './area'
+import { groupOutline } from './area'
+import { areaText as writeAreaText, areaTextProblem, boxShapeOf, shapesCells, shapesProblem } from './areaShapes'
 import AreaPanel from './AreaPanel'
 import HexagonPanel from './HexagonPanel'
 import HexMap from './HexMap'
@@ -9,7 +10,7 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, newAreaMove, rankKey,
+  AREA_LIST, CELL_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey,
   readArea,
   readAreaPanelOpen, readCell, readList, readMapYears, readRank, readSpeciesKey, speciesDatasetsSearch,
   withAreaHistory, withYears,
@@ -84,20 +85,21 @@ const HEX_DATA_URLS = {
 // work as above. Clicking another hexagon, or opening another rank, keeps
 // the list's order and statuses and starts with no name filter on page 1.
 //
-// Areas: a box drawn on the map (the map's "Draw a box" button) selects
-// every hexagon it touches, at the resolution the map showed when it was
-// drawn, and opens the area panel listing their species. The area stays,
-// on the map and in the address (area=..., area_res, area_q, ...; see
-// readArea in route.js), until "Clear area" removes it; every other move
-// (a hexagon, a species, a rank, the years) keeps it. On a single species'
-// map it stays in the address but is not shown, and it is back when the
-// card closes. History:
-//   - drawing the first box adds an entry, and closes an open hexagon
-//     panel; drawing another box (anywhere on the map) replaces the old
-//     one, there is only one area at a time: like "Clear area" below, it
-//     goes back past every entry holding the old box and adds the new box
-//     after the entry from before the first box, so Back then returns to
-//     what was there before either box, never to the old box;
+// Areas: an area of interest is one or more shapes (boxes for now), made
+// with the map's "Create an area of interest" panel; it selects every
+// hexagon any shape touches, at the resolution the map showed when its
+// first shape was drawn (later shapes use the same one), and opens the area
+// panel listing their species. The area stays, on the map and in the
+// address (area=<area text>, area_res, area_q, ...; see readArea in
+// route.js), until "Clear area" removes it; every other move (a hexagon, a
+// species, a rank, the years) keeps it. On a single species' map it stays in
+// the address but is not shown, and it is back when the card closes.
+// History:
+//   - each shape drawn is added to the area as a new entry (the first one
+//     after an entry without an area), and closes an open hexagon panel;
+//     removing a shape with its x, or the last one with "Back", is a new
+//     entry too, so the browser's back button undoes each of them (removing
+//     the only shape leaves no area, which Back also undoes);
 //   - clicking a hexagon opens its panel on top of the area panel, by the
 //     hexagon rules above (a new entry for the first click), so its x or
 //     Back returns to the area panel;
@@ -112,8 +114,9 @@ const HEX_DATA_URLS = {
 //     cleared area back. An area that came with the page (a shared link) is
 //     taken out of the entries since the page opened in the same way;
 //   - changing the area's list replaces the entry.
-// A box too small or too big is not asked about: the map says why instead
-// (areaProblem in area.js).
+// A shape the API would refuse (too small, too big, too many points...) is
+// not added: the panel says why instead, in the API's own words
+// (areaTextProblem and shapesProblem in areaShapes.js).
 //
 // Years: the year range is in the address too, and every move between maps,
 // cards and hexagons keeps it. Changing it replaces the entry in the same
@@ -151,26 +154,27 @@ export default function App({
   const addressRankKey = rankKey(addressRank)
   const addressRankList = readList(search)
   const addressCellList = readList(search, CELL_LIST)
-  // The area in the address, kept on every map until it is cleared, and
-  // whether its panel is open; the area shown (addressArea): never on a
-  // species map. areaText stands for it, so its hexagons are worked out
-  // again only when the area changes.
+  // The area in the address ({ shapes, res }), kept on every map until it is
+  // cleared, and whether its panel is open; the area shown (addressArea):
+  // never on a species map. areaText stands for it, so its hexagons are
+  // worked out again only when the area changes.
   const keptArea = readArea(search)
   const areaPanelOpen = readAreaPanelOpen(search)
   const addressArea = addressKey ? null : keptArea
-  const areaText = addressArea ? JSON.stringify(addressArea) : null
+  const areaText = addressArea ? `${addressArea.res}:${writeAreaText(addressArea.shapes)}` : null
   const addressAreaList = readList(search, AREA_LIST)
   // What every move but drawing and clearing keeps of the area, for mapSearch.
   const keepArea = { area: keptArea, areaList: addressAreaList, areaPanelOpen }
-  // The hexagons the area's box touches (see boxCells), outlined on the map
-  // and counted by the API.
-  const areaCells = useMemo(() => (addressArea ? boxCells(addressArea.box, addressArea.res) : null), [areaText])
-  // The area as the map draws it: its box, its resolution, its hexagons and
-  // the outline around the whole group (see groupOutline), worked out once
-  // per area.
+  // The hexagons the area's shapes touch, each once (see shapesCells),
+  // outlined on the map and counted by the API.
+  const areaCells = useMemo(
+    () => (addressArea ? shapesCells(addressArea.shapes, addressArea.res).cells : null), [areaText])
+  // The area as the map draws it: its shapes, its resolution, its hexagons
+  // and the outline around the whole group (see groupOutline), worked out
+  // once per area.
   const mapArea = useMemo(
     () => (addressArea ? { ...addressArea, cells: areaCells, outline: groupOutline(areaCells) } : null), [areaText])
-  // What was wrong with the last box drawn (too small or too big), or null.
+  // What was wrong with the last shape drawn (the API's words), or null.
   const [areaMessage, setAreaMessage] = useState(null)
   // Whether the area panel is open and on screen (a hexagon's panel covers
   // it), and whether either panel takes the side panel (covering the cards).
@@ -308,29 +312,43 @@ export default function App({
     }
   }
 
-  // Selects the hexagons under a box drawn on the map (box, at resolution
-  // res), anywhere on the overview or a rank map, and opens the area panel
-  // (closing an open hexagon panel): the first box as a new address entry
-  // (navigate records that the area starts there); a box drawn while an
-  // area exists replaces it, and the old area is taken out of the history
-  // (see newAreaMove in route.js). A box too small or too big selects
-  // nothing and keeps any old area: the map shows why instead.
+  // Moves to the area made of shapes (at resolution res; no shapes for no
+  // area) as a new address entry, so the browser's back button undoes it,
+  // keeping a rank map's rank and the area list's order and statuses, and
+  // closing an open hexagon panel. navigate records the area's place in the
+  // history (see withAreaHistory in route.js), so "Clear area" can still
+  // take the whole area out of it.
+  function moveToShapes(shapes, res) {
+    navigate(mapSearch({
+      rank: addressRank, rankList: addressRankList, area: shapes.length ? { shapes, res } : null,
+      areaList: keptListChoices(addressAreaList), years,
+    }))
+  }
+
+  // Adds a box drawn on the map (box, drawn at resolution res) to the area,
+  // or starts the area with it: the area keeps the resolution of its first
+  // shape. A box the API would refuse (too small, too big, too many points,
+  // the area too big once joined) is not added, and the panel says why in
+  // the API's words.
   function drawArea(box, res) {
-    const problem = areaProblem(box, res)
+    const shapes = [...(keptArea?.shapes ?? []), boxShapeOf(box)]
+    const areaRes = keptArea?.res ?? res
+    const problem = areaTextProblem(writeAreaText(shapes)) ?? shapesProblem(shapes, areaRes)
     setAreaMessage(problem)
-    if (problem) {
+    if (!problem) {
+      moveToShapes(shapes, areaRes)
+    }
+  }
+
+  // Removes one shape (its place in the list, from the panel's x), or the
+  // last one (the panel's "Back"), as a new entry the back button undoes.
+  // Removing a shape never makes an area the API would refuse.
+  function removeShape(index) {
+    if (!keptArea) {
       return
     }
-    const target = mapSearch({
-      rank: addressRank, rankList: addressRankList, area: { box, res },
-      areaList: keptListChoices(addressAreaList), years,
-    })
-    if (keptArea) {
-      const move = newAreaMove(target, historyState())
-      navigateTo(move.search, { back: move.back, replace: move.replace, state: move.state })
-    } else {
-      navigate(target)
-    }
+    setAreaMessage(null)
+    moveToShapes(keptArea.shapes.filter((_, place) => place !== index), keptArea.res)
   }
 
   // Removes the area ("Clear area") from the address and from the history
@@ -455,6 +473,8 @@ export default function App({
           onCloseRank={closeRank}
           selectedArea={mapArea}
           onAreaDrawn={drawArea}
+          onRemoveShape={removeShape}
+          onRemoveLastShape={() => removeShape((keptArea?.shapes.length ?? 0) - 1)}
           areaMessage={areaMessage}
           onDismissAreaMessage={() => setAreaMessage(null)}
           onClearArea={addressArea ? clearArea : null}

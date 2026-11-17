@@ -1,24 +1,39 @@
 import { useEffect } from 'react'
 
 import { areaExportUrl, fetchArea } from './api'
-import { averageHexagonKm2, boxAreaKm2 } from './area'
+import { averageHexagonKm2 } from './area'
+import { areaText, shapeAreaKm2 } from './areaShapes'
 import CsvDownload from './CsvDownload'
-import { AREA_GBIF_NOTE, GBIF_COUNT_NOTE, gbifBoxSearchUrl } from './gbifLinks'
+import { GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl } from './gbifLinks'
 import { PAGE_SIZE, SpeciesRow, km2Text, notCountedText, totalsText, useListAnswer } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
 
-// The line under the title: the box's size, how many hexagons it touches
-// and how big they are, for example "A box of about 979 km² touching 45
-// hexagons of about 36 km² each." (the size, never H3's resolution number).
+// The line under the title: what the area is, how many hexagons it touches
+// and how big they are (the size, never H3's resolution number). One shape
+// keeps the wording a single box always had, with its size: "A box of about
+// 979 km² touching 45 hexagons of about 36 km² each." (or "A polygon of
+// about ..."); several shapes: "3 shapes touching 120 hexagons of about 36
+// km² each." (their sizes can overlap, so no total is given).
 export function areaSizeText(area, hexagonCount) {
-  return `A box of about ${km2Text(boxAreaKm2(area.box))} touching ${hexagonCount.toLocaleString('en-US')} `
-    + `${hexagonCount === 1 ? 'hexagon' : 'hexagons'} of about ${km2Text(averageHexagonKm2(area.res))} each.`
+  const hexagons = `${hexagonCount.toLocaleString('en-US')} ${hexagonCount === 1 ? 'hexagon' : 'hexagons'} of about `
+    + `${km2Text(averageHexagonKm2(area.res))} each.`
+  if (area.shapes.length === 1) {
+    const [shape] = area.shapes
+    return `A ${shape.isBox ? 'box' : 'polygon'} of about ${km2Text(shapeAreaKm2(shape))} touching ${hexagons}`
+  }
+  return `${area.shapes.length.toLocaleString('en-US')} shapes touching ${hexagons}`
 }
 
-// The line saying what is counted.
-export const WHOLE_HEXAGONS_NOTE = 'It counts the whole of every hexagon the box touches, so the area counted '
-  + 'is larger than the box.'
+// The line saying what is counted: the whole of every hexagon the area's
+// shapes touch.
+export function wholeHexagonsNote(area) {
+  if (area.shapes.length === 1) {
+    const what = area.shapes[0].isBox ? 'box' : 'polygon'
+    return `It counts the whole of every hexagon the ${what} touches, so the area counted is larger than the ${what}.`
+  }
+  return 'It counts the whole of every hexagon the shapes touch, so the area counted is larger than the shapes.'
+}
 
 // The message when the area's answer could not be loaded: the API's own
 // words for a request it refused (a box too small or too big, say), else
@@ -33,15 +48,16 @@ function AreaError({ error }) {
   return <p className="card-message error">{message}</p>
 }
 
-// The panel for a box drawn on the map, in the side panel where the species
-// card goes (like the hexagon panel): the box's size and its hexagons, the
-// records and species in them for the chosen years, and their species, a
-// page of PAGE_SIZE at a time, with the hexagon panel's filter by name, BC
-// status, order and page buttons, a Download CSV button, and a link to the
-// box's records on GBIF with what to expect there. area is { box, res } (see
-// readArea in route.js) and cellCount how many hexagons the map outlined for
-// it (boxCells in area.js): a different count from the API is reported in
-// the browser's console. On a rank map (rank is { rank, name, path }), only
+// The panel for an area drawn on the map (one or more shapes), in the side
+// panel where the species card goes (like the hexagon panel): the area's
+// shapes and its hexagons, the records and species in them for the chosen
+// years, and their species, a page of PAGE_SIZE at a time, with the hexagon
+// panel's filter by name, BC status, order and page buttons, a Download CSV
+// button, and a link to the area's records on GBIF (one geometry per shape)
+// with what to expect there. area is { shapes, res } (see readArea in
+// route.js) and cellCount how many hexagons the map outlined for it
+// (shapesCells in areaShapes.js): a different count from the API is
+// reported in the browser's console. On a rank map (rank is { rank, name, path }), only
 // the rank's species. list holds the list's options ({ q, sort, status,
 // page }, from the address) and onListChange(list) changes them;
 // onOpenSpecies(key) opens a species' card and map; onClose is the x.
@@ -64,9 +80,9 @@ export default function AreaPanel({
   // say so plainly in the browser's console, for whoever looks into it.
   useEffect(() => {
     if (data && data.hexagon_count !== cellCount) {
-      console.warn(`Area search: the API counted ${data.hexagon_count} hexagons under the box `
-        + `${JSON.stringify(area.box)} at resolution ${area.res}, but the map outlines ${cellCount}. `
-        + 'The two should find exactly the same hexagons (see area.js and backend/api/area.py).')
+      console.warn(`Area search: the API counted ${data.hexagon_count} hexagons under the area `
+        + `${areaText(area.shapes)} at resolution ${area.res}, but the map outlines ${cellCount}. `
+        + 'The two should find exactly the same hexagons (see areaShapes.js and backend/api/area.py).')
     }
   }, [data, cellCount])
 
@@ -80,7 +96,7 @@ export default function AreaPanel({
           : 'Species in this area'}
       </h2>
       <p className="hexagon-size">{areaSizeText(area, cellCount)}</p>
-      <p className="hexagon-note">{WHOLE_HEXAGONS_NOTE}</p>
+      <p className="hexagon-note">{wholeHexagonsNote(area)}</p>
       {current?.error && <AreaError error={current.error} />}
       {!data && !current?.error && <p className="card-message">Loading the species in this area...</p>}
       {data && !current?.error && (
@@ -115,16 +131,17 @@ export default function AreaPanel({
             </p>
           )}
           <p className="hexagon-gbif">
-            <a href={gbifBoxSearchUrl({ box: area.box, years: data.years_counted })} target="_blank"
-              rel="noopener noreferrer">
+            <a href={gbifAreaSearchUrl({ rings: area.shapes.map((shape) => shape.ring), years: data.years_counted })}
+              target="_blank" rel="noopener noreferrer">
               See these records on GBIF
             </a>
           </p>
-          <p className="hexagon-note">{AREA_GBIF_NOTE}</p>
+          <p className="hexagon-note">{areaGbifNote(area.shapes.length, area.shapes[0].isBox)}</p>
           <p className="hexagon-note">{GBIF_COUNT_NOTE}</p>
           {rank && (
             <p className="hexagon-note">
-              GBIF shows every species in the box, not only this {rank.rank}.
+              GBIF shows every species in the {area.shapes.length === 1 && area.shapes[0].isBox ? 'box' : 'area'}, not
+              only this {rank.rank}.
             </p>
           )}
           <p className="hexagon-sources">

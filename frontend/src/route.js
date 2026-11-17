@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { AreaProblem, readAreaText } from './areaShapes.js'
+import { AreaProblem, areaText, readAreaText } from './areaShapes.js'
 
 // Which page is shown, and the Datasets page's state, kept in the address
 // bar's query string so a link can be shared and the back button works.
@@ -26,15 +26,19 @@ import { AreaProblem, readAreaText } from './areaShapes.js'
 //                                     same options with cell_ in front, as
 //                                     both lists can be open at once (the
 //                                     panel covers the card)
-//   ...&area=-120.6,50.55,-120.1,50.8&area_res=6&area_q=thrush&area_page=2
-//                                     an area: the box drawn on the map
-//                                     (west, south, east, north), the
-//                                     resolution it was drawn at, and its
-//                                     panel's species list's options with
-//                                     area_ in front, as for a hexagon; it
-//                                     stays until it is cleared, with a
-//                                     hexagon's panel or a species' card on
-//                                     top of it
+//   ...&area=b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54&area_res=6
+//       &area_q=thrush&area_page=2    an area of one or more shapes: the
+//                                     area text (see areaShapes.js: boxes
+//                                     "b:west,south,east,north" and
+//                                     polygons "p:lng,lat,...", separated
+//                                     by ";"), the resolution of its first
+//                                     shape, and its panel's species list's
+//                                     options with area_ in front, as for a
+//                                     hexagon; it stays until it is
+//                                     cleared, with a hexagon's panel or a
+//                                     species' card on top of it. An old
+//                                     address's area=west,south,east,north
+//                                     opens as one box
 //   ...&area_panel=closed             the area stays on the map with its
 //                                     panel closed
 //   ...&year_from=2000&year_to=2020   the year range of whichever map is
@@ -197,29 +201,6 @@ export function clearAreaMove(target, currentState) {
   return { back: depth + 1, search: target, replace: false, state }
 }
 
-// How a new box drawn while an area exists (target, the address with the
-// new area) moves through the history: like "Clear area" (see
-// clearAreaMove), it goes back past every entry that holds the old area, so
-// neither Back nor a panel's x can bring the old box back, then the new box
-// takes the old one's place. Returns { back, search, replace, state } for
-// navigate:
-//   - old area drawn in this visit: go back to the entry before it, then add
-//     target as a new entry after it, as the first entry of the new area
-//     (so Back returns to what was there before either box);
-//   - old area that came with the page: go back to the first entry holding
-//     it and put target in its place (in place when that is the current
-//     entry, keeping its other marks).
-// currentState is the current entry's history state.
-export function newAreaMove(target, currentState) {
-  const depth = currentState?.areaDepth ?? 0
-  const before = currentState?.areaBefore
-  if (before === undefined) {
-    const own = depth === 0 ? withoutAreaHistory(currentState) : null
-    return { back: depth, search: target, replace: true, state: { ...own, areaDepth: 0 } }
-  }
-  return { back: depth + 1, search: target, replace: false, state: { areaDepth: 0, areaBefore: before } }
-}
-
 // The resolutions an area can be drawn at (those of the maps).
 const AREA_RESOLUTIONS = [4, 5, 6, 7]
 
@@ -229,32 +210,13 @@ export function readAreaPanelOpen(search) {
   return new URLSearchParams(search).get('area_panel') !== 'closed'
 }
 
-// The area on the species map, from a query string
-// (area=west,south,east,north&area_res=6): { box: { west, south, east,
-// north }, res }, or null for none, or for a box or resolution that cannot
-// be one (an edge that is not a number or out of range, west not less than
-// east, south not less than north, a resolution not 4 to 7). Whether the box
-// is big enough is checked when it is drawn, and by the API.
+// The area on the species map, from a query string (area=<area text>
+// &area_res=6; see areaShapes.js): { shapes, res }, or null for none, for a
+// resolution not 4 to 7, or for area text the API would refuse
+// (readAreaText's checks, with the API's own rules; whether each shape is
+// big enough is checked when it is drawn, and by the API). An old address's
+// area=west,south,east,north is read as one box, so old links still open.
 export function readArea(search) {
-  const params = new URLSearchParams(search)
-  const edges = (params.get('area') ?? '').split(',').map((text) => (text.trim() === '' ? NaN : Number(text)))
-  const res = Number(params.get('area_res'))
-  if (edges.length !== 4 || edges.some((edge) => !Number.isFinite(edge)) || !AREA_RESOLUTIONS.includes(res)) {
-    return null
-  }
-  const [west, south, east, north] = edges
-  const inRange = west >= -180 && east <= 180 && south >= -90 && north <= 90
-  return inRange && west < east && south < north ? { box: { west, south, east, north }, res } : null
-}
-
-// The area on the species map as a list of shapes, from a query string
-// (area=<area text>&area_res=6; see areaShapes.js): { shapes, res }, or null
-// for none, for a resolution not 4 to 7, or for area text the API would
-// refuse (readAreaText's checks; whether each shape is big enough is
-// checked when it is drawn, and by the API). An old address's
-// area=west,south,east,north is read as one box. Not used by the page yet:
-// readArea above still reads the single box it draws.
-export function readAreaShapes(search) {
   const params = new URLSearchParams(search)
   const text = params.get('area')
   const res = Number(params.get('area_res'))
@@ -393,14 +355,15 @@ export function withYears(search, years) {
 
 // The query string for the species map: with a species' card open (species,
 // a key), or a rank's page (rank, { rank, path }), never both, a hexagon's
-// panel open (cell), and an area (area, { box, res }, see readArea), each
-// null for none; an area and a hexagon can be there together (the hexagon's
+// panel open (cell), and an area (area, { shapes, res }, see readArea),
+// each null for none; an area and a hexagon can be there together (the hexagon's
 // panel on top). rankList, cellList and areaList are the options of the
 // rank card's, the hexagon panel's and the area panel's species lists (see
 // readList), left out when null or the defaults; areaPanelOpen false keeps
 // the area with its panel closed. years is the year range of the map (null
-// for all years). The commas between the area's edges are written as
-// commas, so the address stays readable.
+// for all years). The area is written as its area text (areaText), with
+// its commas, colons and semicolons left as they are, and every comma
+// elsewhere too, so the address stays readable.
 export function mapSearch({
   species = null, rank = null, cell = null, area = null, rankList = null, cellList = null, areaList = null,
   areaPanelOpen = true, years = null,
@@ -422,8 +385,7 @@ export function mapSearch({
     addList(params, cellList, CELL_LIST)
   }
   if (area) {
-    const { west, south, east, north } = area.box
-    params.set('area', [west, south, east, north].join(','))
+    params.set('area', areaText(area.shapes))
     params.set('area_res', String(area.res))
     addList(params, areaList, AREA_LIST)
     if (!areaPanelOpen) {
@@ -431,7 +393,10 @@ export function mapSearch({
     }
   }
   addYears(params, years)
+  // The area text only holds digits, ".", "-", ",", ":", ";", "b" and "p",
+  // none of which needs writing as %XX in a query string.
   const text = params.toString().replace(/%2C/gi, ',')
+    .replace(/(^|&)area=[^&]*/, (part) => part.replace(/%3A/gi, ':').replace(/%3B/gi, ';'))
   return text ? `?${text}` : '?'
 }
 

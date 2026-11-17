@@ -84,10 +84,23 @@ export function gbifBcSearchUrl({ keys }) {
   return gbifSearchUrl({ keys, geometry: BC_BOUNDARY_WKT })
 }
 
-// The note under the area panel's GBIF link: the link searches the box
-// itself, while our numbers count every hexagon the box touches.
+// The note under the area panel's GBIF link for an area of one box: the
+// link searches the box itself, while our numbers count every hexagon the
+// box touches.
 export const AREA_GBIF_NOTE = 'GBIF searches only the box you drew. Our numbers include every hexagon the box '
   + 'touches, so GBIF usually shows fewer records.'
+
+// The same note for an area of shapeCount shapes (AREA_GBIF_NOTE for one
+// box; for one polygon or several shapes, it names them).
+export function areaGbifNote(shapeCount, isBox = true) {
+  if (shapeCount === 1 && isBox) {
+    return AREA_GBIF_NOTE
+  }
+  const what = shapeCount === 1 ? 'polygon' : 'shapes'
+  const touches = shapeCount === 1 ? 'touches' : 'touch'
+  return `GBIF searches only inside the ${what} you drew. Our numbers include every hexagon the ${what} `
+    + `${touches}, so GBIF usually shows fewer records.`
+}
 
 // A box ({ west, south, east, north }) as WKT for GBIF: a closed 5-point
 // polygon running counter-clockwise (west-south, east-south, east-north,

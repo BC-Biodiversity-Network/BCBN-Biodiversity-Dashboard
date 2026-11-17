@@ -1,7 +1,8 @@
-// The area search's rules on the front end: a box drawn on the map, which
-// hexagons it selects, and whether it is too small or too big to ask the API
-// about (backend/api/area.py, whose rules these copy; a back end test runs
-// this file with node to check they still agree).
+// The area search's rules on the front end for a box: the box between two
+// corners of a drag, its area, the hexagons it selects, and how the map
+// outlines and fades them (backend/api/area.py, whose rules these copy; a
+// back end test runs this file with node to check they still agree). An
+// area of several shapes, its checks and its messages are in areaShapes.js.
 
 import {
   POLYGON_TO_CELLS_FLAGS, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
@@ -68,38 +69,6 @@ export function minimumAreaKm2(res) {
   return MIN_AREA_HEXAGONS * averageHexagonKm2(res)
 }
 
-// Writes a number the way the messages do: with commas, and decimals
-// figures after the point.
-function written(value, decimals) {
-  return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
-}
-
-// The message for a box that touches more hexagons (count, about) of a
-// resolution than an area search can count. Like every message here it
-// gives the hexagons' size, never H3's resolution number.
-function tooBigText(count, res) {
-  return `This box touches about ${written(count, 0)} hexagons of about ${written(averageHexagonKm2(res), 1)} km², `
-    + `more than the ${written(MAX_AREA_HEXAGONS, 0)} an area search can count. Draw a smaller box, or zoom out `
-    + 'first for larger hexagons.'
-}
-
-// What is wrong with a box at a resolution before any hexagon is found, or
-// null when nothing is: too small (under MIN_AREA_HEXAGONS average hexagons),
-// or so big that it must touch more than MAX_AREA_HEXAGONS hexagons. The
-// same checks, in the same order, as check_box_size in backend/api/area.py,
-// written for the map's visitors.
-export function boxSizeProblem(box, res) {
-  const area = boxAreaKm2(box)
-  const smallest = minimumAreaKm2(res)
-  if (area < smallest) {
-    return `This box is about ${written(area, 1)} km², smaller than the minimum of ${written(smallest, 1)} km² `
-      + `for hexagons of this size (${MIN_AREA_HEXAGONS} hexagons of about ${written(averageHexagonKm2(res), 1)} km²). `
-      + 'Draw a larger box, or zoom in first for smaller hexagons.'
-  }
-  const estimate = area / averageHexagonKm2(res)
-  return estimate > MAX_AREA_HEXAGONS ? tooBigText(estimate, res) : null
-}
-
 // Every hexagon at resolution res that overlaps the box, even by a corner,
 // sorted: polygonToCellsExperimental with containmentOverlapping, the
 // corners as [lat, lng], exactly as the API finds them (box_cells in
@@ -143,17 +112,4 @@ export function selectionTest(cells, res) {
     }
     return coarser.get(cellRes).has(cell)
   }
-}
-
-// What is wrong with a box at a resolution, or null: boxSizeProblem first
-// (which needs no hexagons, so a huge box costs nothing), then the real
-// number of hexagons it touches against the most allowed, as the API checks
-// both.
-export function areaProblem(box, res) {
-  const problem = boxSizeProblem(box, res)
-  if (problem) {
-    return problem
-  }
-  const count = boxCells(box, res).length
-  return count > MAX_AREA_HEXAGONS ? tooBigText(count, res) : null
 }

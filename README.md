@@ -1654,79 +1654,99 @@ size, and while a panel is open the map stays on the hexagon rather than
 moving to a newly opened species. The page tests the history rules on a
 real browser history (`frontend/src/AppHexagon.test.jsx`).
 
-**Draw a box (the area search).** A "Draw a box" button sits with the
-map's controls at the top left (`DrawBoxControl` in `frontend/src/HexMap.jsx`),
-on the overview and on a rank map; on a single species' map it is greyed
-out, saying on hover that it is not available there yet. Pressing it starts
-drawing: the map stops panning and zooming by drag (MapLibre's drag pan,
-rotate, touch zoom, box zoom and double-click zoom are switched off), the
-cursor is a crosshair (set through deck.gl's `getCursor`, which would
-otherwise put its own back), the hover box is hidden, and the hint "Drag to
-draw a box. Esc to cancel." shows; dragging with the mouse or one finger
-draws the box, Esc or the button ("Cancel drawing") cancels, and so does
+**Create an area of interest (the area search).** A "Create an area of
+interest" button sits with the map's controls at the top left, on the
+overview and on a rank map; on a single species' map it is greyed out,
+saying on hover that it is not available there yet. It opens a small panel
+(`frontend/src/AreaOfInterest.jsx`, as in the mockup Lucia approved on
+2026-11-17): "No shapes yet", "1 shape" or "N shapes" at the top, the list
+of shapes ("Shape 1: box", ...) each with an x that removes it, the "Draw"
+tab with a "Box" button (the "Paste" tab and "Polygon" come later), then
+"Back" (removes the last shape) and "Clear area" (removes them all), and
+"Close". Every shape drawn joins the same area. "Box" starts drawing: the
+map stops panning and zooming by drag (MapLibre's drag pan, rotate, touch
+zoom, box zoom and double-click zoom are switched off), the cursor is a
+crosshair (set through deck.gl's `getCursor`, which would otherwise put its
+own back), the hover box is hidden, and the hint "Press and drag on the map
+to draw a box. Esc to cancel." shows; dragging with the mouse or one finger
+draws the box, Esc, "Box" again or closing the panel cancels, and so does
 any change of page (Back or Forward, a link, another hexagon, area, species
 or rank), so the map never stays in drawing mode on a page it was not
 started on. Whenever the address names a hexagon, the map shows it as it
 was when clicked: it moves to the hexagon when it is off screen and zooms
 to hexagons of its size when the map shows another size (`HexMap.jsx`),
-so the panel and the outline on the map always agree. The box's
-edges keep 4 decimals (about 11 m). The hexagons it selects are those at
-the resolution the map showed when it was drawn that overlap it even by a
-corner (`boxCells` in `frontend/src/area.js`: h3-js
+so the panel and the outline on the map always agree. A box's
+edges keep 4 decimals (about 11 m). The hexagons the area selects are those
+at the resolution the map showed when its first shape was drawn (later
+shapes use the same one) that overlap any shape even by a corner, each once
+(`shapesCells` in `frontend/src/areaShapes.js`: h3-js
 `polygonToCellsExperimental` with `containmentOverlapping`, the corners as
 `[lat, lng]`, exactly as the API finds them); that resolution stays with
-the box whatever the zoom. While an area is selected, every hexagon outside
+the area whatever the zoom. While an area is selected, every hexagon outside
 it keeps only a fifth of its opacity (`FADED_SHARE`), at any zoom (a finer
 hexagon counts as selected when the hexagon it lies in is, a coarser one
 when it holds one: `selectionTest` in `area.js`), so the selected ones keep
 their normal colours and stand out. One outline goes around the outside of
 the whole selected group, not around each hexagon (`groupOutline` in
 `area.js`, h3-js `cellsToMultiPolygon`, about 0.8 s for the largest box
-allowed, worked out once per box): a dark line on a wider white one, so it
-reads on light and dark hexagons of either colour scale. The box itself is
-drawn dashed above it, thinner. Both are MapLibre line layers, added again
+allowed, worked out once per area): a dark line on a wider white one, so it
+reads on light and dark hexagons of either colour scale. Each shape is
+drawn dashed above it, thinner (and the box being dragged, beside them). Both are MapLibre line layers, added again
 whenever the area changes so they stay above the hexagons. A shared link
 fits the whole group in view (it reaches past the box). Checked on
 2026-11-09 on a light area (Fort Nelson) and a dark one (Vancouver), at
-resolution 4 and 7, on both scales, desktop and phone width. A box
-smaller than `MIN_AREA_HEXAGONS` (4) average hexagons of its resolution or
-touching more than `MAX_AREA_HEXAGONS` (200,000) hexagons is not asked
-about: the map shows why under the button, with the box's size and the
-limit (`areaProblem` in `area.js`, the API's own checks, copied; a back end
-test runs `area.js` with node to check its limits, areas, hexagons and GBIF
-link still match `backend/api/area.py`).
+resolution 4 and 7, on both scales, desktop and phone width. A shape the
+API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
+hexagons, an area touching more than `MAX_AREA_HEXAGONS` (200,000)
+hexagons, more than `MAX_AREA_POINTS` (250) points, and so on. The panel
+shows why, in the API's own words ("Shape 2 (a box) is about 9.9 km²,
+smaller than the minimum of ..."; `areaTextProblem` and `shapesProblem` in
+`areaShapes.js`, copies of `backend/api/area.py` that a back end test runs
+with node, message for message). The old wording of `area.js` ("This box is
+about ..., zoom in first for smaller hexagons") is gone, so the page, the
+API and the CSV say the same thing.
 
 The area panel (`frontend/src/AreaPanel.jsx`, from `GET /api/area`) takes
 the side panel like the hexagon panel: "Species in this area" (on a rank
-map "Genus *Turdus* in this area", only that rank's species), the box's size
-in km², how many hexagons it touches and their size, the line "It counts the
-whole of every hexagon the box touches, so the area counted is larger than
-the box.", the records and species for the years with the records a year
+map "Genus *Turdus* in this area", only that rank's species), what the
+area is and the hexagons it touches: for one shape the box's (or polygon's)
+size in km² as before ("A box of about 979 km² touching 45 hexagons of
+about 36 km² each."), for several "2 shapes touching 79 hexagons of about
+36 km² each." (boxes around Kamloops and Prince George at resolution 6; the
+size is always one average hexagon at the area's resolution, as for one
+shape, and shapes can overlap, so no total size is given), the line "It
+counts the whole of every hexagon the box touches, so the area counted is
+larger than the box." ("the shapes touch ... than the shapes" for several), the records and species for the years with the records a year
 range left out, the species list with the hexagon panel's controls
 (`SpeciesListControls`, page buttons), a Download CSV button
 (`GET /api/export/area` with the same options, no paging), and "See these
-records on GBIF": a GBIF search of the box itself, every species, for the
-years counted (`gbifBoxSearchUrl` in `frontend/src/gbifLinks.js`), with the
-notes "GBIF searches only the box you drew. Our numbers include every
-hexagon the box touches, so GBIF usually shows fewer records." and
+records on GBIF": a GBIF search of the shapes themselves (one `geometry`
+per shape), every species, for the years counted (`gbifAreaSearchUrl` in
+`frontend/src/gbifLinks.js`, the same link as the API's `area_gbif_link`),
+with the notes "GBIF searches only the box you drew. Our numbers include
+every hexagon the box touches, so GBIF usually shows fewer records." ("only
+inside the shapes you drew ... the shapes touch" for several) and
 `GBIF_COUNT_NOTE` (and on a rank map that GBIF shows every species in the
-box, not only that rank). If the API counts a different number of hexagons
+area, not only that rank). The panel and the CSV ask the API with the
+area text (`area=`, `areaQuery` in `frontend/src/api.js`). If the API counts a different number of hexagons
 than the map outlined, the browser's console says so. The hexagon panel and
 the area panel share their loading (`useListAnswer` in
 `frontend/src/HexagonPanel.jsx`).
 
-The address holds the area as `area=west,south,east,north&area_res=6`, with
-its list options as `area_q`, `area_sort`, `area_status` and `area_page`
-(`readArea` and `mapSearch` in `frontend/src/route.js`; for example
-`?rank=phylum&kingdom=Animalia&phylum=Chordata&area=-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
-so a shared link opens the same box, fitted in view.
+The address holds the area as its area text, `area=b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54&area_res=6`
+(written with its colons and semicolons as they are), with its list options
+as `area_q`, `area_sort`, `area_status` and `area_page` (`readArea` and
+`mapSearch` in `frontend/src/route.js`; for example
+`?rank=phylum&kingdom=Animalia&phylum=Chordata&area=b:-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
+so a shared link opens the same shapes, fitted in view. An old link's
+`area=west,south,east,north` opens as one box; an address whose area text
+the API would refuse opens with no area.
 
-**The area stays until it is cleared.** Once drawn, the area (its box, the
-outline and the faded hexagons around it) stays on the map and in the
-address until the map's "Clear area" button (beside "Draw a box" while an
-area exists) removes it; a new box drawn anywhere on the map replaces it
-(one area at a time; a box too small or too big keeps the old area and
-says why). Every other move
+**The area stays until it is cleared.** Once drawn, the area (its shapes,
+the outline and the faded hexagons around it) stays on the map and in the
+address until the panel's "Clear area" removes it; a new box drawn anywhere
+on the map is added to it (a box refused keeps the area as it was and says
+why), and a shape's x or "Back" removes one. Every other move
 keeps it: clicking a hexagon opens that hexagon's panel on top of the area
 panel, which stays loaded under it; opening a species (from the area's
 list, a hexagon's list or the search box) keeps the area in the address,
@@ -1741,7 +1761,8 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | After | The address entry | Back then |
 | --- | --- | --- |
 | Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
-| Drawing another box (anywhere on the map) | goes back past every entry holding the old box, then added as the area's first entry (closes an open hexagon panel) | returns to before the first box, never to the old box |
+| Drawing another box (anywhere on the map) | added, with the box joined to the area (closes an open hexagon panel) | returns to the area without that box |
+| A shape's x, or the panel's "Back" | added, without that shape (no area at all when it was the only one) | returns to the area with the shape |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
@@ -1751,12 +1772,10 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | "Clear area" on a shared link's area | the link's entry, and any entry added since, become one entry without the area (a hexagon's panel stays open) | leaves the page, as from the link |
 
 "Clear area" takes the area out of the history, not only out of the
-address, and so does a new box for the old one: every entry that holds an
-area records how far it is from the entry before the area began
-(`withAreaHistory`, `clearAreaMove` and `newAreaMove` in
+address: every entry that holds an area records how far it is from the
+entry before the area began (`withAreaHistory` and `clearAreaMove` in
 `frontend/src/route.js`), so neither a panel's x nor Back can bring a
-cleared or replaced area back. A shared link's area is replaced on the
-link's own entry. Forward cannot either once a hexagon's panel or a rank
+cleared area back, whatever shapes it had along the way. Forward cannot either once a hexagon's panel or a rank
 was open; right after drawing, Forward can redo the box, as for any Back.
 
 **Download CSV.** Four lists have a "Download CSV" button (the area panel's,

@@ -9,6 +9,8 @@ import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { boxFromCorners, selectionTest } from './area'
+import AreaOfInterest from './AreaOfInterest'
+import { areaText } from './areaShapes'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
@@ -161,7 +163,8 @@ export function fadedColour([red, green, blue, alpha]) {
 
 // The outline around a selected area's whole group of hexagons: a dark line
 // on a wider white one, so it reads on light and dark hexagons of either
-// scale (blue or orange). The box is drawn dashed in the same two colours.
+// scale (blue or orange). Each of the area's shapes is drawn dashed in the
+// same two colours.
 export const GROUP_OUTLINE = { dark: '#1a1a1a', light: '#ffffff', darkWidth: 2.5, lightWidth: 6 }
 
 // A box ({ west, south, east, north }) as a GeoJSON outline, for the map to
@@ -177,12 +180,19 @@ export function boxOutline({ west, south, east, north }) {
   }
 }
 
-// What the "Draw a box" button says on a single species' map, where it is
-// not available yet.
-export const DRAW_UNAVAILABLE = "Drawing a box is not available on a single species' map yet."
-
-// The hint shown while drawing.
-export const DRAW_HINT = 'Drag to draw a box. Esc to cancel.'
+// The area's shapes, and the box being dragged (or null), as GeoJSON lines
+// for the map to draw dashed: each ring closed by going back to its first
+// corner.
+export function shapesOutline(shapes, dragged = null) {
+  const rings = shapes.map((shape) => shape.ring)
+  const features = rings.map((ring) => ({
+    type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [...ring, ring[0]] },
+  }))
+  if (dragged) {
+    features.push(boxOutline(dragged))
+  }
+  return { type: 'FeatureCollection', features }
+}
 
 // How long after a box is drawn a click on the map is ignored, in
 // milliseconds, so letting go of the mouse never also opens a hexagon.
@@ -313,50 +323,10 @@ export function outlineBounds(outline) {
   return [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]]
 }
 
-// A short text naming an area (its resolution and box), to tell areas apart.
+// A short text naming an area (its resolution and area text), to tell
+// areas apart.
 function areaId(area) {
-  const { west, south, east, north } = area.box
-  return `${area.res}:${west},${south},${east},${north}`
-}
-
-// The "Draw a box" button, with the controls at the top left: while
-// drawing it cancels and the hint shows under it; on a single species' map
-// it is greyed out, saying why when hovered (unavailable). Beside it, while
-// an area exists and nothing is being drawn, "Clear area" (onClear) and,
-// while the area panel is closed, "Show area" (onShow); each is null when
-// its button is not shown. message (or null) is what was wrong with the
-// last box drawn, with an x that calls onDismissMessage.
-function DrawBoxControl({ drawing, unavailable, onToggle, message, onDismissMessage, onClear = null, onShow = null }) {
-  return (
-    <div className="draw-box">
-      <div className="draw-box-buttons">
-        <span className="draw-box-wrap" title={unavailable ? DRAW_UNAVAILABLE : undefined}>
-          <button type="button" className={drawing ? 'draw-box-button drawing' : 'draw-box-button'}
-            disabled={unavailable} aria-pressed={drawing} onClick={onToggle}
-            aria-describedby={unavailable ? 'draw-box-unavailable' : undefined}>
-            {drawing ? 'Cancel drawing' : 'Draw a box'}
-          </button>
-        </span>
-        {onShow && !drawing && (
-          <button type="button" className="draw-box-button" onClick={onShow}>Show area</button>
-        )}
-        {onClear && !drawing && (
-          <button type="button" className="draw-box-button" onClick={onClear}>Clear area</button>
-        )}
-      </div>
-      {unavailable && <span id="draw-box-unavailable" className="visually-hidden">{DRAW_UNAVAILABLE}</span>}
-      {drawing && <p className="draw-box-hint" role="status">{DRAW_HINT}</p>}
-      {message && !drawing && (
-        <p className="draw-box-message" role="alert">
-          <span>{message}</span>
-          <button type="button" className="draw-box-message-close" onClick={onDismissMessage}
-            aria-label="Dismiss this message">
-            ×
-          </button>
-        </p>
-      )}
-    </div>
-  )
+  return `${area.res}:${areaText(area.shapes)}`
 }
 
 // Puts the deck.gl layers onto the MapLibre map.
@@ -452,25 +422,27 @@ function apiStatus(hexes, what) {
 // x calls onCloseRank. rankId is rankKey(rank) (route.js). id changes every
 // time a rank is opened, so the map moves to it again.
 //
-// Drawing an area: the "Draw a box" button (not on a single species' map)
-// starts drawing: the map stops panning and zooming by drag, the cursor is a
-// crosshair, a hint shows, and dragging (mouse or one finger) draws the
-// box; Esc or the button again cancels. Letting go calls onAreaDrawn(box,
-// res) with the box (see boxFromCorners in area.js) and the resolution the
-// map shows then. selectedArea is the area whose panel is open ({ box, res,
-// cells, outline }, or null): every hexagon outside it is faded, at its
-// own resolution whatever the zoom, and one outline is drawn around the
-// whole group (outline, see groupOutline in area.js), with the box dashed.
-// areaMessage (or null) is shown under the button, for a box too small or
-// too big, with an x that calls onDismissAreaMessage. onClearArea (or null
-// when there is no area) is the "Clear area" button beside "Draw a box",
-// and onShowArea (or null when the area panel is open or covered) the
-// "Show area" button that opens the area panel again.
+// An area of interest: the "Create an area of interest" button (not on a
+// single species' map) opens a small panel (AreaOfInterest.jsx) listing the
+// area's shapes. Its "Box" button starts drawing: the map stops panning and
+// zooming by drag, the cursor is a crosshair, a hint shows, and dragging
+// (mouse or one finger) draws the box; Esc or "Box" again cancels. Letting
+// go calls onAreaDrawn(box, res) with the box (see boxFromCorners in
+// area.js) and the resolution the map shows then, which adds it to the
+// area. selectedArea is the area ({ shapes, res, cells, outline }, or null):
+// every hexagon outside it is faded, at its own resolution whatever the
+// zoom, one outline is drawn around the whole group (outline, see
+// groupOutline in area.js), and each shape is drawn dashed. areaMessage (or
+// null) is shown in the panel, for a shape refused, with an x that calls
+// onDismissAreaMessage. onRemoveShape(index), onRemoveLastShape (the
+// panel's "Back") and onClearArea (or null when there is no area) change
+// the area; onShowArea (or null when the area panel is open or covered) is
+// the "Show area" button that opens the area panel again.
 export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
   selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
-  onClearArea = null, onShowArea = null,
+  onClearArea = null, onShowArea = null, onRemoveShape = () => {}, onRemoveLastShape = () => {},
 }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
@@ -495,6 +467,8 @@ export default function HexMap({
   const [drawing, setDrawing] = useState(false)
   const [drag, setDrag] = useState(null)
   const lastDrawn = useRef(0)
+  // Whether the "Create an area of interest" panel is open.
+  const [areaPanelOpen, setAreaPanelOpen] = useState(false)
   // While an area is selected: which hexagons are in it (see
   // buildHexagonLayer), worked out once per area.
   const selection = useMemo(
@@ -649,8 +623,18 @@ export default function HexMap({
     }
   }
 
-  // Starts or cancels drawing (the "Draw a box" button). Starting clears
-  // any message about the last box.
+  // Opens or closes the "Create an area of interest" panel; closing it
+  // stops drawing and drops any message about the last shape.
+  function openAreaPanel(open) {
+    setAreaPanelOpen(open)
+    if (!open) {
+      stopDrawing()
+      onDismissAreaMessage()
+    }
+  }
+
+  // Starts or cancels drawing a box (the panel's "Box" button). Starting
+  // clears any message about the last shape.
   function toggleDrawing() {
     if (drawing) {
       stopDrawing()
@@ -786,9 +770,11 @@ export default function HexMap({
           <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
-          <DrawBoxControl drawing={drawing} unavailable={Boolean(species)} onToggle={toggleDrawing}
-            message={areaMessage} onDismissMessage={onDismissAreaMessage}
-            onClear={species ? null : onClearArea} onShow={species ? null : onShowArea} />
+          <AreaOfInterest open={areaPanelOpen} onOpenChange={openAreaPanel}
+            shapes={species ? [] : selectedArea?.shapes ?? []} drawing={drawing} onDrawBox={toggleDrawing}
+            onRemoveShape={onRemoveShape} onBack={onRemoveLastShape} onClear={onClearArea ?? (() => {})}
+            unavailable={Boolean(species)} message={areaMessage} onDismissMessage={onDismissAreaMessage}
+            onShow={species ? null : onShowArea} />
         </div>
       )}
 
@@ -819,10 +805,11 @@ export default function HexMap({
       >
         <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawing ? noTooltip : tooltipFor}
           onClick={handleClick} getCursor={drawing ? crosshairCursor : dragCursor} />
-        {/* The outline around the selected group of hexagons, then the box
-            dashed above it; both are added again (a new key) whenever the
-            area changes, so they always sit above the hexagons. */}
-        {selectedArea && !drag && (
+        {/* The outline around the selected group of hexagons, then each
+            shape dashed above it (and the box being dragged); both are added
+            again (a new key) whenever the area changes, so they always sit
+            above the hexagons. */}
+        {selectedArea && (
           <Source key={`group-${areaId(selectedArea)}`} id="area-group" type="geojson" data={selectedArea.outline}>
             <Layer id="area-group-edge" type="line"
               paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': GROUP_OUTLINE.lightWidth }} />
@@ -831,8 +818,8 @@ export default function HexMap({
           </Source>
         )}
         {(drag || selectedArea) && (
-          <Source key={drag ? 'dragging' : areaId(selectedArea)} id="area-box" type="geojson"
-            data={boxOutline(drag ? boxFromCorners(drag.from, drag.to) : selectedArea.box)}>
+          <Source key={selectedArea ? `shapes-${areaId(selectedArea)}` : 'shapes'} id="area-box" type="geojson"
+            data={shapesOutline(selectedArea?.shapes ?? [], drag ? boxFromCorners(drag.from, drag.to) : null)}>
             {/* A white edge under a dark dashed line, so the box shows on
                 light and dark hexagons alike. */}
             <Layer id="area-box-edge" type="line" paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': 3 }} />

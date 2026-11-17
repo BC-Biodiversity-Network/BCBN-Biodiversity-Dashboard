@@ -2,12 +2,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import AreaPanel, { WHOLE_HEXAGONS_NOTE, areaSizeText } from './AreaPanel'
-import { AREA_GBIF_NOTE, GBIF_COUNT_NOTE, gbifBoxSearchUrl } from './gbifLinks'
+import AreaPanel, { areaSizeText, wholeHexagonsNote } from './AreaPanel'
+import { boxShapeOf, readAreaText } from './areaShapes'
+import { AREA_GBIF_NOTE, GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl, gbifBoxSearchUrl } from './gbifLinks'
 import { NO_LIST } from './route'
 
-// A box around Kamloops at resolution 6 (45 hexagons), and the genus Turdus.
-const AREA = { box: { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, res: 6 }
+// A box around Kamloops at resolution 6 (45 hexagons), the same box with a
+// box near Prince George, and the genus Turdus.
+const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
+const AREA = { shapes: [boxShapeOf(KAMLOOPS)], res: 6 }
+const TWO = { shapes: readAreaText('b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54'), res: 6 }
 const TURDUS = { rank: 'genus', name: 'Turdus', path: [
   { rank: 'kingdom', name: 'Animalia' }, { rank: 'phylum', name: 'Chordata' }, { rank: 'class', name: 'Aves' },
   { rank: 'order', name: 'Passeriformes' }, { rank: 'family', name: 'Turdidae' }, { rank: 'genus', name: 'Turdus' },
@@ -16,7 +20,7 @@ const TURDUS = { rank: 'genus', name: 'Turdus', path: [
 // A pretend answer from /api/area, with fields changed as given.
 function answer(fields = {}) {
   return {
-    box: AREA.box, res: 6, box_area_km2: 979.4, minimum_area_km2: 144.5, hexagon_count: 45,
+    box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 144.5, hexagon_count: 45,
     year_from: null, year_to: null, years_counted: null, records: 312234, species: 2,
     records_no_year_left_out: 0, records_outside_years: 0, q: null, status: [], sort: 'most_records',
     matching: 2, status_counts: { red: 0, blue: 0, yellow: 1, exotic: 0, none: 1 }, offset: 0, limit: 50,
@@ -69,17 +73,34 @@ describe('the area panel', () => {
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Species in this area')
     expect(screen.getByText(areaSizeText(AREA, 45))).toBeTruthy()
     expect(areaSizeText(AREA, 45)).toBe('A box of about 979 km² touching 45 hexagons of about 36 km² each.')
-    expect(screen.getByText(WHOLE_HEXAGONS_NOTE)).toBeTruthy()
+    expect(screen.getByText(wholeHexagonsNote(AREA))).toBeTruthy()
+    expect(wholeHexagonsNote(AREA)).toBe('It counts the whole of every hexagon the box touches, so the area counted '
+      + 'is larger than the box.')
     await screen.findByText('312,234 records of 2 species, all years')
   })
 
-  it('lists the species with the hexagon panel\'s controls, and asks for the box and the page', async () => {
+  it('names an area of several shapes by how many there are', async () => {
+    stubArea(() => ({ body: answer({ box: null, shape_count: 2, hexagon_count: 77 }) }))
+    show({ area: TWO, cellCount: 77 })
+    expect(areaSizeText(TWO, 77)).toBe('2 shapes touching 77 hexagons of about 36 km² each.')
+    expect(screen.getByText('2 shapes touching 77 hexagons of about 36 km² each.')).toBeTruthy()
+    expect(screen.getByText('It counts the whole of every hexagon the shapes touch, so the area counted is larger '
+      + 'than the shapes.')).toBeTruthy()
+    const link = await screen.findByRole('link', { name: 'See these records on GBIF' })
+    expect(link.getAttribute('href')).toBe(gbifAreaSearchUrl({ rings: TWO.shapes.map((shape) => shape.ring) }))
+    expect(new URL(link.getAttribute('href')).searchParams.getAll('geometry')).toHaveLength(2)
+    expect(screen.getByText(areaGbifNote(2))).toBeTruthy()
+    expect(areaGbifNote(2)).toBe('GBIF searches only inside the shapes you drew. Our numbers include every hexagon '
+      + 'the shapes touch, so GBIF usually shows fewer records.')
+  })
+
+  it('lists the species with the hexagon panel\'s controls, and asks for the area and the page', async () => {
     const urls = stubArea(() => ({ body: answer() }))
     show({ years: { from: 2000, to: null }, list: { q: 'robin', sort: 'english', status: ['yellow'], page: 1 } })
     await screen.findByText('Turdus migratorius')
     expect(screen.getByRole('searchbox')).toBeTruthy()
     expect(screen.getByRole('combobox')).toBeTruthy()
-    expect(urls()[0]).toBe('/api/area?offset=0&limit=50&west=-120.6&south=50.55&east=-120.1&north=50.8&res=6'
+    expect(urls()[0]).toBe('/api/area?offset=0&limit=50&area=b%3A-120.6%2C50.55%2C-120.1%2C50.8&res=6'
       + '&year_from=2000&q=robin&status=yellow&sort=english')
   })
 
@@ -87,15 +108,36 @@ describe('the area panel', () => {
     stubArea(() => ({ body: answer({ offset: 50, matching: 60 }) }))
     show({ list: { q: 'robin', sort: 'english', status: ['yellow'], page: 2 } })
     const link = await screen.findByRole('link', { name: 'Download the species in this area as a CSV file' })
-    expect(link.getAttribute('href')).toBe('/api/export/area?west=-120.6&south=50.55&east=-120.1&north=50.8&res=6'
+    expect(link.getAttribute('href')).toBe('/api/export/area?area=b%3A-120.6%2C50.55%2C-120.1%2C50.8&res=6'
       + '&q=robin&status=yellow&sort=english')
+  })
+
+  it("gives several shapes the size of one hexagon at the area's level, never the shapes' areas", () => {
+    // Kamloops (about 979 km²) and Prince George (about 729 km²) at level 6:
+    // the hexagons are about 36 km² each, as for one box at that level.
+    expect(areaSizeText(TWO, 79)).toBe('2 shapes touching 79 hexagons of about 36 km² each.')
+    expect(areaSizeText(AREA, 45)).toMatch(/ hexagons of about 36 km² each\.$/)
+    // The size follows the level only: the same shapes at level 4 and 7.
+    expect(areaSizeText({ ...TWO, res: 4 }, 61)).toBe('2 shapes touching 61 hexagons of about 1,770 km² each.')
+    expect(areaSizeText({ ...TWO, res: 7 }, 400)).toBe('2 shapes touching 400 hexagons of about 5.2 km² each.')
+    // Bigger shapes at the same level: the same size per hexagon.
+    const bigger = { shapes: readAreaText('b:-121,50,-119,51.5;b:-124,53,-122,54.5'), res: 6 }
+    expect(areaSizeText(bigger, 1000)).toBe('2 shapes touching 1,000 hexagons of about 36 km² each.')
+  })
+
+  it('asks for every shape of an area of several shapes', async () => {
+    const urls = stubArea(() => ({ body: answer({ box: null, shape_count: 2 }) }))
+    show({ area: TWO, cellCount: 45 })
+    await screen.findByText('Turdus migratorius')
+    expect(new URL(urls()[0], 'http://x').searchParams.get('area'))
+      .toBe('b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54')
   })
 
   it('links to the box\'s records on GBIF for the years, with the two notes', async () => {
     stubArea(() => ({ body: answer({ years_counted: [2000, 2026] }) }))
     show({ years: { from: 2000, to: null } })
     const link = await screen.findByRole('link', { name: 'See these records on GBIF' })
-    expect(link.getAttribute('href')).toBe(gbifBoxSearchUrl({ box: AREA.box, years: [2000, 2026] }))
+    expect(link.getAttribute('href')).toBe(gbifBoxSearchUrl({ box: KAMLOOPS, years: [2000, 2026] }))
     expect(link.getAttribute('target')).toBe('_blank')
     expect(screen.getByText(AREA_GBIF_NOTE)).toBeTruthy()
     expect(screen.getByText(GBIF_COUNT_NOTE)).toBeTruthy()

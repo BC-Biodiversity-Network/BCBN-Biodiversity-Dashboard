@@ -1212,12 +1212,14 @@ comes from the sources goes in as it is, plus one number BCBN works out
 for the species lists: each species' record count, the number the list
 shows (Evan agreed on 2026-11-10 that the lists should have it). The
 Datasets file also has each record's abstract and subjects as harvested
-from Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too).
-Nothing else BCBN or its models work out goes in.
+from Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too),
+and the licence its detail page shows (Reyna asked for it at the steering
+committee on 2026-11-13, and Evan agreed). Nothing else BCBN or its models
+work out goes in.
 
 | Endpoint | Options | Columns |
 | --- | --- | --- |
-| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link` |
+| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `licence` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
 | `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
@@ -1228,9 +1230,10 @@ Nothing else BCBN or its models work out goes in.
   `rank_card` and `cell_species` with no page limit), so a download always
   matches its list, leaves out the species `sensitive.py` hides (none for
   now), and gets the list's 400 or 404 answer for a bad request.
-- **Columns.** The Datasets file has exactly 8 columns, in this order
-  (Lucia's choice, 2026-11-10): `title`, `abstract`, `subjects`,
-  `creators`, `published`, `catalogue`, `doi`, `link`. `title`,
+- **Columns.** The Datasets file has exactly 9 columns, in this order:
+  `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`,
+  `doi`, `link` (Lucia's choice, 2026-11-10), then `licence` (steering
+  committee, 2026-11-13). `title`,
   `abstract`, `subjects` and `creators` are as harvested. Creators are
   joined with `; `; subjects with ` | `, which no harvested subject holds
   (the code refuses a value that does, rather than write a cell that
@@ -1245,9 +1248,61 @@ Nothing else BCBN or its models work out goes in.
   Header line 3 of the Datasets file says so in short: `Source: Lunaris
   dataset records from our harvest of 2026-10-20 (HTML tags removed from
   titles and abstracts, extra spaces from titles, abstracts and subjects;
-  one description per record); each row links to the original catalogue`.
+  one description per record); licence: from the Lunaris record, or from
+  the original catalogue where the record has none or was wrong; checked
+  against each original catalogue by BCBN in November 2026 (HTML tags
+  removed); each row links to the original catalogue`.
+  `licence` is what the Licence row of the dataset's detail page shows, by
+  the page's own rule (`backend/api/dataset_licences.py` follows
+  `readLicence` and `shownLicences` in `frontend/src/datasetText.js`, which
+  the Licence row of `DatasetDetail.jsx` uses;
+  `backend/tests/test_dataset_licences.py` runs both with node and jsdom
+  and checks they agree, on made-up entries and, where the real data is
+  in `backend/data/api`, on every shown dataset: all 3,578 on
+  2026-11-17). The record's own rights entries come first; only
+  when it has no licence does the page (and the file) use the licences
+  the November 2026 source check found (`dataset_source_checks.parquet`;
+  112 records on 2026-11-16, 3,452 use their own, 14 have none and the
+  cell is empty). The one exception is a short hand-decided list,
+  `backend/api/licence_hand_decisions.csv` (columns `dataset_id`, `title`,
+  `reason`, `decided_by`): for a dataset on it, the record's own licence
+  is set aside and the checked one is shown, on the page and in the CSV.
+  On 2026-11-17 it holds 9 datasets ("Claude's reading, approved by
+  Lucia, 2026-11-17"): 7 Polar Data Catalogue records whose licence link,
+  `https://www.polardata.ca/pdcinput/public/termsofuse`, no longer worked
+  on 17 November 2026
+  (the check found PDC Terms of Use, `https://polardata.ca/policy/usage`),
+  and 2 City of Surrey datasets on Abacus Open Data whose record gives a
+  link to Schedule 1 of the B.C. Freedom of Information and Protection of
+  Privacy Act, which is not a licence (the Abacus Terms tab, read on 17
+  November 2026, and the check,
+  give the Open Government Licence - Surrey v2.0). The harvested text stays
+  in the data unchanged. The list sits with the API's code because it is
+  tracked by git and `data/` is not; the API reads it once when it starts
+  (`prepare_datasets`), refuses to start if a listed dataset is not shown,
+  has another title, or has no checked licence to show instead, and gives
+  each dataset's `record_licence_set_aside` (the reason, or null) in
+  `/api/datasets` and `/api/datasets/{id}`. The page (`shownLicences` in
+  `datasetText.js`) then shows the checked licence marked "(checked by
+  BCBN)", its tip giving the reason in place of "did not include a
+  licence"; the list item's licence label follows the same rule. To add a
+  dataset, add a row and restart the API. A rights entry with no name and an
+  `info:eu-repo/semantics/` URI is an access right, shown under Access on
+  the page, never as a licence (every record has one); the name `None`
+  with no URI means no licence. Each licence is written as the page's full
+  text, never shortened, as plain text (193 records hold HTML in a
+  licence; tags are taken out and entities read, as on the page, and an
+  HTML link a catalogue split across the name and the URI is joined
+  again, as for the Street Tree record of Maple Ridge), then its link in
+  brackets when the page links it (http or https), for example `Open
+  Government Licence (https://opengov.mapleridge.ca/pages/open-government-licence)`.
+  A licence given only as a URI is named as on the page (the SPDX id,
+  such as `CC0-1.0`, for an spdx.org address, else the URI itself, then
+  not repeated in brackets). Several licences would be joined with ` | `
+  (no record had more than one on 2026-11-16, and none holds `|`).
   The records' other harvested fields (publisher, the DataCite place
-  names, boxes and points, rights, the OAI identifier) are not exported. The API's
+  names, boxes and points, the raw rights list, the OAI identifier) are
+  not exported. The API's
   data files do not store the harvest date, so it is written in
   `backend/api/export.py` (`LUNARIS_HARVEST_DATE`), and a test checks it
   against the harvest folder `export_lunaris_datasets.py` reads
@@ -1257,7 +1312,8 @@ Nothing else BCBN or its models work out goes in.
   resource type, contributors, affiliations, related items, translated
   titles); there is no language field, only `xml:lang` on some texts.
   The BC class, organisms, looked-up places, hand decisions and checked
-  licences are never exported. `published` is the issued date as stored; `catalogue` the
+  access are never exported (checked licences only as the page shows
+  them, in `licence`). `published` is the issued date as stored; `catalogue` the
   catalogue name the Datasets page shows; `doi` the DOI when the record's
   identifier is one (from the `https://doi.org/` link), else empty, never
   another kind of id; `link` the link to the original catalogue the page
@@ -1293,7 +1349,8 @@ Nothing else BCBN or its models work out goes in.
   export date; how the list was made (the search words, filters, years,
   rank path or hexagon, and order used, and for species what `records`
   means); the sources (for datasets the
-  Lunaris records, the harvest date and what the harvest changed; for
+  Lunaris records, the harvest date, what the harvest changed and where
+  the licence comes from; for
   species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
   `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a

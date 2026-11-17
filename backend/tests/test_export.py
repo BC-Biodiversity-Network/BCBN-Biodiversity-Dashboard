@@ -155,20 +155,26 @@ def test_the_datasets_file(client):
     assert header[1] == '# Search: words "eagle"; BC data only; sorted by relevance'
     assert header[2] == ("# Source: Lunaris dataset records from our harvest of 2026-10-20 (HTML tags "
                          "removed from titles and abstracts, extra spaces from titles, abstracts and subjects; "
-                         "one description per record); each row links to the original catalogue")
+                         "one description per record); licence: from the Lunaris record, or from the original "
+                         "catalogue where the record has none or was wrong; checked against each original "
+                         "catalogue by BCBN in November 2026 (HTML tags removed); each row links to the original "
+                         "catalogue")
     assert "rights" not in header[2]
     assert len(header) == 4
-    assert columns == ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link"]
+    assert columns == ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                       "licence"]
     assert rows[0] == {"title": "Bald Eagle nest survey",
                        "abstract": "Nest locations of Haliaeetus leucocephalus on the coast.",
                        "subjects": "Birds | Raptors",
                        "creators": "SBOT Requests;  Blackburn, Ian ; SBOT Requests",
                        "published": "2020-05-01", "catalogue": "BC Data Catalogue", "doi": "",
-                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests"}
+                       "link": "https://catalogue.data.gov.bc.ca/dataset/eagle-nests",
+                       "licence": "Open Government Licence - British Columbia "
+                                  "(https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)"}
     salmon = next(row for row in rows if row["title"].startswith("Salmon"))
     assert (salmon["doi"], salmon["link"], salmon["subjects"]) == ("10.1/salmon", "https://doi.org/10.1/salmon", "")
     plots = next(row for row in rows if row["title"] == "Forest plots")
-    assert (plots["published"], plots["creators"], plots["doi"]) == ("", "", "")
+    assert (plots["published"], plots["creators"], plots["doi"], plots["licence"]) == ("", "", "", "")
     assert response.headers["content-disposition"] == (
         f'attachment; filename="bcbn_datasets_eagle_{export_date()}.csv"')
 
@@ -457,21 +463,36 @@ TRICKY_CELLS = {
 }
 
 
-def test_the_datasets_file_has_exactly_the_8_columns_chosen(client):
+def test_the_datasets_file_has_exactly_the_9_columns_chosen(client):
     """Exactly title, abstract, subjects, creators, published, catalogue,
-    doi and link, in that order (Lucia, 2026-11-10): abstract and subjects
-    right after title, the 6 columns the file always had in their order, and
-    nothing else, so none of the record's other fields (publisher, places,
-    boxes, points, rights, its id) and none of our own (class, organisms,
-    looked-up places, checked licences) is a column."""
+    doi and link, in that order (Lucia, 2026-11-10), then licence (asked for
+    at the steering committee on 2026-11-13), and nothing else, so none of
+    the record's other fields (publisher, places, boxes, points, the raw
+    rights list, its id) and none of our own (class, organisms, looked-up
+    places, checked access) is a column."""
     _, header, columns, _ = download(client, "/api/export/datasets")
     assert columns == DATASET_COLUMNS == ["title", "abstract", "subjects", "creators", "published", "catalogue",
-                                          "doi", "link"]
+                                          "doi", "link", "licence"]
     for left_out in ("publisher", "places", "boxes", "points", "rights", "lunaris_id", "final_class",
                      "frontend_group", "organisms", "looked_up_places", "location_type", "mappable", "access",
-                     "licences", "copy_count"):
+                     "licences", "checked_licences", "copy_count"):
         assert left_out not in columns
     assert len(header) == 4
+
+
+def test_the_licence_column_follows_the_detail_pages_rule(client):
+    """The record's own licence when it has one, even where the source
+    check found one too (eagle-nests); the checked one only when the record
+    has none (salmon, whose record has just an access right); empty when
+    neither has one (forest-plots). Access rights are never written."""
+    rows = {row["title"]: row["licence"] for row in download(client, "/api/export/datasets")[3]}
+    assert rows["Bald Eagle nest survey"] == (
+        "Open Government Licence - British Columbia "
+        "(https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc)")
+    salmon = next(licence for title, licence in rows.items() if title.startswith("Salmon"))
+    assert salmon == "CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/)"
+    assert rows["Forest plots"] == ""
+    assert not any("info:eu-repo" in licence or "access" in licence.lower() for licence in rows.values())
 
 
 def test_the_tricky_record_reads_back_unchanged_with_the_csv_module(tmp_path):

@@ -199,18 +199,33 @@ export function readLicences(entries) {
   }
 }
 
+// Which licences the page shows for a dataset: the record's own (entries),
+// or, when it has none, the ones BCBN found at the original catalogue
+// (checkedEntries). recordSetAside is true for a dataset on BCBN's
+// hand-decided list (the API's record_licence_set_aside: a dead licence
+// link, or a "licence" that is not one): its own licences are then left
+// out, so the checked ones are shown. Returns { licences, fromCheck }, each
+// licence read with readLicence; fromCheck is true when they are the
+// checked ones. The CSV download follows the same rule
+// (backend/api/dataset_licences.py), and a backend test runs both.
+export function shownLicences(entries, checkedEntries = null, recordSetAside = false) {
+  const own = recordSetAside ? [] : readLicences(entries).licences
+  if (own.length > 0) {
+    return { licences: own, fromCheck: false }
+  }
+  const checked = readLicences(checkedEntries).licences
+  return { licences: checked, fromCheck: checked.length > 0 }
+}
+
 // How long the licence label of a list item is, at most.
 const LIST_LICENCE_LENGTH = 60
 
 // The short licence label for a list item: the first licence's name, cut to
-// LIST_LICENCE_LENGTH characters, with how many more there are; when the
-// record has none, the first of the licences BCBN found at the original
-// catalogue (checkedEntries) instead; or "No licence in the record".
-export function licenceListLabel(entries, checkedEntries = null) {
-  let { licences } = readLicences(entries)
-  if (licences.length === 0) {
-    licences = readLicences(checkedEntries).licences
-  }
+// LIST_LICENCE_LENGTH characters, with how many more there are, from the
+// licences the dataset's page shows (shownLicences, with the same
+// recordSetAside); or "No licence in the record".
+export function licenceListLabel(entries, checkedEntries = null, recordSetAside = false) {
+  const { licences } = shownLicences(entries, checkedEntries, recordSetAside)
   if (licences.length === 0) {
     return 'No licence in the record'
   }

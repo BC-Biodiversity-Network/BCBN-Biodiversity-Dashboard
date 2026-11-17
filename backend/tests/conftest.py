@@ -65,6 +65,7 @@ import duckdb
 import pytest
 from fastapi.testclient import TestClient
 
+import api.dataset_licences
 from api.main import create_app
 from api.settings import Settings
 
@@ -346,6 +347,27 @@ def write_test_data(folder, card_sql=CARD_SQL, hex_sql=HEX_SQL, bcsee_sql=BCSEE_
     with open(folder / "download_info.json", "w", encoding="utf-8") as handle:
         json.dump(download_info, handle)
     return folder
+
+
+def write_licence_decisions(path, rows=()):
+    """Write a licence hand-decided list (the columns of
+    api/licence_hand_decisions.csv) to path, with the rows given as
+    (dataset_id, title, reason, decided_by), and return path."""
+    lines = [",".join(api.dataset_licences.HAND_DECISION_COLUMNS)]
+    lines += [",".join('"' + value.replace('"', '""') + '"' for value in row) for row in rows]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def no_licence_decisions(tmp_path_factory, monkeypatch):
+    """Point the API at an empty licence hand-decided list, since the real
+    one (api/licence_hand_decisions.csv) names datasets the test data does
+    not have. A test that needs a list writes its own and points
+    api.dataset_licences.HAND_DECISIONS_FILE at it."""
+    empty = write_licence_decisions(tmp_path_factory.mktemp("licence_decisions") / "none.csv")
+    monkeypatch.setattr(api.dataset_licences, "HAND_DECISIONS_FILE", empty)
+    return empty
 
 
 @pytest.fixture

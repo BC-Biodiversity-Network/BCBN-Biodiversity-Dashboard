@@ -75,8 +75,9 @@ page limit, so it holds exactly the datasets of the list, in its order.
 Plain SQL only, so this runs on the cluster's DuckDB 0.10.3.
 """
 
+from api import dataset_licences
 from api.db import (DATASET_DEFAULT_FRONTEND_GROUPS, DATASET_FINAL_CLASSES, DATASET_FRONTEND_GROUPS,
-                    SOURCE_ACCESS_OPEN, sql_text)
+                    SOURCE_ACCESS_OPEN, DataFilesError, sql_text)
 from api.search import MIN_QUERY_LENGTH, QueryTooShort, normalise
 from api.species import resolve_key, species_labels, without_subgenus
 
@@ -157,7 +158,7 @@ DATASET_ORGANISMS_SQL = """
 # HTML in it, so the front end must show it as plain text. Each result also
 # has checked_licences, the licences the source check found (null when it
 # found none or did not check), so the list can name one where the record
-# has none.
+# has none, and record_licence_set_aside (see licence_set_aside).
 LIST_FIELDS = ["id", "title", "abstract", "subjects", "publisher", "issued", "source", "source_name",
                "link", "link_type", "licences", "final_class", "frontend_group", "location_type",
                "organism_level", "organisms", "mappable", "copy_count"]
@@ -185,7 +186,10 @@ def prepare_datasets(data):
     prepare_search, which makes the search_norm macro): the dataset_search
     and dataset_organism_names tables, a lookup from each other copy's id to
     the id shown for its group (so a link to any copy finds the dataset),
-    and the readable name of each catalogue.
+    the readable name of each catalogue, and the hand-decided list of
+    datasets whose own licence is set aside (dataset_licences.py). Raises
+    DataFilesError when that list is unreadable or does not fit the data,
+    so the API does not start.
     """
     con = data.connection
     con.execute(DATASET_INDEX_SQL)
@@ -194,6 +198,23 @@ def prepare_datasets(data):
         "SELECT c.id, d.id FROM (SELECT id, unnest(other_copies) AS c FROM lunaris_datasets) AS d").fetchall())
     data.dataset_catalogues = dict(con.execute(
         "SELECT DISTINCT source, source_name FROM lunaris_datasets ORDER BY source").fetchall())
+    try:
+        decisions = dataset_licences.read_hand_decisions()
+    except (OSError, ValueError) as error:
+        raise DataFilesError(f"The API cannot start; the licence hand decisions cannot be read: {error}") from error
+    problems = dataset_licences.hand_decision_problems(con.cursor(), decisions)
+    if problems:
+        raise DataFilesError("The API cannot start; problems with the licence hand decisions:\n  - "
+                             + "\n  - ".join(problems))
+    data.licence_decisions = decisions
+
+
+def licence_set_aside(data, dataset_id):
+    """Return why a dataset's own licence is set aside (the reason from the
+    hand-decided list, which the page shows), or None for every dataset not
+    on the list."""
+    decision = data.licence_decisions.get(dataset_id)
+    return decision["reason"] if decision else None
 
 
 def check_values(name, given, allowed, hint=None):
@@ -421,6 +442,7 @@ def list_datasets(data, query=None, catalogue=None, final_class=None, frontend_g
     for row in rows:
         result = dict(zip(LIST_FIELDS + ["checked_licences"], row))
         result["abstract_preview"] = preview(result.pop("abstract"))
+        result["record_licence_set_aside"] = licence_set_aside(data, result["id"])
         results.append(result)
 
     mappable_count = grouped_counts(cursor, conditions, "mappable", "d.mappable").get(True, 0)
@@ -488,8 +510,10 @@ def get_dataset(data, dataset_id):
     Return one dataset with every field, or None for an unknown id. The id
     of another copy of a dataset gives the copy that is shown, with
     requested_copy set to the id asked for. species and other_organisms
-    are its organism names, linked to species or not (linked_species), and
-    source_check is what the source check found (None when not checked).
+    are its organism names, linked to species or not (linked_species),
+    source_check is what the source check found (None when not checked), and
+    record_licence_set_aside why its own licence is not shown (None unless
+    it is on the hand-decided list; see licence_set_aside).
     """
     requested_copy = None
     shown_id = data.dataset_copies.get(dataset_id)
@@ -504,6 +528,7 @@ def get_dataset(data, dataset_id):
     dataset["requested_copy"] = requested_copy
     dataset["species"], dataset["other_organisms"] = linked_species(cursor, dataset_id)
     dataset["source_check"] = source_check(cursor, dataset_id)
+    dataset["record_licence_set_aside"] = licence_set_aside(data, dataset_id)
     return dataset
 
 

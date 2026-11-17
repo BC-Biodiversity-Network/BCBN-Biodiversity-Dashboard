@@ -486,7 +486,11 @@ class ApiData:
                   id shown; filled in by datasets.prepare_datasets()
     dataset_catalogues
                   each catalogue (source id) of the datasets, to its
-                  readable name; filled in by datasets.prepare_datasets()"""
+                  readable name; filled in by datasets.prepare_datasets()
+    licence_decisions
+                  the hand-decided list of datasets whose own licence is
+                  set aside, by dataset id (dataset_licences.py); filled in
+                  by datasets.prepare_datasets()"""
 
     def __init__(self, connection, settings, meta, merged_keys,
                  bcsee_includes_without_status):
@@ -499,6 +503,7 @@ class ApiData:
         self.search_keys = {}
         self.dataset_copies = {}
         self.dataset_catalogues = {}
+        self.licence_decisions = {}
 
     def cursor(self):
         """Return a new cursor for one request. Each request gets its own,

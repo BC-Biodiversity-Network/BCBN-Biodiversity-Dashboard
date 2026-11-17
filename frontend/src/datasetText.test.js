@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LICENCE_NAME_LENGTH, boxKind, capitalised, checkedAccessLabel, creatorsLabel, describeLocation, harvestedDegrees,
   identifierLabel, issuedLabel, licenceListLabel, noteText, plainText, readLicence, readLicences, shorten,
-  shownCoordinates, shownDegrees,
+  shownCoordinates, shownDegrees, shownLicences,
 } from './datasetText'
 
 // Real rights entries from the 2026-10-20 harvest (long ones cut).
@@ -131,6 +131,21 @@ describe('licences', () => {
     expect(licenceListLabel([OPEN_ACCESS], null)).toBe('No licence in the record')
     expect(licenceListLabel([{ name: 'The Government of Example Open Data Licence for Data Sets, Version 2', uri: null }]))
       .toBe('The Government of Example Open Data Licence for Data Sets...')
+  })
+
+  it("shows the checked licence instead of the record's when BCBN set the record's aside", () => {
+    // A Polar Data Catalogue record whose licence link no longer works.
+    const dead = { name: null, uri: 'https://www.polardata.ca/pdcinput/public/termsofuse' }
+    const pdc = [{ name: 'PDC Terms of Use', uri: 'https://polardata.ca/policy/usage' }]
+    expect(shownLicences([dead], pdc).fromCheck).toBe(false)
+    const setAside = shownLicences([dead, OPEN_ACCESS], pdc, true)
+    expect(setAside.fromCheck).toBe(true)
+    expect(setAside.licences).toEqual(
+      [{ kind: 'licence', name: 'PDC Terms of Use', fullText: null, uri: 'https://polardata.ca/policy/usage' }])
+    // Set aside with nothing checked: no licence, not the record's.
+    expect(shownLicences([dead], null, true)).toEqual({ licences: [], fromCheck: false })
+    expect(licenceListLabel([dead], pdc)).toBe('https://www.polardata.ca/pdcinput/public/termsofuse')
+    expect(licenceListLabel([dead], pdc, true)).toBe('PDC Terms of Use')
   })
 })
 

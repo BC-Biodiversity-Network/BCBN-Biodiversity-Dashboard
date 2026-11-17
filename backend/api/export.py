@@ -22,17 +22,26 @@ number BCBN works out: each species' record count, the same number the list
 shows (asked for by Evan on 2026-11-10). Nothing else BCBN computes (years,
 first and last records, and so on) goes in a file.
 
-    Datasets (8 columns): title, abstract, subjects, creators, published,
-        catalogue, doi, link. title, abstract and subjects as harvested from
-        Lunaris (public, and Lunaris shows them too; Evan, 2026-11-10; the
-        harvest took out HTML tags and extra spaces), the subjects joined
-        with " | ", which no harvested subject holds; creators as harvested,
-        joined with "; "; the issued date as stored, the catalogue name the
-        page shows, the DOI when the record's identifier is one (never
-        another kind of id), and the link to the original catalogue the
-        page uses (Lucia's choice of columns, 2026-11-10). Nothing BCBN or
-        its models made (the BC class, the organisms, looked-up places, hand
-        decisions, checked licences or access) goes in.
+    Datasets (9 columns): title, abstract, subjects, creators, published,
+        catalogue, doi, link, licence. title, abstract and subjects as
+        harvested from Lunaris (public, and Lunaris shows them too; Evan,
+        2026-11-10; the harvest took out HTML tags and extra spaces), the
+        subjects joined with " | ", which no harvested subject holds;
+        creators as harvested, joined with "; "; the issued date as stored,
+        the catalogue name the page shows, the DOI when the record's
+        identifier is one (never another kind of id), and the link to the
+        original catalogue the page uses (Lucia's choice of columns,
+        2026-11-10). Then the licence the dataset's detail page shows, by
+        the page's own rule (dataset_licences.py): the record's own
+        licences, or when it has none, the ones BCBN found when checking the
+        original catalogue in November 2026 (also for the few datasets on
+        the hand-decided list, whose own licence is set aside); access
+        rights left out; each
+        in full as plain text, with its link in brackets; several joined
+        with " | " (asked for by Reyna at the steering committee on
+        2026-11-13, Evan agreeing). Nothing else BCBN or its models made
+        (the BC class, the organisms, looked-up places, hand decisions,
+        checked access) goes in.
     Species lists (5 columns): specieskey, scientific_name, english_name,
         bcsee_status, records: the card's Catalogue of Life name (no
         authorship), the English name the card shows, the BC statuses the
@@ -73,6 +82,7 @@ from zoneinfo import ZoneInfo
 
 from api.area import area_species
 from api.cells import cards_gbif_keys, cell_species
+from api.dataset_licences import shown_licences
 from api.datasets import dataset_request, ordered_datasets
 import h3
 
@@ -90,13 +100,16 @@ HEADER_LINE_COUNT = 4
 R_LINE = "To read in R: read.csv(file, skip = 4)"
 
 # The columns of each file.
-DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link"]
+DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                   "licence"]
 SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
 
-# What each dataset row is read from (d is lunaris_datasets), in the order
-# dataset_row takes them.
-DATASET_SQL_COLUMNS = "d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, d.link_type"
+# What each dataset row is read from (d is lunaris_datasets, s is
+# dataset_search, whose checked_licences are the source check's): the id,
+# then the values dataset_row takes, in its order.
+DATASET_SQL_COLUMNS = ("d.id, d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, "
+                       "d.link_type, d.licences, s.checked_licences")
 
 # The date of the Lunaris harvest the datasets come from. The API's data
 # files do not store it (lunaris_datasets.parquet has no date), so it is
@@ -110,16 +123,24 @@ LUNARIS_HARVEST_DATE = "2026-10-20"
 # the harvest did to it (checked against the raw XML on 2026-11-10: HTML
 # tags taken out of 762 abstracts and 14 titles, runs of spaces and line
 # breaks made one space in abstracts, titles and 38 subject lists, one
-# description kept per record).
+# description kept per record), and where the licence comes from (the
+# detail page's rule, dataset_licences.py; the export takes HTML tags out
+# of licences, as the page does). "or was wrong" covers the few datasets
+# on the hand-decided list (a dead licence link, or a record "licence" that
+# is not one), whose checked licence is shown; the page's own tip explains
+# each one. "checked against each original catalogue" is the November 2026
+# source check, which covered every dataset the site shows.
 DATASETS_SOURCE_LINE = (
     f"Source: Lunaris dataset records from our harvest of {LUNARIS_HARVEST_DATE} (HTML tags removed from "
     "titles and abstracts, extra spaces from titles, abstracts and subjects; one description per record); "
+    "licence: from the Lunaris record, or from the original catalogue where the record has none or was wrong; "
+    "checked against each original catalogue by BCBN in November 2026 (HTML tags removed); "
     "each row links to the original catalogue")
 
-# How the subjects column joins a record's subjects. No harvested subject
-# holds it (checked on 2026-11-10), so the list can always be split again;
-# joined_values refuses a value that holds it rather than write a list that
-# cannot be.
+# How the subjects and licence columns join several values. No harvested
+# subject holds it (checked on 2026-11-10), nor any licence (checked on
+# 2026-11-16), so the list can always be split again; joined_values refuses
+# a value that holds it rather than write a list that cannot be.
 LIST_SEPARATOR = " | "
 
 # A link the Datasets page follows (isWebLink in datasetText.js), and the
@@ -245,12 +266,16 @@ def joined_values(values):
     return LIST_SEPARATOR.join(values) or None
 
 
-def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type):
-    """Return one dataset's row: the 8 columns (see the top of this file),
-    from the values DATASET_SQL_COLUMNS reads. Text is written as stored,
-    never shortened."""
+def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type, licences,
+                checked_licences, record_licence_set_aside=False):
+    """Return one dataset's row: the 9 columns (see the top of this file),
+    from the values DATASET_SQL_COLUMNS reads after the id. Text is written
+    as stored, never shortened; the licence is the one the detail page
+    shows (dataset_licences.shown_licences), record_licence_set_aside being
+    true for a dataset on the hand-decided list."""
     return [title, abstract, joined_values(subjects), "; ".join(creators or []), issued, source_name,
-            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None]
+            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None,
+            joined_values(shown_licences(licences, checked_licences, record_licence_set_aside))]
 
 
 def datasets_search_line(data, request):
@@ -291,7 +316,8 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
     cursor = data.cursor()
     request = dataset_request(data, cursor, query, catalogue, final_class, frontend_group, sort,
                               year_from, year_to, organism, access, mappable, species)
-    rows = [dataset_row(*row) for row in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
+    rows = [dataset_row(*values, record_licence_set_aside=dataset_id in data.licence_decisions)
+            for dataset_id, *values in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
     header = [f"BCBN Datasets search results, exported {date}",
               datasets_search_line(data, request),
               DATASETS_SOURCE_LINE,

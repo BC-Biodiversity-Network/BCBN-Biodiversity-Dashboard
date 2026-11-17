@@ -105,7 +105,8 @@ function ResultItem({ result, href, onOpen, showOrganisms }) {
       <p className="dataset-meta">
         {result.source_name}
         {issued && <> · Published {issued}</>}
-        {' · '}{licenceListLabel(result.licences, result.checked_licences)}
+        {' · '}{licenceListLabel(result.licences, result.checked_licences,
+          Boolean(result.record_licence_set_aside))}
       </p>
       <MayIncludeBcTag frontendGroup={result.frontend_group} />
       {showOrganisms && result.organisms?.length > 0 && (

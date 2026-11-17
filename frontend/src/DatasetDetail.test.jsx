@@ -192,6 +192,26 @@ describe('the dataset details', () => {
     expect(detailValue(container, 'Access').textContent).toBe('Restricted access')
   })
 
+  it("shows the checked licence when BCBN set the record's aside, with the reason in the tip", () => {
+    const reason = 'On 17 November 2026, the licence link in the record Lunaris collected, '
+      + 'https://www.polardata.ca/pdcinput/public/termsofuse, no longer worked (the page said "The requested '
+      + 'resource was not found"), so we show the catalogue\'s current terms of use instead.'
+    const { container } = show(eagles({
+      source_name: 'Polar Data Catalogue', record_licence_set_aside: reason,
+      licences: [{ name: null, uri: 'https://www.polardata.ca/pdcinput/public/termsofuse' }, OPEN],
+      source_check: checked({ catalogue_checked: 'Polar Data Catalogue', checked_how: 'by hand',
+        licences: [{ name: 'PDC Terms of Use', uri: 'https://polardata.ca/policy/usage' }] }),
+    }))
+    expect(detailValue(container, 'Licence').textContent).toBe('PDC Terms of Use (checked by BCBN)?')
+    expect(screen.getByRole('link', { name: 'PDC Terms of Use' }).href).toBe('https://polardata.ca/policy/usage')
+    expect(container.querySelector('a[href="https://www.polardata.ca/pdcinput/public/termsofuse"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Where does this licence come from?' }))
+    expect(screen.getByRole('tooltip').textContent).toBe('From Polar Data Catalogue, where this dataset is '
+      + `published (checked by BCBN, as of 3 November 2026). ${reason}`)
+    // The record's access right is still read from the record.
+    expect(detailValue(container, 'Access').textContent).toBe('Open access')
+  })
+
   it("keeps the record's own licence, and says when neither has one", () => {
     const check = checked({ licences: [{ name: 'Another licence', uri: null }] })
     const { container } = show(eagles({ source_check: check }))

@@ -114,10 +114,23 @@ describe('the selected group of hexagons on the map', () => {
     // At resolution 7, the hexagons inside a selected one are selected.
     expect(cellToChildren(cells[0], 7).every(inside)).toBe(true)
     expect(cellToChildren('862800b37ffffff', 7).some(inside)).toBe(false)
-    // At resolution 4 and 5, the hexagons holding a selected one are.
-    expect(inside(cellToParent(cells[0], 5))).toBe(true)
-    expect(inside(cellToParent(cells[0], 4))).toBe(true)
+    // At resolution 4 and 5, a hexagon is selected only when every hexagon
+    // inside it is: the map never keeps bright land the area does not count.
+    const chosen = new Set(cells)
+    for (const res of [4, 5]) {
+      const parents = [...new Set(cells.map((cell) => cellToParent(cell, res)))]
+      for (const parent of parents) {
+        expect(inside(parent)).toBe(cellToChildren(parent, 6).every((child) => chosen.has(child)))
+      }
+      if (res === 4) {
+        expect(parents.some(inside)).toBe(false)
+      }
+    }
     expect(inside('842800bffffffff')).toBe(false)
+    const whole = cellToChildren('852800b3fffffff', 6)
+    const wholeTest = selectionTest([...whole, ...cells], 6)
+    expect(wholeTest('852800b3fffffff')).toBe(true)
+    expect(selectionTest(whole.slice(1), 6)('852800b3fffffff')).toBe(false)
   })
 })
 
@@ -164,8 +177,14 @@ describe('the area in the address', () => {
       .toBe('?species=59PMB&area=b:-120.6,50.55,-120.1,50.8&area_res=7')
   })
 
+  it('reads an address without area_res as Auto, and writes Auto without it', () => {
+    expect(readArea('?area=b:-120.6,50.55,-120.1,50.8')).toEqual({ ...ONE, res: null })
+    expect(readArea('?area=-120.6,50.55,-120.1,50.8')).toEqual({ ...ONE, res: null })
+    expect(mapSearch({ area: { ...ONE, res: null } })).toBe('?area=b:-120.6,50.55,-120.1,50.8')
+  })
+
   it.each([
-    '?area=-120.6,50.55,-120.1&area_res=6', '?area=-120.6,50.55,-120.1,50.8', '?area=-120.6,50.55,-120.1,50.8&area_res=3',
+    '?area=-120.6,50.55,-120.1&area_res=6', '?area=-120.6,50.55,-120.1,50.8&area_res=3',
     '?area=-120.1,50.55,-120.6,50.8&area_res=6', '?area=-120.6,50.8,-120.1,50.55&area_res=6',
     '?area=-200,50.55,-120.1,50.8&area_res=6', '?area=a,50.55,-120.1,50.8&area_res=6', '?area=,50.55,-120.1,50.8&area_res=6',
     '?area=b:0,0,1,1;&area_res=6', '?area=p:0,0,1,1,1,0,0,1&area_res=6', '?area=x:0,0,1,1&area_res=6',

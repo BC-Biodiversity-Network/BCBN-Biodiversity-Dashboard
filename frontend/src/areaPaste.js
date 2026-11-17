@@ -288,11 +288,12 @@ export function readPastedRings(text, firstNumber = 1) {
 }
 
 // Adds the shapes of a pasted text to an area: existing is the area's
-// shapes now (none for no area) and res the hexagon size to check them at
-// (the area's, or the map's when the area is empty). Returns { shapes } with
-// every shape of the area after the paste, read back from its area text so
-// the page holds exactly what the API will read, or { problem } with the
-// reason nothing was added.
+// shapes now (none for no area) and res the hexagon size to check their
+// sizes at, or null to leave the sizes to the caller (the page chooses the
+// area's size itself, see areaSize.js). Returns { shapes } with every shape
+// of the area after the paste, read back from its area text so the page
+// holds exactly what the API will read, or { problem } with the reason
+// nothing was added.
 export function addPastedShapes(text, existing, res) {
   try {
     const rings = readPastedRings(text, existing.length + 1)
@@ -303,7 +304,7 @@ export function addPastedShapes(text, existing, res) {
       return { problem }
     }
     const shapes = readAreaText(written)
-    const sizeProblem = shapesProblem(shapes, res)
+    const sizeProblem = res === null ? null : shapesProblem(shapes, res)
     return sizeProblem ? { problem: sizeProblem } : { shapes }
   } catch (error) {
     if (error instanceof PasteProblem) {

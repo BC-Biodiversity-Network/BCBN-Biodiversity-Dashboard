@@ -31,8 +31,11 @@ import { AreaProblem, areaText, readAreaText } from './areaShapes.js'
 //                                     area text (see areaShapes.js: boxes
 //                                     "b:west,south,east,north" and
 //                                     polygons "p:lng,lat,...", separated
-//                                     by ";"), the resolution of its first
-//                                     shape, and its panel's species list's
+//                                     by ";"), the hexagon size the visitor
+//                                     picked (area_res, left out for "Auto":
+//                                     the page chooses it, see areaSize.js;
+//                                     every old link has one, so it opens at
+//                                     its own size), and its panel's species list's
 //                                     options with area_ in front, as for a
 //                                     hexagon; it stays until it is
 //                                     cleared, with a hexagon's panel or a
@@ -211,16 +214,20 @@ export function readAreaPanelOpen(search) {
 }
 
 // The area on the species map, from a query string (area=<area text>
-// &area_res=6; see areaShapes.js): { shapes, res }, or null for none, for a
-// resolution not 4 to 7, or for area text the API would refuse
-// (readAreaText's checks, with the API's own rules; whether each shape is
-// big enough is checked when it is drawn, and by the API). An old address's
-// area=west,south,east,north is read as one box, so old links still open.
+// [&area_res=6]; see areaShapes.js): { shapes, res }, res being the hexagon
+// size the visitor picked, or null for "Auto" (no area_res: the page
+// chooses the size, see areaSize.js). null for no area, for an area_res
+// that is not 4 to 7, or for area text the API would refuse (readAreaText's
+// checks, with the API's own rules; whether each shape is big enough is
+// checked when it is drawn, and by the API). An old address's
+// area=west,south,east,north is read as one box, and its area_res as a size
+// picked, so old links open exactly as before.
 export function readArea(search) {
   const params = new URLSearchParams(search)
   const text = params.get('area')
-  const res = Number(params.get('area_res'))
-  if (text === null || !AREA_RESOLUTIONS.includes(res)) {
+  const resText = params.get('area_res')
+  const res = resText === null ? null : Number(resText)
+  if (text === null || (res !== null && !AREA_RESOLUTIONS.includes(res))) {
     return null
   }
   try {
@@ -355,8 +362,8 @@ export function withYears(search, years) {
 
 // The query string for the species map: with a species' card open (species,
 // a key), or a rank's page (rank, { rank, path }), never both, a hexagon's
-// panel open (cell), and an area (area, { shapes, res }, see readArea),
-// each null for none; an area and a hexagon can be there together (the hexagon's
+// panel open (cell), and an area (area, { shapes, res }, see readArea; res
+// null for "Auto", which leaves area_res out), each null for none; an area and a hexagon can be there together (the hexagon's
 // panel on top). rankList, cellList and areaList are the options of the
 // rank card's, the hexagon panel's and the area panel's species lists (see
 // readList), left out when null or the defaults; areaPanelOpen false keeps
@@ -386,7 +393,9 @@ export function mapSearch({
   }
   if (area) {
     params.set('area', areaText(area.shapes))
-    params.set('area_res', String(area.res))
+    if (area.res !== null && area.res !== undefined) {
+      params.set('area_res', String(area.res))
+    }
     addList(params, areaList, AREA_LIST)
     if (!areaPanelOpen) {
       params.set('area_panel', 'closed')

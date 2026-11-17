@@ -4,7 +4,7 @@ import { areaExportUrl, fetchArea } from './api'
 import { averageHexagonKm2 } from './area'
 import { areaText, shapeAreaKm2 } from './areaShapes'
 import CsvDownload from './CsvDownload'
-import { GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl } from './gbifLinks'
+import { AREA_BC_ONLY_NOTE, GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl } from './gbifLinks'
 import { PAGE_SIZE, SpeciesRow, km2Text, notCountedText, totalsText, useListAnswer } from './HexagonPanel'
 import RankName, { rankTitle } from './RankName'
 import SpeciesListControls, { SpeciesListPaging, noMatchText, shownText } from './SpeciesListControls'
@@ -136,6 +136,7 @@ export default function AreaPanel({
               See these records on GBIF
             </a>
           </p>
+          <p className="hexagon-note">{AREA_BC_ONLY_NOTE}</p>
           <p className="hexagon-note">{areaGbifNote(area.shapes.length, area.shapes[0].isBox)}</p>
           <p className="hexagon-note">{GBIF_COUNT_NOTE}</p>
           {rank && (

@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AreaPanel, { areaSizeText, wholeHexagonsNote } from './AreaPanel'
 import { boxShapeOf, readAreaText } from './areaShapes'
-import { AREA_GBIF_NOTE, GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl, gbifBoxSearchUrl } from './gbifLinks'
+import {
+  AREA_BC_ONLY_NOTE, AREA_GBIF_NOTE, GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl, gbifBoxSearchUrl,
+} from './gbifLinks'
 import { NO_LIST } from './route'
 
 // A box around Kamloops at resolution 6 (45 hexagons), the same box with a
@@ -140,6 +142,9 @@ describe('the area panel', () => {
     expect(link.getAttribute('href')).toBe(gbifBoxSearchUrl({ box: KAMLOOPS, years: [2000, 2026] }))
     expect(link.getAttribute('target')).toBe('_blank')
     expect(screen.getByText(AREA_GBIF_NOTE)).toBeTruthy()
+    // Always, right under the link: the area may reach past BC.
+    expect(AREA_BC_ONLY_NOTE).toBe("BCBN's data covers BC only; GBIF also shows records outside BC.")
+    expect(link.closest('p').nextElementSibling.textContent).toBe(AREA_BC_ONLY_NOTE)
     expect(screen.getByText(GBIF_COUNT_NOTE)).toBeTruthy()
     expect(screen.queryByText(/GBIF shows every species in the box/)).toBeNull()
   })

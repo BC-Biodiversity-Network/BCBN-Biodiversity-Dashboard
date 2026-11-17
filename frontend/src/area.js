@@ -5,7 +5,7 @@
 // area of several shapes, its checks and its messages are in areaShapes.js.
 
 import {
-  POLYGON_TO_CELLS_FLAGS, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
+  POLYGON_TO_CELLS_FLAGS, cellToChildrenSize, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
 } from 'h3-js'
 
 // The smallest box, in average hexagons of the resolution it is drawn at:
@@ -91,13 +91,18 @@ export function groupOutline(cells) {
 }
 
 // A test of whether a hexagon the map shows is in the selected group (cells,
-// at resolution res), whatever resolution the map shows now: at the same
-// resolution, the hexagon itself is in the group; at a finer one, the
-// larger hexagon it lies in is; at a coarser one, it holds a hexagon of the
-// group. Returns a function of a hexagon's id.
+// at resolution res), whatever resolution the map shows now, so the map
+// keeps bright only what the area counts: at the same resolution, the
+// hexagon itself is in the group; at a finer one, the larger hexagon it
+// lies in is; at a coarser one (the area's hexagons are smaller than the
+// map's, which happens since the area's size no longer follows the zoom),
+// every one of its smaller hexagons at res is in the group, so a large
+// hexagon only partly in the area is faded, and the area's outline shows
+// where it really ends. Returns a function of a hexagon's id.
 export function selectionTest(cells, res) {
   const chosen = new Set(cells)
-  // The group's hexagons at each coarser resolution, worked out when needed.
+  // How many of the group's hexagons lie in each larger hexagon, for each
+  // coarser resolution, worked out when needed.
   const coarser = new Map()
   return (cell) => {
     const cellRes = getResolution(cell)
@@ -108,8 +113,13 @@ export function selectionTest(cells, res) {
       return chosen.has(cellToParent(cell, res))
     }
     if (!coarser.has(cellRes)) {
-      coarser.set(cellRes, new Set(cells.map((one) => cellToParent(one, cellRes))))
+      const counts = new Map()
+      for (const one of cells) {
+        const parent = cellToParent(one, cellRes)
+        counts.set(parent, (counts.get(parent) ?? 0) + 1)
+      }
+      coarser.set(cellRes, counts)
     }
-    return coarser.get(cellRes).has(cell)
+    return coarser.get(cellRes).get(cell) === cellToChildrenSize(cell, res)
   }
 }

@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchMeta } from './api'
 import { groupOutline } from './area'
 import { addPastedShapes } from './areaPaste'
-import { areaText as writeAreaText, areaTextProblem, boxShapeOf, shapesCells, shapesProblem } from './areaShapes'
+import { areaText as writeAreaText, areaTextProblem, boxShapeOf } from './areaShapes'
+import { pickedSizeProblem, sizedArea } from './areaSize'
 import AreaPanel from './AreaPanel'
 import HexagonPanel from './HexagonPanel'
 import HexMap from './HexMap'
@@ -88,12 +89,14 @@ const HEX_DATA_URLS = {
 //
 // Areas: an area of interest is one or more shapes (boxes drawn, and
 // polygons pasted as WKT or GeoJSON), made with the map's "Create an area
-// of interest" panel; it selects every
-// hexagon any shape touches, at the resolution the map showed when its
-// first shape was drawn (later shapes use the same one), and opens the area
-// panel listing their species. The area stays, on the map and in the
-// address (area=<area text>, area_res, area_q, ...; see readArea in
-// route.js), until "Clear area" removes it; every other move (a hexagon, a
+// of interest" panel; it selects every hexagon any shape touches, all at one
+// hexagon size whatever the map's zoom: "Auto" (the default, no area_res in
+// the address) picks the smallest size at which every shape passes, again
+// whenever a shape is added or removed, and the visitor can pick a size in
+// the panel instead (area_res), kept until changed or cleared (see
+// areaSize.js). It opens the area panel listing their species. The area
+// stays, on the map and in the address (area=<area text>, area_res,
+// area_q, ...; see readArea in route.js), until "Clear area" removes it; every other move (a hexagon, a
 // species, a rank, the years) keeps it. On a single species' map it stays in
 // the address but is not shown, and it is back when the card closes.
 // History:
@@ -102,7 +105,8 @@ const HEX_DATA_URLS = {
 //     paste adds all its shapes as one entry;
 //     removing a shape with its x, or the last one with "Back", is a new
 //     entry too, so the browser's back button undoes each of them (removing
-//     the only shape leaves no area, which Back also undoes);
+//     the only shape leaves no area, which Back also undoes); so is
+//     changing the hexagon size;
 //   - clicking a hexagon opens its panel on top of the area panel, by the
 //     hexagon rules above (a new entry for the first click), so its x or
 //     Back returns to the area panel;
@@ -119,7 +123,8 @@ const HEX_DATA_URLS = {
 //   - changing the area's list replaces the entry.
 // A shape the API would refuse (too small, too big, too many points...) is
 // not added: the panel says why instead, in the API's own words
-// (areaTextProblem and shapesProblem in areaShapes.js).
+// (areaTextProblem in areaShapes.js, autoSize and pickedSizeProblem in
+// areaSize.js, which adds a hint about another size when one was picked).
 //
 // Years: the year range is in the address too, and every move between maps,
 // cards and hexagons keeps it. Changing it replaces the entry in the same
@@ -164,24 +169,30 @@ export default function App({
   const keptArea = readArea(search)
   const areaPanelOpen = readAreaPanelOpen(search)
   const addressArea = addressKey ? null : keptArea
-  const areaText = addressArea ? `${addressArea.res}:${writeAreaText(addressArea.shapes)}` : null
+  const areaText = addressArea ? `${addressArea.res ?? 'auto'}:${writeAreaText(addressArea.shapes)}` : null
   const addressAreaList = readList(search, AREA_LIST)
   // What every move but drawing and clearing keeps of the area, for mapSearch.
   const keepArea = { area: keptArea, areaList: addressAreaList, areaPanelOpen }
-  // The hexagons the area's shapes touch, each once (see shapesCells),
-  // outlined on the map and counted by the API.
-  const areaCells = useMemo(
-    () => (addressArea ? shapesCells(addressArea.shapes, addressArea.res).cells : null), [areaText])
-  // The area as the map draws it: its shapes, its resolution, its hexagons
-  // and the outline around the whole group (see groupOutline), worked out
-  // once per area.
+  // The area's hexagon size and its hexagons, each once: the size picked, or
+  // the one Auto chooses (see sizedArea in areaSize.js), worked out once per
+  // area. An address whose shapes fit no size (only a hand-made one) shows
+  // no area.
+  const sized = useMemo(() => (addressArea ? sizedArea(addressArea.shapes, addressArea.res) : null), [areaText])
+  // The area shown: { shapes, res, picked } (res the size used, picked
+  // whether the visitor picked it), or null.
+  const shownArea = sized && !sized.problem
+    ? { shapes: addressArea.shapes, res: sized.res, picked: addressArea.res !== null } : null
+  const areaCells = shownArea ? sized.cells : null
+  // The area as the map draws it: its shapes, its size, its hexagons and the
+  // outline around the whole group (see groupOutline), worked out once per
+  // area.
   const mapArea = useMemo(
-    () => (addressArea ? { ...addressArea, cells: areaCells, outline: groupOutline(areaCells) } : null), [areaText])
+    () => (shownArea ? { ...shownArea, cells: areaCells, outline: groupOutline(areaCells) } : null), [areaText])
   // What was wrong with the last shape drawn (the API's words), or null.
   const [areaMessage, setAreaMessage] = useState(null)
   // Whether the area panel is open and on screen (a hexagon's panel covers
   // it), and whether either panel takes the side panel (covering the cards).
-  const areaPanelShown = Boolean(addressArea && areaPanelOpen && !addressCell)
+  const areaPanelShown = Boolean(shownArea && areaPanelOpen && !addressCell)
   const panelOpen = Boolean(addressCell || areaPanelShown)
   const [species, setSpecies] = useState(() => (addressKey ? { key: addressKey, name: null, id: 0 } : null))
   const picks = useRef(0)
@@ -315,12 +326,12 @@ export default function App({
     }
   }
 
-  // Moves to the area made of shapes (at resolution res; no shapes for no
-  // area) as a new address entry, so the browser's back button undoes it,
-  // keeping a rank map's rank and the area list's order and statuses, and
-  // closing an open hexagon panel. navigate records the area's place in the
-  // history (see withAreaHistory in route.js), so "Clear area" can still
-  // take the whole area out of it.
+  // Moves to the area made of shapes (at the hexagon size picked, res, or
+  // Auto, res null; no shapes for no area) as a new address entry, so the
+  // browser's back button undoes it, keeping a rank map's rank and the area
+  // list's order and statuses, and closing an open hexagon panel. navigate
+  // records the area's place in the history (see withAreaHistory in
+  // route.js), so "Clear area" can still take the whole area out of it.
   function moveToShapes(shapes, res) {
     navigate(mapSearch({
       rank: addressRank, rankList: addressRankList, area: shapes.length ? { shapes, res } : null,
@@ -328,40 +339,62 @@ export default function App({
     }))
   }
 
-  // Adds a box drawn on the map (box, drawn at resolution res) to the area,
-  // or starts the area with it: the area keeps the resolution of its first
-  // shape. A box the API would refuse (too small, too big, too many points,
-  // the area too big once joined) is not added, and the panel says why in
-  // the API's words.
-  function drawArea(box, res) {
+  // What is wrong with the area's shapes at its size, or null: at the size
+  // picked (res, with a hint about another size), or at Auto (res null, the
+  // message of autoSize when no size works). The map's zoom plays no part.
+  function sizeProblem(shapes, res) {
+    return res === null ? sizedArea(shapes, null).problem ?? null : pickedSizeProblem(shapes, res)
+  }
+
+  // Adds a box drawn on the map to the area, or starts the area with it, at
+  // the area's size (Auto unless one was picked). A box the API would refuse
+  // (too small, too big, too many points, the area too big once joined) is
+  // not added, and the panel says why in the API's words.
+  function drawArea(box) {
     const shapes = [...(keptArea?.shapes ?? []), boxShapeOf(box)]
-    const areaRes = keptArea?.res ?? res
-    const problem = areaTextProblem(writeAreaText(shapes)) ?? shapesProblem(shapes, areaRes)
+    const res = keptArea?.res ?? null
+    const problem = areaTextProblem(writeAreaText(shapes)) ?? sizeProblem(shapes, res)
     setAreaMessage(problem)
     if (!problem) {
-      moveToShapes(shapes, areaRes)
+      moveToShapes(shapes, res)
     }
   }
 
   // Adds the shapes of a text pasted in the panel's Paste tab (WKT or
   // GeoJSON, see areaPaste.js) to the area, all at once as one new entry, so
   // the back button takes the whole paste away; or adds none and returns
-  // why (shown under the text box). An empty area takes the map's level now
-  // (res), like a first drawn box; otherwise the area keeps its own.
-  function pasteArea(text, res) {
-    const areaRes = keptArea?.res ?? res
-    const { shapes, problem } = addPastedShapes(text, keptArea?.shapes ?? [], areaRes)
-    if (problem) {
-      return problem
+  // why (shown under the text box). The area's size follows the same rule as
+  // for a box drawn.
+  function pasteArea(text) {
+    const res = keptArea?.res ?? null
+    const { shapes, problem } = addPastedShapes(text, keptArea?.shapes ?? [], null)
+    const refused = problem ?? sizeProblem(shapes, res)
+    if (refused) {
+      return refused
     }
     setAreaMessage(null)
-    moveToShapes(shapes, areaRes)
+    moveToShapes(shapes, res)
     return null
+  }
+
+  // Changes the area's hexagon size (the panel's "Hexagon size"): res a size
+  // picked, or null for Auto, as a new entry the back button undoes. A size
+  // at which the shapes do not pass is refused, and the panel says why.
+  function changeAreaSize(res) {
+    if (!keptArea || res === keptArea.res) {
+      return
+    }
+    const problem = sizeProblem(keptArea.shapes, res)
+    setAreaMessage(problem)
+    if (!problem) {
+      moveToShapes(keptArea.shapes, res)
+    }
   }
 
   // Removes one shape (its place in the list, from the panel's x), or the
   // last one (the panel's "Back"), as a new entry the back button undoes.
-  // Removing a shape never makes an area the API would refuse.
+  // Removing a shape never makes an area the API would refuse at a size
+  // picked; at Auto the size is chosen again.
   function removeShape(index) {
     if (!keptArea) {
       return
@@ -493,12 +526,13 @@ export default function App({
           selectedArea={mapArea}
           onAreaDrawn={drawArea}
           onAreaPasted={pasteArea}
+          onAreaSizeChange={changeAreaSize}
           onRemoveShape={removeShape}
           onRemoveLastShape={() => removeShape((keptArea?.shapes.length ?? 0) - 1)}
           areaMessage={areaMessage}
           onDismissAreaMessage={() => setAreaMessage(null)}
-          onClearArea={addressArea ? clearArea : null}
-          onShowArea={addressArea && !areaPanelOpen && !addressCell ? () => setAreaPanelOpen(true) : null}
+          onClearArea={shownArea ? clearArea : null}
+          onShowArea={shownArea && !areaPanelOpen && !addressCell ? () => setAreaPanelOpen(true) : null}
         />
 
         <div className="top-right-controls">
@@ -519,11 +553,11 @@ export default function App({
           )}
           {/* The area panel stays loaded under a hexagon's panel, so closing
               that one shows it again at once. */}
-          {addressArea && areaPanelOpen && (
+          {shownArea && areaPanelOpen && (
             <div className="card-holder area-holder" hidden={Boolean(addressCell)}>
               <AreaPanel
                 key={areaText}
-                area={addressArea}
+                area={shownArea}
                 cellCount={areaCells.length}
                 years={years}
                 rank={rankOpen}

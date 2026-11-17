@@ -1673,8 +1673,8 @@ one, or a `FeatureCollection` of them), longitude then latitude in degrees
 about 14,000 km² around Kamloops in the box. "Add" adds every polygon as a
 polygon shape (`p:...` in the area text, a pasted rectangle staying a
 polygon), its corners rounded to 4 decimals as drawn ones are, all in one
-address entry, so the back button takes the whole paste away; an empty area
-takes the map's hexagon size, otherwise the area keeps its own. It is all
+address entry, so the back button takes the whole paste away; the area's
+hexagon size follows the same rule as for a box drawn (below). It is all
 or nothing: if any part is refused nothing is added, the text stays in the
 box and the reason shows under it, naming the shape by its place in the
 area ("Shape 3 (a polygon) has a hole; holes are not supported yet."). It
@@ -1703,19 +1703,35 @@ was when clicked: it moves to the hexagon when it is off screen and zooms
 to hexagons of its size when the map shows another size (`HexMap.jsx`),
 so the panel and the outline on the map always agree. A box's
 edges keep 4 decimals (about 11 m). The hexagons the area selects are those
-at the resolution the map showed when its first shape was drawn (later
-shapes use the same one) that overlap any shape even by a corner, each once
-(`shapesCells` in `frontend/src/areaShapes.js`: h3-js
-`polygonToCellsExperimental` with `containmentOverlapping`, the corners as
-`[lat, lng]`, exactly as the API finds them); that resolution stays with
-the area whatever the zoom. While an area is selected, every hexagon outside
-it keeps only a fifth of its opacity (`FADED_SHARE`), at any zoom (a finer
-hexagon counts as selected when the hexagon it lies in is, a coarser one
-when it holds one: `selectionTest` in `area.js`), so the selected ones keep
-their normal colours and stand out. One outline goes around the outside of
+that overlap any shape even by a corner, each once (`shapesCells` in
+`frontend/src/areaShapes.js`: h3-js `polygonToCellsExperimental` with
+`containmentOverlapping`, the corners as `[lat, lng]`, exactly as the API
+finds them), all at one size, which does not depend on the map's zoom
+(`frontend/src/areaSize.js`). "Auto", the default, picks the smallest
+hexagons (about 3, 7, 20 or 52 km across, tried from the smallest) at which
+every shape covers at least `MIN_AREA_HEXAGONS` average hexagons and the
+whole area touches at most `MAX_AREA_HEXAGONS`: smaller hexagons follow the
+shapes more closely, so less land outside them is counted. It chooses again
+whenever a shape is added or removed, the whole area recounted at the new
+size; if no size works (a shape too small even at the smallest, or the area
+too big even at the largest) the shape is refused with that size's message.
+The panel's "Hexagon size" choice shows "Auto (about 3 km)" (the size it
+chose) and the four sizes ("About 52 km", ...); a size picked is kept until
+it is changed or the area cleared, and a shape (or a size) that does not
+pass at it is refused with the API's message, the page adding "Or choose
+smaller hexagons." when a shape is too small (the API's message for an area
+too big already says to use larger hexagons). Changing the size is one
+history step. While an area is selected, every hexagon outside it keeps only
+a fifth of its opacity (`FADED_SHARE`), at any zoom: a finer hexagon counts
+as selected when the hexagon of the area's size it lies in is; a coarser one
+only when every one of the area's smaller hexagons inside it is selected, so
+the map never keeps bright land the area does not count (a large hexagon
+only partly in the area is faded, and the area's outline shows where it
+ends) (`selectionTest` in `area.js`), so the selected ones keep their
+normal colours and stand out. One outline goes around the outside of
 the whole selected group, not around each hexagon (`groupOutline` in
-`area.js`, h3-js `cellsToMultiPolygon`, about 0.8 s for the largest box
-allowed, worked out once per area): a dark line on a wider white one, so it
+`area.js`, h3-js `cellsToMultiPolygon`, about 1.1 s for an area near the
+largest allowed (170,414 hexagons), worked out once per area): a dark line on a wider white one, so it
 reads on light and dark hexagons of either colour scale. Each shape is
 drawn dashed above it, thinner (and the box being dragged, beside them). Both are MapLibre line layers, added again
 whenever the area changes so they stay above the hexagons. A shared link
@@ -1753,20 +1769,25 @@ with the notes "GBIF searches only the box you drew. Our numbers include
 every hexagon the box touches, so GBIF usually shows fewer records." ("only
 inside the shapes you drew ... the shapes touch" for several) and
 `GBIF_COUNT_NOTE` (and on a rank map that GBIF shows every species in the
-area, not only that rank). The panel and the CSV ask the API with the
+area, not only that rank). Right under the link, always: "BCBN's data
+covers BC only; GBIF also shows records outside BC." (an area can reach the
+sea or another province, where BCBN has no records but GBIF does). The panel and the CSV ask the API with the
 area text (`area=`, `areaQuery` in `frontend/src/api.js`). If the API counts a different number of hexagons
 than the map outlined, the browser's console says so. The hexagon panel and
 the area panel share their loading (`useListAnswer` in
 `frontend/src/HexagonPanel.jsx`).
 
-The address holds the area as its area text, `area=b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54&area_res=6`
-(written with its colons and semicolons as they are), with its list options
+The address holds the area as its area text, `area=b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54`
+(written with its colons and semicolons as they are), with `area_res=6` only
+when a hexagon size was picked (none for "Auto"), and its list options
 as `area_q`, `area_sort`, `area_status` and `area_page` (`readArea` and
 `mapSearch` in `frontend/src/route.js`; for example
 `?rank=phylum&kingdom=Animalia&phylum=Chordata&area=b:-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
 so a shared link opens the same shapes, fitted in view. An old link's
-`area=west,south,east,north` opens as one box; an address whose area text
-the API would refuse opens with no area.
+`area=west,south,east,north` opens as one box, and its `area_res` (every
+old link has one) as a size picked, so it opens exactly as before; an
+address whose area text the API would refuse, or whose shapes fit no size
+at Auto, opens with no area.
 
 **The area stays until it is cleared.** Once drawn, the area (its shapes,
 the outline and the faded hexagons around it) stays on the map and in the

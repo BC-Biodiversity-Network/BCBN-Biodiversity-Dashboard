@@ -757,10 +757,14 @@ describe('an area of interest', () => {
     const elsewhere = { h3Cell: '862800b37ffffff', occurrences: 10, distinctSpecies: 5 }
     render(<HexMap overview={{ ...OVERVIEW, rows: { ...OVERVIEW.rows, 6: [...OVERVIEW.rows[6], elsewhere] } }}
       species={null} selectedArea={AREA} />)
-    // The selected hexagon, the resolution 7 one inside it and the
-    // resolution 4 and 5 ones that hold it keep their colour.
-    for (const r of [4, 5, 6, 7]) {
+    // The selected hexagon and the resolution 7 one inside it keep their
+    // colour; the resolution 4 and 5 ones that hold it are faded, as only a
+    // small part of each is in the area (whose outline shows where it ends).
+    for (const r of [6, 7]) {
       expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])).toEqual(usual[r])
+    }
+    for (const r of [4, 5]) {
+      expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])[3]).toBe(Math.round(usual[r][3] * FADED_SHARE))
     }
     // A hexagon outside the area keeps its colour at a fifth of its opacity.
     const faded = fillOf(overviewLayerId(6), elsewhere)
@@ -875,15 +879,34 @@ describe('an area of interest', () => {
     expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
   })
 
-  it('hands a paste on with the level the map shows now, and shows why it was refused', () => {
+  it('hands a paste on (the map\'s zoom plays no part), and shows why it was refused', () => {
     const onAreaPasted = vi.fn(() => 'The polygon has a hole; holes are not supported yet.')
     render(<HexMap overview={OVERVIEW} species={null} onAreaPasted={onAreaPasted} />)
     openPanel()
     fireEvent.click(screen.getByRole('tab', { name: 'Paste' }))
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'POLYGON((0 0, 1 0, 1 1, 0 0))' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-    expect(onAreaPasted).toHaveBeenCalledWith('POLYGON((0 0, 1 0, 1 1, 0 0))', pickResolution(4.5, null))
+    expect(onAreaPasted).toHaveBeenCalledWith('POLYGON((0 0, 1 0, 1 1, 0 0))')
     expect(screen.getByRole('alert').textContent).toBe('The polygon has a hole; holes are not supported yet.')
+  })
+
+  it('offers the hexagon size, Auto showing its choice, and hands a change on', () => {
+    const onAreaSizeChange = vi.fn()
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 7, picked: false }}
+      onAreaSizeChange={onAreaSizeChange} />)
+    openPanel()
+    const choice = screen.getByRole('combobox', { name: 'Hexagon size' })
+    expect([...choice.options].map((option) => option.textContent))
+      .toEqual(['Auto (about 3 km)', 'About 52 km', 'About 20 km', 'About 7 km', 'About 3 km'])
+    expect(choice.value).toBe('auto')
+    fireEvent.change(choice, { target: { value: '5' } })
+    expect(onAreaSizeChange).toHaveBeenCalledWith(5)
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 5, picked: true }}
+      onAreaSizeChange={onAreaSizeChange} />)
+    expect(screen.getByRole('combobox', { name: 'Hexagon size' }).value).toBe('5')
+    expect(screen.getByRole('option', { name: 'Auto' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hexagon size' }), { target: { value: 'auto' } })
+    expect(onAreaSizeChange).toHaveBeenLastCalledWith(null)
   })
 
   it('draws a pasted polygon dashed, like a box', () => {

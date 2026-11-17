@@ -90,6 +90,10 @@ export function gbifBcSearchUrl({ keys }) {
 export const AREA_GBIF_NOTE = 'GBIF searches only the box you drew. Our numbers include every hexagon the box '
   + 'touches, so GBIF usually shows fewer records.'
 
+// The note always under the area panel's GBIF link: an area can reach past
+// BC (the sea, another province), where BCBN has no records but GBIF does.
+export const AREA_BC_ONLY_NOTE = "BCBN's data covers BC only; GBIF also shows records outside BC."
+
 // The same note for an area of shapeCount shapes (AREA_GBIF_NOTE for one
 // box; for one polygon or several shapes, it names them).
 export function areaGbifNote(shapeCount, isBox = true) {

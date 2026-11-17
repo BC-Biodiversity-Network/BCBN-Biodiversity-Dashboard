@@ -62,16 +62,21 @@ Endpoints so far:
                     request that does not name a rank, or a bad year
                     range, filter, status or sort, gives 400; a path no
                     species has, 404.
-    GET /api/area?west=&south=&east=&north=&res=&year_from=&year_to=&q=&status=&sort=&offset=&limit=
+    GET /api/area?area=&res=&year_from=&year_to=&q=&status=&sort=&offset=&limit=
                   &rank=&kingdom=...&genus=
                     the area search: every hexagon at res (4 to 7) that
-                    overlaps the box, with the hexagon panel's totals and
-                    species list for them together, each species with its
-                    GBIF search inside the box (see area.py). A bad or
-                    too small box (under MIN_AREA_HEXAGONS average
-                    hexagons) or one over MAX_AREA_HEXAGONS hexagons, a bad
-                    res, filter, status, sort or year range, or species=,
-                    gives 400; a rank no species has, 404.
+                    overlaps any of the area's shapes (area=, the area
+                    text: "b:west,south,east,north" boxes and
+                    "p:lng,lat,..." polygons separated by ";"; an old
+                    request's west=&south=&east=&north= still works as one
+                    box), with the hexagon panel's totals and species list
+                    for them together, each species with its GBIF search
+                    inside the shapes (see area.py). Bad area text, both
+                    area= and the edges, a shape too small (under
+                    MIN_AREA_HEXAGONS average hexagons) or an area over
+                    MAX_AREA_HEXAGONS hexagons, a bad res, filter, status,
+                    sort or year range, or species=, gives 400; a rank no
+                    species has, 404.
     GET /api/ranks/{rank}/hexes?kingdom=...&genus=&res=&year_from=&year_to=
                     the rank map: the overview map restricted to the rank's
                     species (records and distinct species per hexagon at
@@ -101,7 +106,7 @@ Endpoints so far:
                             &year_from=&year_to=&organism=&access=&mappable=&species=
     GET /api/export/ranks/{rank}?kingdom=...&genus=&year_from=&year_to=&q=&status=&sort=
     GET /api/export/hexes/{cell}?year_from=&year_to=&q=&status=&sort=&rank=&kingdom=...&genus=
-    GET /api/export/area?west=&south=&east=&north=&res=&year_from=&year_to=&q=&status=&sort=&rank=&kingdom=...
+    GET /api/export/area?area=&res=&year_from=&year_to=&q=&status=&sort=&rank=&kingdom=...
                     CSV downloads of the Datasets list, a rank card's species
                     list and a hexagon's species list: every row the list
                     keeps for the same options (no paging), in the same
@@ -117,7 +122,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 
-from api.area import area_species, box_shape
+from api.area import AREA_TEXT_MAX_LENGTH, area_request, area_species
 from api.cells import DEFAULT_PAGE_SIZE as CELL_PAGE_SIZE
 from api.cells import MAX_PAGE_SIZE as CELL_MAX_PAGE_SIZE
 from api.cells import UnknownSpecies, cell_species
@@ -296,7 +301,8 @@ def create_app(settings=None):
             status, sort))
 
     @app.get("/api/area")
-    def area(request: Request, west: str | None = Query(None, max_length=40),
+    def area(request: Request, area: str | None = Query(None, max_length=AREA_TEXT_MAX_LENGTH),
+             west: str | None = Query(None, max_length=40),
              south: str | None = Query(None, max_length=40), east: str | None = Query(None, max_length=40),
              north: str | None = Query(None, max_length=40), res: str | None = Query(None, max_length=10),
              year_from: int | None = None, year_to: int | None = None,
@@ -304,17 +310,16 @@ def create_app(settings=None):
              status: list[str] = Query([], max_length=20), sort: str | None = Query(None, max_length=20),
              offset: int = Query(0, ge=0),
              limit: int = Query(CELL_PAGE_SIZE, ge=1, le=CELL_MAX_PAGE_SIZE)):
-        """Return the species in every hexagon under a box, a page at a
+        """Return the species in every hexagon under an area, a page at a
         time, with the hexagon panel's filters, order and rank (see
-        area.py). The edges and res are read as text, so a missing or
-        non-numeric one gets area.py's own clear message (400)."""
+        area.py). The area is the area text (area=) or, as before, a box's
+        west, south, east and north; they and res are read as text, so a
+        missing or bad one gets area.py's own clear message (400)."""
         refuse_species(request, "The area search")
         given = {name: request.query_params.get(name) for name in RANKS}
-        # The four edges become one box shape until the route takes the
-        # area text (read_area_shapes).
         return answer_hexagon(rank, given, None, lambda: area_species(
-            request.app.state.data, box_shape(west, south, east, north), res, year_from, year_to, q, offset,
-            limit, rank, given, status, sort))
+            request.app.state.data, area_request(area, west, south, east, north), res, year_from, year_to, q,
+            offset, limit, rank, given, status, sort))
 
     @app.get("/api/ranks/{rank}/hexes")
     def rank_map(rank: str, request: Request, res: int = Query(...),
@@ -431,21 +436,24 @@ def create_app(settings=None):
             request.app.state.data, export_date(), cell, q, status, sort, year_from, year_to, rank, given)))
 
     @app.get("/api/export/area")
-    def area_export(request: Request, west: str | None = Query(None, max_length=40),
+    def area_export(request: Request, area: str | None = Query(None, max_length=AREA_TEXT_MAX_LENGTH),
+                    west: str | None = Query(None, max_length=40),
                     south: str | None = Query(None, max_length=40), east: str | None = Query(None, max_length=40),
                     north: str | None = Query(None, max_length=40), res: str | None = Query(None, max_length=10),
                     year_from: int | None = None, year_to: int | None = None,
                     q: str | None = Query(None, max_length=200), rank: str | None = Query(None, max_length=20),
                     status: list[str] = Query([], max_length=20),
                     sort: str | None = Query(None, max_length=20)):
-        """Return every species /api/area would list for the same box and
+        """Return every species /api/area would list for the same area and
         options, in the same order, each with its GBIF link, as a CSV
-        download (no paging). species= is refused, as for /api/area."""
+        download (no paging). species= is refused, as for /api/area. The
+        second header line describes the area's shapes (or, for an old
+        request's box, names its edges as before)."""
         refuse_species(request, "The area download")
         given = {name: request.query_params.get(name) for name in RANKS}
         return csv_download(answer_hexagon(rank, given, None, lambda: export_area(
-            request.app.state.data, export_date(), box_shape(west, south, east, north), res, q, status, sort,
-            year_from, year_to, rank, given)))
+            request.app.state.data, export_date(), area_request(area, west, south, east, north), res, q, status,
+            sort, year_from, year_to, rank, given, area_from_text=area is not None)))
 
     # Dataset ids hold colons and slashes (oai:datadryad.org:doi:10.5061/...),
     # so the id takes the rest of the path.

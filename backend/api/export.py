@@ -443,31 +443,65 @@ def degrees(value):
     return format(value, ".6f").rstrip("0").rstrip(".")
 
 
-def area_text(answer, shapes):
-    """Return how header line 2 names the area: the box's edges for an area
-    of one box (as before shapes came in), else how many shapes it has (the
-    full description of shapes comes with the routes that take them)."""
-    box = answer["box"]
-    if box:
-        return (f"the box west {degrees(box['west'])}, south {degrees(box['south'])}, "
-                f"east {degrees(box['east'])}, north {degrees(box['north'])}")
-    return f"the area's {len(shapes)} {'shape' if len(shapes) == 1 else 'shapes'}"
+# The most shapes header line 2 describes one by one; past this it says how
+# many more there are (each is written out in full in the gbif_link
+# column), so the line stays readable.
+MAX_SHAPES_DESCRIBED = 10
+
+
+def edges_text(bounds):
+    """Return a box's edges for a header line: "west -123.3, south 49.1,
+    east -122.9, north 49.4" (bounds as shape_bounds gives them)."""
+    return (f"west {degrees(bounds['west'])}, south {degrees(bounds['south'])}, "
+            f"east {degrees(bounds['east'])}, north {degrees(bounds['north'])}")
+
+
+def shape_text(summary):
+    """Return one shape for a header line, from its summary in the answer
+    (shapes_summary in area.py): "a box west ..., south ..., east ...,
+    north ..." or "a polygon with 6 points within west ..., ..." (the box
+    around it; the polygon itself is in the gbif_link column)."""
+    if summary["type"] == "box":
+        return f"a box {edges_text(summary['bounds'])}"
+    return f"a polygon with {summary['point_count']:,} points within {edges_text(summary['bounds'])}"
+
+
+def area_text(answer, from_text=True):
+    """Return how header line 2 names the area. An old request's box
+    (from_text false, and an area of one box): "the box west ..., south
+    ..., east ..., north ...", as before shapes came in. Otherwise its one
+    shape ("a box ..."), or "2 shapes (1: a box ...; 2: a polygon ...)", at
+    most MAX_SHAPES_DESCRIBED of them, then how many more."""
+    if not from_text and answer["box"]:
+        return f"the box {edges_text(answer['box'])}"
+    summaries = answer["shapes"]
+    if len(summaries) == 1:
+        return shape_text(summaries[0])
+    described = [f"{number}: {shape_text(summary)}"
+                 for number, summary in enumerate(summaries[:MAX_SHAPES_DESCRIBED], start=1)]
+    more = len(summaries) - len(described)
+    if more:
+        described.append(f"and {more:,} more {'shape' if more == 1 else 'shapes'}, each written out in the "
+                         "gbif_link column")
+    return f"{len(summaries):,} shapes ({'; '.join(described)})"
 
 
 def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
-                year_from=None, year_to=None, rank=None, rank_given=None):
+                year_from=None, year_to=None, rank=None, rank_given=None, area_from_text=False):
     """Return (file name, CSV text) of every species in the hexagons under
     an area (shapes, a list of AreaShape) for these options, in the list's
     order, each with its GBIF search inside the area for the years counted.
-    The list is the area search's own (area_species with no page limit), so
-    it raises what that raises."""
+    area_from_text says the area came as area text, so header line 2
+    describes its shapes (area_text); an old request's box keeps its old
+    words. The list is the area search's own (area_species with no page
+    limit), so it raises what that raises."""
     answer = area_species(data, shapes, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
     rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
     parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} of about {size} "
-             f"{'' if count == 1 else 'each '}that touch {area_text(answer, shapes)}"]
+             f"{'' if count == 1 else 'each '}that touch {area_text(answer, area_from_text)}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")

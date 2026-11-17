@@ -10,9 +10,9 @@ The box: west, south, east and north edges in degrees (longitude -180 to
 across the 180th meridian is not taken). Its sides follow the lines of
 longitude and latitude.
 
-The area text (read_area_shapes; the first step towards an area made of
-several shapes, not used by the routes yet): one or more shapes separated
-by ";", each "b:west,south,east,north" for a box or "p:lng,lat,lng,lat,..."
+The area text (read_area_shapes; the routes' area= parameter, see
+area_request, which also still takes an old request's west, south, east
+and north as one box): one or more shapes separated by ";", each "b:west,south,east,north" for a box or "p:lng,lat,lng,lat,..."
 for a polygon (its first point not repeated at the end; a repeated one is
 dropped). An old link's "west,south,east,north" with no prefix is one box.
 Every shape is checked (numbers, ranges, a box's edges in order, a polygon
@@ -21,8 +21,8 @@ across the 180th meridian) and the whole area may have at most
 MAX_AREA_POINTS points. Each shape comes back as an AreaShape: its ring of
 (longitude, latitude) corners and whether it was a box.
 
-An area of several shapes (area_species takes a list of AreaShape; the
-routes still give one box, see box_shape): a hexagon counts if it overlaps
+An area of several shapes (area_species takes a list of AreaShape): a
+hexagon counts if it overlaps
 any of the shapes, and counts once even when it is in two (area_cells).
 Each shape must cover at least MIN_AREA_HEXAGONS average hexagons, and the
 whole area may touch at most MAX_AREA_HEXAGONS hexagons (check_shape_sizes,
@@ -98,6 +98,12 @@ MAX_AREA_HEXAGONS = 200_000
 # characters in November 2026, and gbif.org itself is still to be checked
 # by hand. It may change.
 MAX_AREA_POINTS = 250
+
+# The longest area text a request may give, in characters. 250 points as
+# the page writes them (4 decimals) take about 4,500; this leaves room for
+# more decimals, and is as long as a whole request may be for uvicorn (16
+# KB), so it only stops a request that could not get through anyway.
+AREA_TEXT_MAX_LENGTH = 16_000
 
 # The radius of the sphere H3 measures areas on, in km (H3's authalic Earth
 # radius), so a box's area compares with h3.average_hexagon_area.
@@ -597,6 +603,44 @@ def area_cells(shapes, res):
     return sorted(cells)
 
 
+def area_request(area, west, south, east, north):
+    """Return the shapes a request asks for, as a list of AreaShape: the
+    area text (area=, read by read_area_shapes), or an old request's box
+    edges (west, south, east and north, read by box_shape exactly as
+    before). Stops with a clear message when a request gives both, or
+    neither (a request with only some of the edges keeps read_box's own
+    message about the missing one)."""
+    edges = (west, south, east, north)
+    if area is not None and any(edge is not None for edge in edges):
+        raise AreaRequestError(
+            "Give the area either as area=... or as a box's west, south, east and north edges, not both.")
+    if area is not None:
+        return read_area_shapes(area)
+    if all(edge is None for edge in edges):
+        raise AreaRequestError(
+            'Give the area as area=..., one or more shapes separated by ";": b:west,south,east,north for a box, '
+            "or p:lng,lat,lng,lat,... for a polygon (or, as before, a box as west=, south=, east= and north=, "
+            "in degrees).")
+    return box_shape(west, south, east, north)
+
+
+def shape_bounds(shape):
+    """Return the box around a shape, {"west", "south", "east", "north"} in
+    degrees: a box's own edges, a polygon's smallest and largest longitude
+    and latitude."""
+    longitudes = [lng for lng, _ in shape.ring]
+    latitudes = [lat for _, lat in shape.ring]
+    return {"west": min(longitudes), "south": min(latitudes), "east": max(longitudes), "north": max(latitudes)}
+
+
+def shapes_summary(shapes):
+    """Return what the answer says about each shape, in order: its type
+    ("box" or "polygon"), how many corners it has (4 for a box) and the box
+    around it (shape_bounds)."""
+    return [{"type": "box" if shape.is_box else "polygon", "point_count": len(shape.ring),
+             "bounds": shape_bounds(shape)} for shape in shapes]
+
+
 def box_shape(west, south, east, north):
     """Return the box the routes give (its four edges as text, read and
     checked by read_box, with read_box's messages) as a list of one
@@ -610,13 +654,15 @@ def box_shape(west, south, east, north):
 def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset=0,
                  limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None, statuses=None, sort=None):
     """Return the answer for the hexagons under an area (see the top of this
-    file): shapes is a list of AreaShape (read_area_shapes, or box_shape
-    for the routes' box). The answer gives the box (for an area of one box,
-    else None) and the shapes' area (the sum of each shape's area, so
-    overlaps count twice), the resolution, how many hexagons the area
-    touches, the totals for the years and one page of species (offset,
-    limit; limit None for all of them, for the CSV download), each with its
-    GBIF link (one geometry per shape). res comes as given in the address. Raises
+    file): shapes is a list of AreaShape (area_request). The answer gives
+    the box (for an area of one box, else None) and the shapes' area (the
+    sum of each shape's area, so overlaps count twice), the resolution, how
+    many hexagons the area touches, how many shapes it has and what each is
+    (shapes_summary), the GBIF search for the whole area (every species,
+    one geometry per shape), the totals for the years and one page of
+    species (offset, limit; limit None for all of them, for the CSV
+    download), each with its GBIF link. res comes as given in the address.
+    Raises
     AreaRequestError (and HexesRequestError for a bad year range) for a bad
     area or resolution, ListRequestError for an unknown sort or status,
     QueryTooShort for a name filter too short, RankRequestError for a
@@ -649,6 +695,15 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
         # How many hexagons at this resolution overlap the area: the front
         # end finds the same ones with h3-js to outline them.
         "hexagon_count": len(cells),
+        # The area's shapes: how many, and each one's type, corners and the
+        # box around it, in the order given.
+        "shape_count": len(shapes),
+        "shapes": shapes_summary(shapes),
+        # GBIF's search for every species in the area's shapes (one
+        # geometry per shape), for the years counted: the panel's "See
+        # these records on GBIF" (gbifAreaSearchUrl in gbifLinks.js gives
+        # the same link).
+        "area_gbif_link": gbif_rings_search_url([], rings, years),
         "year_from": year_from,
         "year_to": year_to,
         # The years actually counted (a missing bound filled in), or null

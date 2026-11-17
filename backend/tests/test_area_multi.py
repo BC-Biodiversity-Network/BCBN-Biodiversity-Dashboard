@@ -270,7 +270,8 @@ def test_the_polygon_area_is_close_to_h3s_own_for_a_hexagon():
 def test_the_csv_of_several_shapes_names_how_many(client):
     name, text = export_area(client.app.state.data, export_date(), read_area_shapes(f"{A_BOX};{B_TRIANGLE}"), 7)
     line = text.split("\r\n")[1]
-    assert "that touch the area's 2 shapes" in line
+    assert ("that touch 2 shapes (1: a box west -125.25, south 39.78, east -125.15, north 39.85; 2: a polygon "
+            "with 3 points within west -130.4, south 48.82, east -130.24, north 48.92)") in line
     assert line.startswith('"# List: species in the ')
 
 
@@ -347,3 +348,118 @@ def test_the_area_links_match_gbif_links_js_run_by_node(tmp_path):
     for (name, *_), mine, theirs in zip(GBIF_CASES, expected, output):
         assert theirs == mine, name
     assert len(output) == len(GBIF_CASES)
+
+
+# --- The routes take the area text ------------------------------------------------------------
+
+
+def get_area(client, path="/api/area", **params):
+    """Ask an area route and return the response."""
+    return client.get(path, params=params)
+
+
+def line_2(response):
+    """Return header line 2 of an area download, without its quotes."""
+    assert response.status_code == 200, response.text
+    return response.content.decode("utf-8-sig").split("\r\n")[1][1:-1]
+
+
+def test_one_shape_as_area_text(client):
+    edges = BOXES[1]
+    old = get_area(client, **edges).json()
+    text = f"b:{edges['west']},{edges['south']},{edges['east']},{edges['north']}"
+    new = get_area(client, area=text, res=edges["res"])
+    assert new.status_code == 200, new.text
+    # The same answer as the old parameters give, field for field.
+    assert new.json() == old
+    # The new fields, also in an old request's answer.
+    assert old["shape_count"] == 1
+    assert old["shapes"] == [{"type": "box", "point_count": 4, "bounds": {
+        "west": edges["west"], "south": edges["south"], "east": edges["east"], "north": edges["north"]}}]
+    assert old["area_gbif_link"] == gbif_box_search_url([], (edges["west"], edges["south"], edges["east"],
+                                                             edges["north"]))
+
+
+def test_the_old_request_keeps_its_csv_line_and_the_area_text_describes_its_box(client):
+    edges = BOXES[1]
+    old = line_2(get_area(client, "/api/export/area", **edges))
+    assert "that touch the box west -125.25, south 39.78, east -125.15, north 39.85;" in old
+    new = line_2(get_area(client, "/api/export/area", area="b:-125.25,39.78,-125.15,39.85", res=7))
+    assert new == old.replace("that touch the box west", "that touch a box west")
+
+
+def test_several_shapes_as_area_text(client):
+    from api.gbif_links import gbif_rings_search_url
+    text = f"{A_BOX};{B_TRIANGLE}"
+    response = get_area(client, area=text, res=7, year_from=2019)
+    assert response.status_code == 200, response.text
+    got = response.json()
+    shapes = read_area_shapes(text)
+    assert got["shape_count"] == 2
+    assert [shape["type"] for shape in got["shapes"]] == ["box", "polygon"]
+    assert got["shapes"][1] == {"type": "polygon", "point_count": 3,
+                                "bounds": {"west": -130.4, "south": 48.82, "east": -130.24, "north": 48.92}}
+    assert got["hexagon_count"] == len(area_cells(shapes, 7))
+    assert got["box"] is None
+    assert got["area_gbif_link"] == gbif_rings_search_url([], [shape.ring for shape in shapes], (2019, 2021))
+    assert got["area_gbif_link"].count("geometry=") == 2
+    # From 2019: AAAA's 3 records of 2020, BBBB's 3 of 2019, CCCC's 1 of 2021
+    # (DDDD's one record is from 2018).
+    assert dict(listed(got)) == {"AAAA": 3, "BBBB": 3, "CCCC": 1}
+    assert line_2(get_area(client, "/api/export/area", area=text, res=7)).startswith(
+        f"# List: species in the {got['hexagon_count']:,} hexagons of about 5.2 km² each that touch 2 shapes "
+        "(1: a box west -125.25, south 39.78, east -125.15, north 39.85; 2: a polygon with 3 points within "
+        "west -130.4, south 48.82, east -130.24, north 48.92); ")
+
+
+def test_many_shapes_are_described_up_to_ten(client):
+    boxes = ";".join(f"b:{-125.25 + i * 0.1:.2f},39.78,{-125.15 + i * 0.1:.2f},39.85" for i in range(12))
+    line = line_2(get_area(client, "/api/export/area", area=boxes, res=7))
+    assert "that touch 12 shapes (1: a box west -125.25," in line
+    assert "10: a box west" in line and "11: a box" not in line
+    assert "; and 2 more shapes, each written out in the gbif_link column); " in line
+
+
+@pytest.mark.parametrize("path", ["/api/area", "/api/export/area"])
+def test_both_the_area_text_and_the_edges_are_refused(client, path):
+    for edge in ("west", "south", "east", "north"):
+        response = get_area(client, path, area=A_BOX, res=7, **{edge: 1})
+        assert response.status_code == 400
+        assert response.json()["detail"] == (
+            "Give the area either as area=... or as a box's west, south, east and north edges, not both.")
+
+
+@pytest.mark.parametrize("path", ["/api/area", "/api/export/area"])
+def test_no_area_at_all_names_the_area_text(client, path):
+    response = get_area(client, path, res=7)
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        'Give the area as area=..., one or more shapes separated by ";": b:west,south,east,north for a box, or '
+        "p:lng,lat,lng,lat,... for a polygon (or, as before, a box as west=, south=, east= and north=, in "
+        "degrees).")
+    # Some of the edges but not all: the old message about the missing one.
+    response = get_area(client, path, west=-125.25, south=39.78, east=-125.15, res=7)
+    assert response.json()["detail"] == "give the box's north edge as north=..., in degrees."
+
+
+@pytest.mark.parametrize("path", ["/api/area", "/api/export/area"])
+@pytest.mark.parametrize("text, message", [
+    ("", 'Give the area as area=..., one or more shapes separated by ";"'),
+    ("x:0,0,1,1", "The area starts with 'x:', which is not a kind of shape"),
+    ("p:-125.2,39.8,-125.1,39.9,-125.1,39.8,-125.2,39.9", "The polygon crosses or touches itself"),
+    (f"{A_BOX};b:2,0,1,1", "Shape 2 (a box): its west edge (2) must be less than its east edge (1)."),
+    ("p:-125.20,39.80,-125.19,39.80,-125.195,39.81", "The polygon is about "),
+    ("b:-179,0,179,1", "crossing the 180th meridian"),
+])
+def test_bad_area_text_gives_400_with_its_message(client, path, text, message):
+    response = get_area(client, path, area=text, res=7)
+    assert response.status_code == 400, response.text
+    assert message in response.json()["detail"]
+
+
+def test_too_many_points_and_too_long_a_text_are_refused(client):
+    response = get_area(client, area=circle_text(251), res=7)
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("The area has 251 points, more than the 250")
+    from api.area import AREA_TEXT_MAX_LENGTH
+    assert get_area(client, area="b:" + "1" * AREA_TEXT_MAX_LENGTH, res=7).status_code == 422

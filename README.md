@@ -1222,7 +1222,7 @@ work out goes in.
 | `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `licence` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
-| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the area (`area=`, or an old request's box), `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the area's shapes) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1375,14 +1375,53 @@ work out goes in.
 
 Evan asked that a user can draw a box on the map and get everything in the
 hexagons under it; the rules were decided with Lucia in November 2026
-(`backend/api/area.py`).
+(`backend/api/area.py`). An area can now be made of several shapes, boxes
+and polygons (later also pasted or uploaded ones, turned into polygons in
+the front end).
 
-`GET /api/area?west=&south=&east=&north=&res=` plus the hexagon panel's
-list options (`year_from`, `year_to`, `q`, `status`, `sort`, `offset`,
-`limit`, and `rank` with its path) gives the species in every hexagon at
-`res` (4 to 7) that overlaps the box, even by a corner. The edges are in
-degrees (west less than east, south less than north; a box across the
-180th meridian is not taken).
+`GET /api/area?area=&res=` plus the hexagon panel's list options
+(`year_from`, `year_to`, `q`, `status`, `sort`, `offset`, `limit`, and
+`rank` with its path) gives the species in every hexagon at `res` (4 to 7)
+that overlaps any of the area's shapes, even by a corner; a hexagon in two
+shapes counts once.
+
+- **The area text** (`area=`, read by `read_area_shapes`): one or more
+  shapes separated by `;`. `b:west,south,east,north` is a box (west less
+  than east, south less than north). `p:lng,lat,lng,lat,...` is a polygon,
+  its first point not repeated at the end (a repeated one is dropped; so
+  is a point given twice in a row). Numbers are plain degrees (`-120.6`,
+  `50`, `.5`; no exponent). Each shape is checked: longitude -180 to 180,
+  latitude -90 to 90, a polygon with at least 3 different points whose
+  edges never cross or touch (checked exactly on the numbers the search
+  uses), and no two joined corners 180 or more degrees of longitude apart
+  (that would be read as crossing the 180th meridian). Example, a box and
+  a triangle: `area=b:-123.3,49.1,-122.9,49.4;p:-121,50,-120.8,50,-120.9,50.2`.
+- **Old links still work.** `area=west,south,east,north` with no prefix is
+  one box, and an old request's `west=&south=&east=&north=` is read
+  exactly as before (same answers, same CSV, same messages). A request
+  giving both `area=` and any of the four edges gets 400.
+- **The limits.** Each shape must cover at least `MIN_AREA_HEXAGONS` (4)
+  average hexagons; the whole area may touch at most `MAX_AREA_HEXAGONS`
+  (200,000) hexagons; and it may have at most `MAX_AREA_POINTS` (250)
+  points in all, a box counting as 4. The point limit is there because the
+  area goes into the page's address and into the GBIF link: 250 points
+  make a link of about 6,200 characters, about as long as the species
+  card's link with BC's boundary (6,209). GBIF's own API refused addresses
+  over about 4,000 characters in November 2026; what gbif.org accepts is
+  to be checked by hand, and the limit may change with it. The area text
+  may be at most `AREA_TEXT_MAX_LENGTH` (16,000) characters.
+- **Areas.** A box's area is worked out as before (exact for a box). A
+  polygon's uses the spherical polygon formula turf uses (`ringArea` in
+  `@turf/area`, from Chamberlain and Duquette 2007), on H3's sphere; for a
+  box's four corners it gives the box formula.
+- **The answer** also gives `shape_count`, `shapes` (each one's `type`,
+  `box` or `polygon`, its `point_count` and the box around it, `bounds`)
+  and `area_gbif_link`, GBIF's search for every species in the area's
+  shapes for the years counted: one `geometry` parameter per shape, each
+  ring closed and counter-clockwise (GBIF searches the union of several
+  geometry parameters, where a MULTIPOLYGON of overlapping shapes is
+  refused). `box` is the box for an area of one box, else null, and
+  `box_area_km2` is the sum of the shapes' areas (overlaps counted twice).
 
 - **Counting.** The answer is the hexagon panel's, for those hexagons
   together, from the same code (`hexagons_list` in `backend/api/cells.py`):
@@ -1392,9 +1431,9 @@ degrees (west less than east, south less than north; a box across the
   counts and rank. Species `backend/api/sensitive.py` hides at that
   resolution are left out of all of it. Each species has `gbif_link`, the
   GBIF search for its keys (its card key and every key merged into it)
-  inside the box for the years counted; the box is written as a closed,
-  counter-clockwise 5-point polygon (`box_wkt` in
-  `backend/api/gbif_links.py`). `species=` gives 400 for now: a single
+  inside the area's shapes for the years counted (`gbif_rings_search_url`
+  in `backend/api/gbif_links.py`; a single box gives exactly the closed,
+  counter-clockwise 5-point polygon of `box_wkt`, as before). `species=` gives 400 for now: a single
   species' map is not covered yet.
 - **Which hexagons.** The h3 package's polygon to cells search in its
   "overlap" mode. The answer gives their number (`hexagon_count`), the box,
@@ -1407,16 +1446,20 @@ degrees (west less than east, south less than north; a box across the
   2026-11-09 the two gave the same hexagons for 400 random boxes in BC
   (31,482 hexagons), and `backend/tests/test_area.py` runs h3-js with node
   to check a few boxes every time.
-- **The smallest box** is `MIN_AREA_HEXAGONS` (4) average hexagons of the
-  resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
+- **The smallest shape** (each shape, box or polygon) is
+  `MIN_AREA_HEXAGONS` (4) average hexagons of the resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
   nobody can draw a box tightly around one small place, such as a First
   Nations reserve, and pull out that place's records alone. The box's area
   is worked out on H3's sphere, so it compares with H3's average hexagon
   area like for like. A smaller box gives 400 saying its area and the
   minimum.
-- **The largest box** touches at most `MAX_AREA_HEXAGONS` (200,000)
-  hexagons; a larger one gives 400 suggesting a coarser resolution, checked
-  from its area before any hexagon is found. Measured on 2026-11-09 on a
+- **The largest area** touches at most `MAX_AREA_HEXAGONS` (200,000)
+  hexagons; a larger one gives 400 suggesting a coarser resolution. Each
+  shape is first checked from its area, before any hexagon is found; then
+  the shapes' hexagons are added one shape at a time, and the search stops
+  as soon as the joined set passes the maximum. A 250-point polygon at
+  resolution 7 takes about 1 ms to 0.55 s to search (263 to 197,074
+  hexagons). Measured on 2026-11-09 on a
   laptop with the real data:
 
   | Box | Res | Hexagons | `/api/area` | Download |
@@ -1430,17 +1473,26 @@ degrees (west less than east, south less than north; a box across the
   Finding all of BC's 492,555 resolution 7 hexagons and counting them
   took 1.9 s and 220 MB more memory, and the map only shows resolution 7
   when zoomed in, so such a box is not a normal request.
-- **Errors (400):** a missing or non-numeric edge, an edge outside -180 to
-  180 or -90 to 90, west not less than east, south not less than north,
-  `res` not 4 to 7, a box below the minimum or over the maximum, a bad
-  filter, status, sort or year range, a rank not named, or `species=`. A
-  rank no species has gives 404.
+- **Errors (400):** no area at all, both `area=` and the edges, bad area
+  text (each case with its own message, naming the shape: "The polygon
+  ..." or "Shape 2 (a box) ..."), a missing or non-numeric edge, an edge
+  outside -180 to 180 or -90 to 90, west not less than east, south not
+  less than north, `res` not 4 to 7, a shape below the minimum, an area
+  over the maximum or with too many points, a bad filter, status, sort or
+  year range, a rank not named, or `species=`. A rank no species has gives
+  404.
 
 `GET /api/export/area` takes the same parameters minus paging and gives the
 whole list as a CSV file, as the other downloads do (see "The CSV
-downloads" above). Its second header line names the box, how many hexagons
-touch it and their size ("45 hexagons of about 36 km² each"), then the other
-options used; the file is named for example `bcbn_species_area_2026-11-09.csv`,
+downloads" above). Its second header line says how many hexagons touch the
+area and their size ("45 hexagons of about 36 km² each"), then the area:
+an old request's box as before ("the box west -123.3, south 49.1, east
+-122.9, north 49.4"), else its one shape ("a box west ...", "a polygon
+with 6 points within west ..., south ..., east ..., north ...", the box
+around it) or its shapes numbered ("2 shapes (1: a box ...; 2: a polygon
+...)"), at most 10 of them and then "and N more shapes, each written out in
+the gbif_link column", so the line stays readable; then the other options
+used; the file is named for example `bcbn_species_area_2026-11-09.csv`,
 with the rank name and the years when there are some
 (`bcbn_species_area_Chordata_2000-2020_2026-11-09.csv`).
 

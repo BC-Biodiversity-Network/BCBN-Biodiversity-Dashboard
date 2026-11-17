@@ -1,10 +1,14 @@
+import { useState } from 'react'
+
+import { PASTE_EXAMPLE, PASTE_HELP } from './areaPaste'
+
 // The "Create an area of interest" button and its small panel, with the
 // map's other controls at the top left (as in Lucia's approved mockup,
 // Results/Claude outputs/area_of_interest_mockup.html). The panel lists the
 // area's shapes, each with an x that removes it, and has tabs for the ways
-// to add a shape: only "Draw" with "Box" for now ("Paste" and "Polygon"
-// come later), then "Back" (removes the last shape) and "Clear area"
-// (removes them all). Every shape added joins the same area.
+// to add a shape: "Draw" with "Box" ("Polygon" comes later) and "Paste"
+// (WKT or GeoJSON, see areaPaste.js), then "Back" (removes the last shape)
+// and "Clear area" (removes them all). Every shape added joins the same area.
 
 // What the button says on a single species' map, where an area is not
 // available yet.
@@ -34,16 +38,41 @@ export function shapeLabel(shape, index) {
 // onOpenChange(open) opens or closes it (closing it also stops drawing,
 // which the map does). shapes is the area's shapes (see areaShapes.js; empty
 // for no area). drawing is true while a box is being drawn, and onDrawBox
-// starts or cancels it. onRemoveShape(index), onBack and onClear change the
-// area. unavailable greys the button out (a single species' map). message
+// starts or cancels it. onPaste(text) adds the shapes of a pasted text and
+// returns null, or returns why nothing was added (shown under the text box,
+// which keeps the text so it can be fixed). onRemoveShape(index), onBack
+// and onClear change the area. unavailable greys the button out (a single species' map). message
 // (or null) is what was wrong with the last shape drawn, with an x that
 // calls onDismissMessage. onShow (or null) is the "Show area" button beside
 // the main one, which opens the area panel again when it was closed.
 export default function AreaOfInterest({
-  open, onOpenChange, shapes, drawing, onDrawBox, onRemoveShape, onBack, onClear, unavailable,
+  open, onOpenChange, shapes, drawing, onDrawBox, onPaste = () => null, onRemoveShape, onBack, onClear, unavailable,
   message, onDismissMessage, onShow = null,
 }) {
   const hasShapes = shapes.length > 0
+  // The tab shown ("draw" or "paste"), the text in the Paste tab's box, and
+  // why the last paste was not added (or null).
+  const [tab, setTab] = useState('draw')
+  const [pasted, setPasted] = useState('')
+  const [pasteProblem, setPasteProblem] = useState(null)
+
+  // Shows a tab; leaving Draw while a box is being drawn stops drawing.
+  function showTab(name) {
+    if (name !== 'draw' && drawing) {
+      onDrawBox()
+    }
+    setTab(name)
+  }
+
+  // Adds the pasted shapes ("Add"): the text box empties when they are
+  // added, and keeps the text with the reason when they are not.
+  function addPasted() {
+    const problem = onPaste(pasted)
+    setPasteProblem(problem)
+    if (!problem) {
+      setPasted('')
+    }
+  }
   return (
     <div className="draw-box">
       <div className="draw-box-buttons">
@@ -82,20 +111,43 @@ export default function AreaOfInterest({
             </ul>
           )}
           <div className="aoi-tabs" role="tablist" aria-label="Ways to add a shape">
-            <button type="button" role="tab" aria-selected="true" className="aoi-tab on" id="aoi-tab-draw"
-              aria-controls="aoi-pane-draw">
-              Draw
-            </button>
-          </div>
-          <div className="aoi-pane" role="tabpanel" id="aoi-pane-draw" aria-labelledby="aoi-tab-draw">
-            <div className="aoi-row">
-              <button type="button" className={drawing ? 'aoi-button on' : 'aoi-button'} aria-pressed={drawing}
-                onClick={onDrawBox}>
-                Box
+            {[['draw', 'Draw'], ['paste', 'Paste']].map(([name, label]) => (
+              <button key={name} type="button" role="tab" aria-selected={tab === name}
+                className={tab === name ? 'aoi-tab on' : 'aoi-tab'} id={`aoi-tab-${name}`}
+                aria-controls={`aoi-pane-${name}`} onClick={() => showTab(name)}>
+                {label}
               </button>
-            </div>
-            <p className="aoi-small" role={drawing ? 'status' : undefined}>{drawing ? DRAW_HINT : BOX_HELP}</p>
+            ))}
           </div>
+          {tab === 'draw' && (
+            <div className="aoi-pane" role="tabpanel" id="aoi-pane-draw" aria-labelledby="aoi-tab-draw">
+              <div className="aoi-row">
+                <button type="button" className={drawing ? 'aoi-button on' : 'aoi-button'} aria-pressed={drawing}
+                  onClick={onDrawBox}>
+                  Box
+                </button>
+              </div>
+              <p className="aoi-small" role={drawing ? 'status' : undefined}>{drawing ? DRAW_HINT : BOX_HELP}</p>
+            </div>
+          )}
+          {tab === 'paste' && (
+            <div className="aoi-pane" role="tabpanel" id="aoi-pane-paste" aria-labelledby="aoi-tab-paste">
+              <textarea className="aoi-paste" value={pasted} spellCheck={false}
+                aria-label="Shapes to paste, as WKT or GeoJSON" placeholder="WKT or GeoJSON, in longitude and latitude"
+                onChange={(event) => setPasted(event.target.value)} />
+              <div className="aoi-row aoi-paste-row">
+                <button type="button" className="aoi-button aoi-add" onClick={addPasted}>Add</button>
+                <button type="button" className="aoi-link" onClick={() => {
+                  setPasted(PASTE_EXAMPLE)
+                  setPasteProblem(null)
+                }}>
+                  Fill in an example
+                </button>
+              </div>
+              {pasteProblem && <p className="aoi-error" role="alert">{pasteProblem}</p>}
+              <p className="aoi-small">{PASTE_HELP}</p>
+            </div>
+          )}
           {message && !drawing && (
             <p className="draw-box-message aoi-message" role="alert">
               <span>{message}</span>

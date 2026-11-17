@@ -1663,7 +1663,33 @@ saying on hover that it is not available there yet. It opens a small panel
 of shapes ("Shape 1: box", ...) each with an x that removes it, the "Draw"
 tab with a "Box" button (the "Paste" tab and "Polygon" come later), then
 "Back" (removes the last shape) and "Clear area" (removes them all), and
-"Close". Every shape drawn joins the same area. "Box" starts drawing: the
+"Close". Every shape drawn or pasted joins the same area.
+
+The "Paste" tab (`frontend/src/areaPaste.js`) takes polygons as WKT
+(`POLYGON`, `MULTIPOLYGON`, optionally `SRID=4326;` and a Z or M number,
+which is left out) or GeoJSON (`Polygon`, `MultiPolygon`, a `Feature` with
+one, or a `FeatureCollection` of them), longitude then latitude in degrees
+(WGS 84), each ring closed or not. "Fill in an example" puts a polygon of
+about 14,000 km² around Kamloops in the box. "Add" adds every polygon as a
+polygon shape (`p:...` in the area text, a pasted rectangle staying a
+polygon), its corners rounded to 4 decimals as drawn ones are, all in one
+address entry, so the back button takes the whole paste away; an empty area
+takes the map's hexagon size, otherwise the area keeps its own. It is all
+or nothing: if any part is refused nothing is added, the text stays in the
+box and the reason shows under it, naming the shape by its place in the
+area ("Shape 3 (a polygon) has a hole; holes are not supported yet."). It
+refuses empty or unreadable text, other geometry types, holes, a GeoJSON
+`crs` or WKT `SRID` other than WGS 84, points outside -180 to 180 and -90 to
+90 (which also catches metres and latitude first), and then, with the API's
+own checks and words (`areaTextProblem` and `shapesProblem`), crossing
+edges, fewer than 3 points, the 180th meridian, more than 250 points in the
+area, a shape too small and an area too big. At most `PASTE_MAX_CHARACTERS`
+(200,000) characters are read; on a laptop the slowest text that size took
+about 30 ms. A shape outside the hexagons our data covers (the sea, or
+outside BC) is added like any other: the panel says "0 records of 0
+species" and "No species in this area.", the CSV button is greyed out, and
+the GBIF link still searches the shape, where GBIF may well have records
+(BCBN's data is BC only). "Box" starts drawing: the
 map stops panning and zooming by drag (MapLibre's drag pan, rotate, touch
 zoom, box zoom and double-click zoom are switched off), the cursor is a
 crosshair (set through deck.gl's `getCursor`, which would otherwise put its

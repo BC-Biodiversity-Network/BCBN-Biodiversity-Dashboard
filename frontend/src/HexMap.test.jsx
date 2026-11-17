@@ -72,7 +72,7 @@ import { cellToLatLng, latLngToCell } from 'h3-js'
 
 import { boxCells, groupOutline } from './area'
 import { DRAW_HINT, DRAW_UNAVAILABLE } from './AreaOfInterest'
-import { boxShapeOf } from './areaShapes'
+import { boxShapeOf, readAreaText } from './areaShapes'
 import HexMap, { FADED_SHARE, outlineBounds, overviewLayerId } from './HexMap'
 import { pickResolution, zoomShowingResolution } from './zoomTiers'
 
@@ -622,7 +622,7 @@ describe('an area of interest', () => {
     openPanel()
     const panel = screen.getByRole('region', { name: 'Area of interest' })
     expect(panel.querySelector('strong').textContent).toBe('No shapes yet')
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Draw'])
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Draw', 'Paste'])
     expect(screen.getByRole('button', { name: 'Back' }).disabled).toBe(true)
     expect(screen.getByRole('button', { name: 'Clear area' }).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
@@ -873,6 +873,23 @@ describe('an area of interest', () => {
     render(<HexMap overview={OVERVIEW} species={ROBIN} onClearArea={vi.fn()} onShowArea={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
+  })
+
+  it('hands a paste on with the level the map shows now, and shows why it was refused', () => {
+    const onAreaPasted = vi.fn(() => 'The polygon has a hole; holes are not supported yet.')
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPasted={onAreaPasted} />)
+    openPanel()
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'POLYGON((0 0, 1 0, 1 1, 0 0))' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(onAreaPasted).toHaveBeenCalledWith('POLYGON((0 0, 1 0, 1 1, 0 0))', pickResolution(4.5, null))
+    expect(screen.getByRole('alert').textContent).toBe('The polygon has a hole; holes are not supported yet.')
+  })
+
+  it('draws a pasted polygon dashed, like a box', () => {
+    const polygon = readAreaText('p:-121,50,-119.2,50,-119,51,-120.4,51.2')[0]
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, shapes: [polygon] }} />)
+    expect(dashed()).toEqual([[[-121, 50], [-119.2, 50], [-119, 51], [-120.4, 51.2], [-121, 50]]])
   })
 
   it('shows the message about a shape refused in the panel, which its x dismisses', () => {

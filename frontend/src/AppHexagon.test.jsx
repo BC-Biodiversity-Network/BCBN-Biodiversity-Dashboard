@@ -66,11 +66,12 @@ vi.mock('./HexagonPanel', () => ({
   },
 }))
 vi.mock('./AreaPanel', () => ({
-  // A stand-in area panel: its boxes (as area text), resolution and map,
+  // A stand-in area panel: its shapes (as area text), resolution and map,
   // its x, a species in its list, and a change to its list.
   default: function AreaPanel({ area, cellCount, rank, list, onListChange, onClose, onOpenSpecies }) {
     const map = rank ? `the map of ${rank.rank} ${rank.name}` : 'the overview'
-    const text = area.shapes.map(({ box }) => `b:${[box.west, box.south, box.east, box.north].join(',')}`).join(';')
+    const text = area.shapes.map(({ box, ring }) => (box ? `b:${[box.west, box.south, box.east, box.north].join(',')}`
+      : `p:${ring.flat().join(',')}`)).join(';')
     return (
       <div className="stand-in-area">
         <p>Area {text} at {area.res} ({cellCount} hexagons) on {map}</p>
@@ -1155,6 +1156,66 @@ describe('an area of interest', () => {
     await act(async () => {})
     expect(window.location.search).toBe(KAMLOOPS_SEARCH)
     expect(areaText()).not.toBeNull()
+  })
+
+  describe('a paste', () => {
+    // Two polygons near Kamloops and Prince George, as WKT, and the area
+    // text they become.
+    const TWO_POLYGONS = 'MULTIPOLYGON(((-121 50, -119.2 50, -119 51, -120.4 51.2, -121 50)), '
+      + '((-123.5 53.5, -122 53.5, -122 54.5, -123.5 54.5)))'
+    const TWO_TEXT = 'p:-121,50,-119.2,50,-119,51,-120.4,51.2;p:-123.5,53.5,-122,53.5,-122,54.5,-123.5,54.5'
+
+    // Pastes text in the panel at the map's level res, and returns what the
+    // map is told (null when the shapes were added, else why not).
+    function paste(text, res = 6) {
+      let problem
+      act(() => {
+        problem = seen.map.onAreaPasted(text, res)
+      })
+      return problem
+    }
+
+    it('adds every pasted shape as one entry, at the map\'s level for an empty area; Back takes the whole paste away', async () => {
+      await openAt('')
+      expect(paste(TWO_POLYGONS, 5)).toBeNull()
+      await waitFor(() => expect(window.location.search).toBe(`?area=${TWO_TEXT}&area_res=5`))
+      await act(async () => {})
+      expect(calls()).toEqual({ added: 1, replaced: 0 })
+      expect(seen.map.selectedArea.shapes.map((shape) => shape.isBox)).toEqual([false, false])
+      expect(areaText()).toBe(`Area ${TWO_TEXT} at 5 (${seen.map.selectedArea.cells.length} hexagons) on the overview`)
+      await pressBack('')
+      expect(seen.map.selectedArea).toBeNull()
+    })
+
+    it("adds to an area at the area's own level, after its shapes, and the panel's Back removes one shape", async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      expect(paste(TWO_POLYGONS, 7)).toBeNull()
+      const all = `?area=${KAMLOOPS_TEXT};${TWO_TEXT}&area_res=6`
+      await waitFor(() => expect(window.location.search).toBe(all))
+      await act(async () => {})
+      expect(calls()).toEqual({ added: 2, replaced: 0 })
+      await pressMapButton('Back', `?area=${KAMLOOPS_TEXT};p:-121,50,-119.2,50,-119,51,-120.4,51.2&area_res=6`)
+      await pressBack(all)
+      // The browser's Back after the paste returns to the box alone.
+      await pressBack(KAMLOOPS_SEARCH)
+      expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    })
+
+    it('adds nothing when any part is refused, and says why', async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      const before = calls()
+      const withHole = 'MULTIPOLYGON(((-121 50, -119.2 50, -119 51, -121 50)), ((-123.5 53.5, -122 53.5, -122 54.5, '
+        + '-123.5 53.5), (-123 53.8, -122.5 53.8, -122.5 54, -123 53.8)))'
+      expect(paste(withHole)).toBe('Shape 3 (a polygon) has a hole; holes are not supported yet. Paste its outer '
+        + 'edge only.')
+      await act(async () => {})
+      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+      expect(calls()).toEqual(before)
+      expect(paste('POINT(-121 50)')).toBe('Only polygons can be added; this is a POINT.')
+      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    })
   })
 
   it('keeps the list options of the area when its list changes, in place', async () => {

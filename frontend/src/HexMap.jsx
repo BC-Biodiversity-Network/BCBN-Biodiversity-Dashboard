@@ -434,15 +434,18 @@ function apiStatus(hexes, what) {
 // zoom, one outline is drawn around the whole group (outline, see
 // groupOutline in area.js), and each shape is drawn dashed. areaMessage (or
 // null) is shown in the panel, for a shape refused, with an x that calls
-// onDismissAreaMessage. onRemoveShape(index), onRemoveLastShape (the
-// panel's "Back") and onClearArea (or null when there is no area) change
-// the area; onShowArea (or null when the area panel is open or covered) is
+// onDismissAreaMessage. onAreaPasted(text, res) adds the shapes of a text
+// pasted in the panel's Paste tab (res being the map's level now, for an
+// area that is empty) and returns null, or why nothing was added.
+// onRemoveShape(index), onRemoveLastShape (the panel's "Back") and
+// onClearArea (or null when there is no area) change the area; onShowArea (or null when the area panel is open or covered) is
 // the "Show area" button that opens the area panel again.
 export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
   selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
   onClearArea = null, onShowArea = null, onRemoveShape = () => {}, onRemoveLastShape = () => {},
+  onAreaPasted = () => null,
 }) {
   const mapRef = useRef(null)
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
@@ -772,6 +775,7 @@ export default function HexMap({
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
           <AreaOfInterest open={areaPanelOpen} onOpenChange={openAreaPanel}
             shapes={species ? [] : selectedArea?.shapes ?? []} drawing={drawing} onDrawBox={toggleDrawing}
+            onPaste={(text) => onAreaPasted(text, resolution)}
             onRemoveShape={onRemoveShape} onBack={onRemoveLastShape} onClear={onClearArea ?? (() => {})}
             unavailable={Boolean(species)} message={areaMessage} onDismissMessage={onDismissAreaMessage}
             onShow={species ? null : onShowArea} />

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
 import { groupOutline } from './area'
+import { addPastedShapes } from './areaPaste'
 import { areaText as writeAreaText, areaTextProblem, boxShapeOf, shapesCells, shapesProblem } from './areaShapes'
 import AreaPanel from './AreaPanel'
 import HexagonPanel from './HexagonPanel'
@@ -85,8 +86,9 @@ const HEX_DATA_URLS = {
 // work as above. Clicking another hexagon, or opening another rank, keeps
 // the list's order and statuses and starts with no name filter on page 1.
 //
-// Areas: an area of interest is one or more shapes (boxes for now), made
-// with the map's "Create an area of interest" panel; it selects every
+// Areas: an area of interest is one or more shapes (boxes drawn, and
+// polygons pasted as WKT or GeoJSON), made with the map's "Create an area
+// of interest" panel; it selects every
 // hexagon any shape touches, at the resolution the map showed when its
 // first shape was drawn (later shapes use the same one), and opens the area
 // panel listing their species. The area stays, on the map and in the
@@ -96,7 +98,8 @@ const HEX_DATA_URLS = {
 // the address but is not shown, and it is back when the card closes.
 // History:
 //   - each shape drawn is added to the area as a new entry (the first one
-//     after an entry without an area), and closes an open hexagon panel;
+//     after an entry without an area), and closes an open hexagon panel; a
+//     paste adds all its shapes as one entry;
 //     removing a shape with its x, or the last one with "Back", is a new
 //     entry too, so the browser's back button undoes each of them (removing
 //     the only shape leaves no area, which Back also undoes);
@@ -340,6 +343,22 @@ export default function App({
     }
   }
 
+  // Adds the shapes of a text pasted in the panel's Paste tab (WKT or
+  // GeoJSON, see areaPaste.js) to the area, all at once as one new entry, so
+  // the back button takes the whole paste away; or adds none and returns
+  // why (shown under the text box). An empty area takes the map's level now
+  // (res), like a first drawn box; otherwise the area keeps its own.
+  function pasteArea(text, res) {
+    const areaRes = keptArea?.res ?? res
+    const { shapes, problem } = addPastedShapes(text, keptArea?.shapes ?? [], areaRes)
+    if (problem) {
+      return problem
+    }
+    setAreaMessage(null)
+    moveToShapes(shapes, areaRes)
+    return null
+  }
+
   // Removes one shape (its place in the list, from the panel's x), or the
   // last one (the panel's "Back"), as a new entry the back button undoes.
   // Removing a shape never makes an area the API would refuse.
@@ -473,6 +492,7 @@ export default function App({
           onCloseRank={closeRank}
           selectedArea={mapArea}
           onAreaDrawn={drawArea}
+          onAreaPasted={pasteArea}
           onRemoveShape={removeShape}
           onRemoveLastShape={() => removeShape((keptArea?.shapes.length ?? 0) - 1)}
           areaMessage={areaMessage}

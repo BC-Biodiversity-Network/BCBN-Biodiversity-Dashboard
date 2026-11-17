@@ -22,6 +22,15 @@ The area search (area.py) links to the same search with its box as the
 geometry instead of a hexagon: a 5-point polygon, west-south, east-south,
 east-north, west-north and west-south again, which runs counter-clockwise
 and is closed, as GBIF asks.
+
+An area of several shapes gets one geometry parameter per shape
+(gbif_rings_search_url): GBIF searches the union of several geometry
+parameters, where a MULTIPOLYGON of overlapping shapes is refused (tested on
+GBIF's API in November 2026). Each ring is written closed and
+counter-clockwise, turned round when it was given the other way, keeping
+its first corner first; a box's ring is already counter-clockwise, so a
+single box gives exactly the box's link. ringsWkt and gbifAreaSearchUrl in
+gbifLinks.js do the same, and a test runs both.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -45,9 +54,10 @@ FORM_SAFE = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234
 def to_fixed(number, decimals=DECIMALS):
     """Write a number with exactly this many decimals, as JavaScript's
     toFixed does: from the number's exact value, a half rounded away from
-    zero (Python's own rounding would round a half to the even digit)."""
+    zero (Python's own rounding would round a half to the even digit).
+    Zero is written without a sign, as toFixed writes -0 ("0.000000")."""
     step = Decimal(1).scaleb(-decimals)
-    return format(Decimal(number).quantize(step, rounding=ROUND_HALF_UP), "f")
+    return format(Decimal(number if number != 0 else 0).quantize(step, rounding=ROUND_HALF_UP), "f")
 
 
 def cell_wkt(cell):
@@ -97,14 +107,58 @@ def gbif_box_search_url(keys, box, years=None):
     return gbif_search_url(keys, box_wkt(*box), years)
 
 
+def ring_is_clockwise(ring):
+    """True when a ring of (longitude, latitude) corners (not closed) runs
+    clockwise on a map with longitude across and latitude up: its signed
+    area (the shoelace sum, added up in this order, as ringIsClockwise in
+    gbifLinks.js does, so both sides get the same sign) is below zero."""
+    total = 0.0
+    for index in range(len(ring)):
+        lng, lat = ring[index]
+        next_lng, next_lat = ring[(index + 1) % len(ring)]
+        total += lng * next_lat - next_lng * lat
+    return total < 0
+
+
+def ring_wkt(ring):
+    """Return one ring of (longitude, latitude) corners (not closed, as an
+    AreaShape holds it) as WKT for GBIF: POLYGON((lng lat,...)), turned
+    counter-clockwise if it was clockwise (keeping its first corner first),
+    closed by repeating the first corner, six decimals as for a hexagon."""
+    corners = list(ring)
+    if ring_is_clockwise(corners):
+        corners = corners[:1] + corners[:0:-1]
+    corners.append(corners[0])
+    return "POLYGON((" + ",".join(f"{to_fixed(lng)} {to_fixed(lat)}" for lng, lat in corners) + "))"
+
+
+def rings_wkt(rings):
+    """Return the GBIF geometry values of an area's shapes (rings as
+    ring_wkt takes them, for example [shape.ring for shape in shapes]):
+    one POLYGON per shape, in the order given."""
+    return [ring_wkt(ring) for ring in rings]
+
+
+def gbif_rings_search_url(keys, rings, years=None):
+    """Return the address of a GBIF occurrence search for these species
+    keys inside an area of one or more shapes (rings, see rings_wkt), one
+    geometry parameter per shape, PRESENT records only, for a year range
+    ((from, to)) or every year (None). For a single box it is exactly
+    gbif_box_search_url's link."""
+    return gbif_search_url(keys, rings_wkt(rings), years)
+
+
 def gbif_search_url(keys, geometry, years=None):
     """Write a GBIF occurrence search address, the one place the links are
     made: the Catalogue of Life checklist, one taxonKey per key, the area
-    as WKT, PRESENT records only, and the years when given, in the same
-    order and written the same way as gbifLinks.js does."""
+    as WKT (one geometry, or a list of them, one parameter each), PRESENT
+    records only, and the years when given, in the same order and written
+    the same way as gbifLinks.js does."""
+    geometries = [geometry] if isinstance(geometry, str) else list(geometry)
     params = [("checklistKey", GBIF_CHECKLIST_KEY)]
     params += [("taxonKey", key) for key in keys]
-    params += [("geometry", geometry), ("occurrenceStatus", "PRESENT")]
+    params += [("geometry", one) for one in geometries]
+    params += [("occurrenceStatus", "PRESENT")]
     if years:
         params.append(("year", f"{years[0]},{years[1]}"))
     query = "&".join(f"{form_encode(name)}={form_encode(str(value))}" for name, value in params)

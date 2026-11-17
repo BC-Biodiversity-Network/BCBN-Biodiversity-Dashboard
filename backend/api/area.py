@@ -75,7 +75,7 @@ from dataclasses import dataclass
 import h3
 
 from api.cells import DEFAULT_PAGE_SIZE, cards_gbif_keys, hexagons_list
-from api.gbif_links import gbif_box_search_url
+from api.gbif_links import gbif_rings_search_url
 from api.hexes import HexesRequestError, year_range
 from api.ranks import require_rank
 from api.sensitive import hidden_species
@@ -616,8 +616,7 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
     overlaps count twice), the resolution, how many hexagons the area
     touches, the totals for the years and one page of species (offset,
     limit; limit None for all of them, for the CSV download), each with its
-    GBIF link (for an area of one box; None otherwise until the links for
-    shapes are made). res comes as given in the address. Raises
+    GBIF link (one geometry per shape). res comes as given in the address. Raises
     AreaRequestError (and HexesRequestError for a bad year range) for a bad
     area or resolution, ListRequestError for an unknown sort or status,
     QueryTooShort for a name filter too short, RankRequestError for a
@@ -635,10 +634,12 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
     cells = area_cells(shapes, res)
     _, part = hexagons_list(data, cursor, res, cells, years, hidden, q, statuses, sort, offset, limit, path)
 
-    # Each species' GBIF search inside the box, for the years counted.
+    # Each species' GBIF search inside the area's shapes (one geometry per
+    # shape; for one box, the box's own link), for the years counted.
     keys = cards_gbif_keys(cursor, [result["specieskey"] for result in part["results"]])
+    rings = [shape.ring for shape in shapes]
     for result in part["results"]:
-        result["gbif_link"] = gbif_box_search_url(keys[result["specieskey"]], box, years) if box else None
+        result["gbif_link"] = gbif_rings_search_url(keys[result["specieskey"]], rings, years)
 
     return {
         "box": dict(zip(("west", "south", "east", "north"), box)) if box else None,

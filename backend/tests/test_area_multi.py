@@ -6,6 +6,7 @@ and the test data are in conftest.py: hexagon A (872800b30ffffff, near
 39.81 N, 125.20 W) holds AAAA (5 records) and CCCC (1); hexagon B
 (8728c9b40ffffff, near 48.86 N, 130.32 W) holds BBBB (3) and DDDD (1)."""
 
+import json
 import math
 
 import h3
@@ -17,6 +18,7 @@ from api.area import (MAX_AREA_HEXAGONS, AreaRequestError, area_cells, area_spec
 from api.cells import cards_gbif_keys, hexagons_list
 from api.export import export_area, export_date
 from api.gbif_links import gbif_box_search_url
+from frontend_node import NODE_READY, front_end_module, run_node
 
 CELL_A = "872800b30ffffff"
 CELL_B = "8728c9b40ffffff"
@@ -136,9 +138,13 @@ def test_two_shapes_that_do_not_overlap(client):
     # The shapes' area is the sum of each shape's.
     shapes = read_area_shapes(f"{A_BOX};{B_TRIANGLE}")
     assert result["box_area_km2"] == round(box_area_km2(shapes[0].box) + polygon_area_km2(shapes[1].ring), 1)
-    # Not one box, so no box and (until the links for shapes) no GBIF link.
+    # Not one box, so no box; each GBIF link has one geometry per shape.
     assert result["box"] is None
-    assert all(row["gbif_link"] is None for row in result["results"])
+    from api.gbif_links import gbif_rings_search_url
+    keys = cards_gbif_keys(client.app.state.data.cursor(), ["AAAA", "BBBB"])
+    by_key = {row["specieskey"]: row["gbif_link"] for row in result["results"]}
+    assert by_key["AAAA"] == gbif_rings_search_url(keys["AAAA"], [shape.ring for shape in shapes])
+    assert by_key["BBBB"].count("geometry=") == 2
 
 
 def test_two_shapes_that_overlap_count_shared_hexagons_once(client):
@@ -266,3 +272,78 @@ def test_the_csv_of_several_shapes_names_how_many(client):
     line = text.split("\r\n")[1]
     assert "that touch the area's 2 shapes" in line
     assert line.startswith('"# List: species in the ')
+
+
+# --- The GBIF link of several shapes ----------------------------------------------------------
+
+
+def circle_text(points, lng=-122.8, lat=49.2, rx=0.25, ry=0.15):
+    """Return the area text of a polygon of this many points (wobbly, so not
+    every edge is alike), counter-clockwise."""
+    numbers = []
+    for i in range(points):
+        angle = 2 * math.pi * i / points
+        radius = 1 + 0.15 * math.sin(9 * angle)
+        numbers += [f"{lng + rx * radius * math.cos(angle):.4f}", f"{lat + ry * radius * math.sin(angle):.4f}"]
+    return "p:" + ",".join(numbers)
+
+
+# The cases the Python and JavaScript links are compared on: (name, rings,
+# keys, years).
+GBIF_CASES = [
+    ("one box", [shape.ring for shape in read_area_shapes("b:-120.6,50.55,-120.1,50.8")], [], [2000, 2020]),
+    ("two boxes", [shape.ring for shape in read_area_shapes("b:-120.6,50.55,-120.1,50.8;b:-123.3,49.2,-123,49.35")],
+     ["59PMB"], None),
+    ("a box and a clockwise polygon",
+     [shape.ring for shape in read_area_shapes(f"{A_BOX};p:-130.4,48.82,-130.32,48.92,-130.24,48.82")],
+     ["BBBB", "OLD1"], [2019, 2019]),
+    ("a concave polygon", [shape.ring for shape in read_area_shapes("p:0,0,0,3,3,3,3,2,1,2,1,1,3,1,3,0")],
+     [], None),
+    ("a 250-point polygon", [shape.ring for shape in read_area_shapes(circle_text(250))], ["X"], [1900, 2026]),
+    ("a box edge written -0", [box_shape("-1", "-0", "0", "1")[0].ring], [], None),
+]
+
+
+def test_one_box_gives_exactly_the_boxs_link():
+    from api.gbif_links import gbif_box_search_url, gbif_rings_search_url
+    for box in BOXES:
+        edges = (box["west"], box["south"], box["east"], box["north"])
+        ring = box_shape(*map(str, edges))[0].ring
+        assert gbif_rings_search_url(["AAAA"], [ring], (2000, 2020)) == gbif_box_search_url(["AAAA"], edges,
+                                                                                           (2000, 2020))
+        assert gbif_rings_search_url([], [ring]) == gbif_box_search_url([], edges)
+
+
+def test_each_shape_is_one_closed_counter_clockwise_geometry():
+    from urllib.parse import parse_qs, urlsplit
+
+    from api.gbif_links import gbif_rings_search_url, ring_is_clockwise
+    rings = GBIF_CASES[2][1]
+    query = parse_qs(urlsplit(gbif_rings_search_url(["BBBB"], rings)).query)
+    assert len(query["geometry"]) == 2
+    for wkt, ring in zip(query["geometry"], rings):
+        points = [tuple(map(float, pair.split())) for pair in wkt[len("POLYGON(("):-2].split(",")]
+        assert points[0] == points[-1] and points[0] == ring[0]
+        assert not ring_is_clockwise(points[:-1])
+        assert sorted(points[:-1]) == sorted(ring)
+    # The polygon was given clockwise and is turned round.
+    assert ring_is_clockwise(rings[1])
+
+
+@pytest.mark.skipif(not NODE_READY, reason="needs node and the front end's packages")
+def test_the_area_links_match_gbif_links_js_run_by_node(tmp_path):
+    """Runs gbifAreaSearchUrl in frontend/src/gbifLinks.js on each case and
+    compares the text of every link with gbif_rings_search_url's."""
+    from api.gbif_links import gbif_rings_search_url
+    cases = [{"rings": [[list(point) for point in ring] for ring in rings], "keys": keys, "years": years}
+             for _, rings, keys, years in GBIF_CASES]
+    (tmp_path / "cases.json").write_text(json.dumps(cases), encoding="utf-8")
+    script = (f"import {{ readFileSync }} from 'node:fs'\n"
+              f"import {{ gbifAreaSearchUrl }} from {front_end_module('gbifLinks.js')!r}\n"
+              f"const cases = JSON.parse(readFileSync({str(tmp_path / 'cases.json')!r}, 'utf8'))\n"
+              "for (const one of cases) console.log(gbifAreaSearchUrl(one))\n")
+    output = run_node(tmp_path, script).splitlines()
+    expected = [gbif_rings_search_url(keys, rings, years) for _, rings, keys, years in GBIF_CASES]
+    for (name, *_), mine, theirs in zip(GBIF_CASES, expected, output):
+        assert theirs == mine, name
+    assert len(output) == len(GBIF_CASES)

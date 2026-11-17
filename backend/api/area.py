@@ -21,6 +21,15 @@ across the 180th meridian) and the whole area may have at most
 MAX_AREA_POINTS points. Each shape comes back as an AreaShape: its ring of
 (longitude, latitude) corners and whether it was a box.
 
+An area of several shapes (area_species takes a list of AreaShape; the
+routes still give one box, see box_shape): a hexagon counts if it overlaps
+any of the shapes, and counts once even when it is in two (area_cells).
+Each shape must cover at least MIN_AREA_HEXAGONS average hexagons, and the
+whole area may touch at most MAX_AREA_HEXAGONS hexagons (check_shape_sizes,
+then area_cells). A box's area uses the box formula below, unchanged; a
+polygon's uses the spherical polygon formula turf uses
+(polygon_area_km2).
+
 Which hexagons count: every hexagon at the resolution asked for (res, 4 to
 7) that overlaps the box, even by a corner, not only those whose centre is
 in it. They are found with the h3 package's polygon to cells search in its
@@ -453,6 +462,32 @@ def box_area_km2(box):
             * (math.sin(math.radians(north)) - math.sin(math.radians(south))))
 
 
+def polygon_area_km2(ring):
+    """Return a polygon's area in km² on H3's sphere, from its ring of
+    (longitude, latitude) corners in degrees (not closed; either way
+    round). The formula is the one turf uses (@turf/area's ringArea), from
+    Chamberlain and Duquette, "Some Algorithms for Polygons on a Sphere"
+    (JPL Publication 07-03, 2007): half the radius squared times the sum,
+    over every corner, of the difference in longitude (in radians) between
+    the corner after it and the corner before it, times the sine of its
+    latitude. turf uses the Earth's mean radius; this uses H3's
+    (EARTH_RADIUS_KM) so the area compares with H3's average hexagon area.
+    For a box's four corners it gives exactly box_area_km2's formula, but
+    boxes keep that formula so their answers do not change."""
+    count = len(ring)
+    total = 0.0
+    for index in range(count):
+        before, corner, after = ring[index - 1], ring[index], ring[(index + 1) % count]
+        total += (math.radians(after[0]) - math.radians(before[0])) * math.sin(math.radians(corner[1]))
+    return abs(total) * EARTH_RADIUS_KM ** 2 / 2
+
+
+def shape_area_km2(shape):
+    """Return an AreaShape's area in km²: the box formula for a box (as
+    before shapes came in), the spherical polygon formula for a polygon."""
+    return box_area_km2(shape.box) if shape.is_box else polygon_area_km2(shape.ring)
+
+
 def minimum_area_km2(res):
     """Return the smallest box allowed at a resolution, in km²:
     MIN_AREA_HEXAGONS average hexagons."""
@@ -479,14 +514,53 @@ def check_box_size(box, res):
     return area
 
 
-def too_many_hexagons(count, res):
-    """The error for a box over MAX_AREA_HEXAGONS hexagons (count, about) at
-    a resolution, giving the hexagons' size rather than the resolution
-    number, as it may be shown to visitors as it is."""
+def too_many_hexagons(count, res, name="The box", kind="box"):
+    """The error for a shape (name, as shape_name gives it; kind, "box" or
+    "polygon") over MAX_AREA_HEXAGONS hexagons (count, about) at a
+    resolution, giving the hexagons' size rather than the resolution
+    number, as it may be shown to visitors as it is. A box alone gets the
+    same words as before shapes came in."""
     return AreaRequestError(
-        f"The box touches about {count:,.0f} hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km², "
-        f"more than the {MAX_AREA_HEXAGONS:,} an area search can count. Draw a smaller box or use larger "
+        f"{name} touches about {count:,.0f} hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km², "
+        f"more than the {MAX_AREA_HEXAGONS:,} an area search can count. Draw a smaller {kind} or use larger "
         "hexagons.")
+
+
+def too_many_joined(count, res):
+    """The error for an area whose shapes together touch more than
+    MAX_AREA_HEXAGONS hexagons: count is how many were found when the
+    search stopped (at least that many), with the hexagons' size."""
+    return AreaRequestError(
+        f"The area's shapes together touch at least {count:,} hexagons of about "
+        f"{h3.average_hexagon_area(res, 'km^2'):,.1f} km², more than the {MAX_AREA_HEXAGONS:,} an area search "
+        "can count. Use smaller or fewer shapes, or larger hexagons.")
+
+
+def check_shape_sizes(shapes, res):
+    """Stop with a clear message when a shape covers fewer than
+    MIN_AREA_HEXAGONS average hexagons, or would touch more than
+    MAX_AREA_HEXAGONS hexagons on its own judging by its area (both checked
+    before any hexagon is found, so a huge shape costs nothing), each shape
+    named as shape_name names it. Returns each shape's area in km², in
+    order. A single box gets exactly check_box_size's checks and words."""
+    if len(shapes) == 1 and shapes[0].is_box:
+        return [check_box_size(shapes[0].box, res)]
+    average = h3.average_hexagon_area(res, "km^2")
+    smallest = minimum_area_km2(res)
+    areas = []
+    for number, shape in enumerate(shapes, start=1):
+        name = shape_name(number, len(shapes), shape.is_box)
+        kind = "box" if shape.is_box else "polygon"
+        area = shape_area_km2(shape)
+        if area < smallest:
+            raise AreaRequestError(
+                f"{name} is about {area:,.1f} km², smaller than the minimum of {smallest:,.1f} km² for "
+                f"hexagons of about {average:,.1f} km² ({MIN_AREA_HEXAGONS} times their average area). Draw a "
+                f"larger {kind}.")
+        if area / average > MAX_AREA_HEXAGONS:
+            raise too_many_hexagons(area / average, res, name, kind)
+        areas.append(area)
+    return areas
 
 
 def box_cells(box, res):
@@ -498,43 +572,80 @@ def box_cells(box, res):
     return sorted(h3.h3shape_to_cells_experimental(shape, res, contain="overlap"))
 
 
-def area_species(data, west, south, east, north, res, year_from=None, year_to=None, q=None, offset=0,
+def shape_cells(shape, res):
+    """Return the set of hexagons at resolution res that overlap one shape,
+    even by a corner: the h3 package's "overlap" search, as for a box
+    (box_cells; a box's ring is its corners in the same order)."""
+    polygon = h3.LatLngPoly([(lat, lng) for lng, lat in shape.ring])
+    return set(h3.h3shape_to_cells_experimental(polygon, res, contain="overlap"))
+
+
+def area_cells(shapes, res):
+    """Return every hexagon at resolution res that overlaps any of the
+    shapes, each once, sorted. Shapes are added one at a time and the
+    search stops with a clear message as soon as the joined set passes
+    MAX_AREA_HEXAGONS (a single box gets the same message as before, with
+    its exact count)."""
+    cells = set()
+    for shape in shapes:
+        cells |= shape_cells(shape, res)
+        if len(cells) > MAX_AREA_HEXAGONS:
+            if len(shapes) == 1:
+                name = shape_name(1, 1, shape.is_box)
+                raise too_many_hexagons(len(cells), res, name, "box" if shape.is_box else "polygon")
+            raise too_many_joined(len(cells), res)
+    return sorted(cells)
+
+
+def box_shape(west, south, east, north):
+    """Return the box the routes give (its four edges as text, read and
+    checked by read_box, with read_box's messages) as a list of one
+    AreaShape, so the area search can take it until the routes take the
+    area text."""
+    box = read_box(west, south, east, north)
+    w, s, e, n = box
+    return [AreaShape(ring=((w, s), (e, s), (e, n), (w, n)), is_box=True, box=box)]
+
+
+def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset=0,
                  limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None, statuses=None, sort=None):
-    """Return the answer for the hexagons under a box (see the top of this
-    file): the box and its area, the resolution, how many hexagons it
+    """Return the answer for the hexagons under an area (see the top of this
+    file): shapes is a list of AreaShape (read_area_shapes, or box_shape
+    for the routes' box). The answer gives the box (for an area of one box,
+    else None) and the shapes' area (the sum of each shape's area, so
+    overlaps count twice), the resolution, how many hexagons the area
     touches, the totals for the years and one page of species (offset,
     limit; limit None for all of them, for the CSV download), each with its
-    GBIF link. The edges and res come as given in the address. Raises
+    GBIF link (for an area of one box; None otherwise until the links for
+    shapes are made). res comes as given in the address. Raises
     AreaRequestError (and HexesRequestError for a bad year range) for a bad
-    box or resolution, ListRequestError for an unknown sort or status,
+    area or resolution, ListRequestError for an unknown sort or status,
     QueryTooShort for a name filter too short, RankRequestError for a
     request that does not name a rank, and UnknownRank for a rank with no
     species."""
-    box = read_box(west, south, east, north)
     res = read_resolution(res)
-    area = check_box_size(box, res)
+    area = sum(check_shape_sizes(shapes, res))
     sort, statuses = check_list_options(sort, statuses)
     years = year_range(year_from, year_to, data.meta["first_year"], data.meta["last_year"])
     hidden = hidden_species(data.settings, res)
+    box = shapes[0].box if len(shapes) == 1 and shapes[0].is_box else None
 
     cursor = data.cursor()
     path = require_rank(data, cursor, rank, rank_given or {}) if rank else None
-    cells = box_cells(box, res)
-    if len(cells) > MAX_AREA_HEXAGONS:
-        raise too_many_hexagons(len(cells), res)
+    cells = area_cells(shapes, res)
     _, part = hexagons_list(data, cursor, res, cells, years, hidden, q, statuses, sort, offset, limit, path)
 
     # Each species' GBIF search inside the box, for the years counted.
     keys = cards_gbif_keys(cursor, [result["specieskey"] for result in part["results"]])
     for result in part["results"]:
-        result["gbif_link"] = gbif_box_search_url(keys[result["specieskey"]], box, years)
+        result["gbif_link"] = gbif_box_search_url(keys[result["specieskey"]], box, years) if box else None
 
     return {
-        "box": dict(zip(("west", "south", "east", "north"), box)),
+        "box": dict(zip(("west", "south", "east", "north"), box)) if box else None,
         "res": res,
         "box_area_km2": round(area, 1),
         "minimum_area_km2": round(minimum_area_km2(res), 1),
-        # How many hexagons at this resolution overlap the box: the front
+        # How many hexagons at this resolution overlap the area: the front
         # end finds the same ones with h3-js to outline them.
         "hexagon_count": len(cells),
         "year_from": year_from,

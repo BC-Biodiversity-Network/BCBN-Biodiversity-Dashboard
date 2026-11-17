@@ -443,21 +443,31 @@ def degrees(value):
     return format(value, ".6f").rstrip("0").rstrip(".")
 
 
-def export_area(data, date, west, south, east, north, res, q=None, statuses=None, sort=None,
+def area_text(answer, shapes):
+    """Return how header line 2 names the area: the box's edges for an area
+    of one box (as before shapes came in), else how many shapes it has (the
+    full description of shapes comes with the routes that take them)."""
+    box = answer["box"]
+    if box:
+        return (f"the box west {degrees(box['west'])}, south {degrees(box['south'])}, "
+                f"east {degrees(box['east'])}, north {degrees(box['north'])}")
+    return f"the area's {len(shapes)} {'shape' if len(shapes) == 1 else 'shapes'}"
+
+
+def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
                 year_from=None, year_to=None, rank=None, rank_given=None):
-    """Return (file name, CSV text) of every species in the hexagons under a
-    box for these options, in the list's order, each with its GBIF search
-    inside the box for the years counted. The list is the area search's own
-    (area_species with no page limit), so it raises what that raises."""
-    answer = area_species(data, west, south, east, north, res, year_from, year_to, q, 0, None, rank,
+    """Return (file name, CSV text) of every species in the hexagons under
+    an area (shapes, a list of AreaShape) for these options, in the list's
+    order, each with its GBIF search inside the area for the years counted.
+    The list is the area search's own (area_species with no page limit), so
+    it raises what that raises."""
+    answer = area_species(data, shapes, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
     rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
-    box = answer["box"]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
     parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} of about {size} "
-             f"{'' if count == 1 else 'each '}that touch the box west {degrees(box['west'])}, "
-             f"south {degrees(box['south'])}, east {degrees(box['east'])}, north {degrees(box['north'])}"]
+             f"{'' if count == 1 else 'each '}that touch {area_text(answer, shapes)}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")

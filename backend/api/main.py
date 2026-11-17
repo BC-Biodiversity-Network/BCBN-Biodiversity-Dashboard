@@ -117,7 +117,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 
-from api.area import area_species
+from api.area import area_species, box_shape
 from api.cells import DEFAULT_PAGE_SIZE as CELL_PAGE_SIZE
 from api.cells import MAX_PAGE_SIZE as CELL_MAX_PAGE_SIZE
 from api.cells import UnknownSpecies, cell_species
@@ -310,9 +310,11 @@ def create_app(settings=None):
         non-numeric one gets area.py's own clear message (400)."""
         refuse_species(request, "The area search")
         given = {name: request.query_params.get(name) for name in RANKS}
+        # The four edges become one box shape until the route takes the
+        # area text (read_area_shapes).
         return answer_hexagon(rank, given, None, lambda: area_species(
-            request.app.state.data, west, south, east, north, res, year_from, year_to, q, offset, limit, rank,
-            given, status, sort))
+            request.app.state.data, box_shape(west, south, east, north), res, year_from, year_to, q, offset,
+            limit, rank, given, status, sort))
 
     @app.get("/api/ranks/{rank}/hexes")
     def rank_map(rank: str, request: Request, res: int = Query(...),
@@ -442,7 +444,7 @@ def create_app(settings=None):
         refuse_species(request, "The area download")
         given = {name: request.query_params.get(name) for name in RANKS}
         return csv_download(answer_hexagon(rank, given, None, lambda: export_area(
-            request.app.state.data, export_date(), west, south, east, north, res, q, status, sort,
+            request.app.state.data, export_date(), box_shape(west, south, east, north), res, q, status, sort,
             year_from, year_to, rank, given)))
 
     # Dataset ids hold colons and slashes (oai:datadryad.org:doi:10.5061/...),

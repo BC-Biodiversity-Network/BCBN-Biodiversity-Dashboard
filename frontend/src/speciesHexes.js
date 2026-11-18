@@ -52,16 +52,12 @@ export function toOverviewData(answer) {
 // up (an earlier tier or year range), so the map does not go blank; its own
 // resolution and years travel with it, so the legend describes what is
 // really on screen. fetchAt(resolution, years, signal) asks the API and
-// toData turns its answer into map data. sharedCache (a Map, or null for
-// one of its own) lets two maps share their answers: the map and an area's
-// own hexagons (areaLayers.js) then never ask for the same map twice.
-// Returns:
+// toData turns its answer into map data. Returns:
 //   data        the map to draw, or null
 //   loading     true while the wanted map has not arrived
 //   error       the ApiError if the wanted map failed, or null
-export function useHexesFromApi(group, years, resolution, fetchAt, toData, sharedCache = null) {
-  const ownCache = useRef(new Map())
-  const cache = { current: sharedCache ?? ownCache.current }
+export function useHexesFromApi(group, years, resolution, fetchAt, toData) {
+  const cache = useRef(new Map())
   const lastShown = useRef(null)
   const [errors, setErrors] = useState(() => new Map())
   // Bumped when an answer arrives, so the map is drawn again.
@@ -148,9 +144,9 @@ export function useSpeciesHexes(speciesKey, years, resolution) {
 
 // The overview map for a year range, from the API (see useHexesFromApi).
 // years is null when no range is set: the shipped overview files are used
-// then and nothing is fetched. cache is a shared answer cache, or null.
-export function useOverviewHexes(years, resolution, cache = null) {
-  return useHexesFromApi(years ? 'overview' : null, years, resolution, fetchOverviewAt, toOverviewData, cache)
+// then and nothing is fetched.
+export function useOverviewHexes(years, resolution) {
+  return useHexesFromApi(years ? 'overview' : null, years, resolution, fetchOverviewAt, toOverviewData)
 }
 
 // The rank fetchers made so far, one per rank path, so each stays the same
@@ -168,9 +164,8 @@ function rankFetcher(rankRef) {
 
 // The map of a rank for the year range and resolution being shown: the
 // overview restricted to the rank's species, in the overview's shape (see
-// useHexesFromApi and toOverviewData). rankRef is { rank, path }, or null;
-// cache is a shared answer cache, or null.
-export function useRankHexes(rankRef, years, resolution, cache = null) {
+// useHexesFromApi and toOverviewData). rankRef is { rank, path }, or null.
+export function useRankHexes(rankRef, years, resolution) {
   return useHexesFromApi(rankKey(rankRef), years, resolution, rankRef ? rankFetcher(rankRef) : fetchNothing,
-    toOverviewData, cache)
+    toOverviewData)
 }

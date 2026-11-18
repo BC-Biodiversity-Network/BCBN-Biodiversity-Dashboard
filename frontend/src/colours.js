@@ -118,16 +118,18 @@ export function binAlphas(count) {
 // hexagons.
 //
 // Every zoom tier starts with hexagons about 30 pixels across, so the line is
-// never more than a thin edge. Only when zooming out past the opening view do
-// the resolution 4 hexagons keep shrinking, and below about 12 pixels a white
-// line on every edge turns the map into a white mesh. So the line is fully
-// white while hexagons are at least fullAtPixels wide, fades out as they
-// shrink, and is gone at goneAtPixels.
+// never more than a thin edge. But hexagons can be much smaller on screen:
+// zooming out past the opening view, and while an area locks the map to its
+// size (about 3 km hexagons are about 2 pixels across at the opening zoom).
+// Below about 20 pixels a white line on every edge makes a mesh pattern
+// (seen on 2026-11-17 with the map locked to about 3 km at zoom 7), so the
+// line is fully white while hexagons are at least fullAtPixels wide, fades
+// out over a few pixels as they shrink, and is gone below goneAtPixels.
 export const HEXAGON_OUTLINE = {
   rgb: [255, 255, 255],
   widthPixels: 1,
-  fullAtPixels: 20,
-  goneAtPixels: 8,
+  fullAtPixels: 24,
+  goneAtPixels: 20,
 }
 
 // How strong the outline is (0 to 1) when hexagons are this many pixels

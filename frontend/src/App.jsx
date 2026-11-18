@@ -90,8 +90,9 @@ const HEX_DATA_URLS = {
 // polygons pasted as WKT or GeoJSON), made with the map's "Create an area
 // of interest" panel; it selects every hexagon any shape touches, all at one
 // hexagon size whatever the map's zoom: "Auto" (the default, no area_res in
-// the address) picks the smallest size at which every shape passes, again
-// whenever a shape is added or removed, and the visitor can pick a size in
+// the address) prefers about 7 km (about 3 km only for a shape too small for
+// it, larger only for an area too big), again whenever a shape is added or
+// removed, and the visitor can pick a size in
 // the panel instead (area_res), kept until changed or cleared (see
 // areaSize.js). It opens the area panel listing their species. The area
 // stays, on the map and in the address (area=<area text>, area_res,

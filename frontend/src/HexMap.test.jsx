@@ -75,7 +75,7 @@ vi.mock('@deck.gl/geo-layers', () => ({
 import { cellToLatLng, latLngToCell } from 'h3-js'
 
 import { boxCells } from './area'
-import { EMPTY_AREA_FILL, SHAPE_OUTLINE, shapesBounds } from './areaLayers'
+import { SHAPE_OUTLINE, shapesBounds } from './areaLayers'
 import { DRAW_HINT, DRAW_UNAVAILABLE } from './AreaOfInterest'
 import { boxShapeOf, readAreaText } from './areaShapes'
 import { COLOUR_SCHEMES, hexagonColour, outlineOpacity } from './colours'
@@ -278,14 +278,15 @@ describe('the hexagon outlines', () => {
     expect(species.props).toMatchObject({ stroked: true, getLineColor: [255, 255, 255, 255], getLineWidth: 1 })
   })
 
-  it('fades the outline out when zoomed so far out that the hexagons get tiny', () => {
+  it('fades the outline out when zoomed so far out that the hexagons get small', () => {
     render(<HexMap overview={OVERVIEW} species={null} />)
     const lineColour = () => mapState.layers[0].props.getLineColor
-    // Zoom 3.85: resolution 4 hexagons about 16.5 pixels wide.
+    // Zoom 4.26: resolution 4 hexagons about 22 pixels wide, a half-strength line.
+    expect(hexagonWidthPixels(4, 4.26)).toBeCloseTo(22, 0)
+    act(() => mapState.onMove({ viewState: { zoom: 4.26 } }))
+    expect(lineColour()).toEqual([255, 255, 255, 128])
+    // Zoom 3.85: about 16.5 pixels wide, under 20, so no outline at all.
     act(() => mapState.onMove({ viewState: { zoom: 3.85 } }))
-    expect(lineColour()).toEqual([255, 255, 255, 191])
-    // Zoom 2.5: about 6.5 pixels wide, so no outline at all.
-    act(() => mapState.onMove({ viewState: { zoom: 2.5 } }))
     expect(mapState.layers[0].props.stroked).toBe(false)
     // Back at the opening zoom it is fully white again.
     act(() => mapState.onMove({ viewState: { zoom: 4.5 } }))
@@ -764,19 +765,19 @@ describe('an area of interest', () => {
       species={null} selectedArea={AREA} />)
     // The selected hexagon and the resolution 7 one inside it keep their
     // colour; the resolution 4 and 5 ones that hold it are faded, as only a
-    // small part of each is in the area (whose own hexagons are drawn on top
-    // of them, see the tests below).
+    // small part of each is in the area. (The map shows only the area's own
+    // size while it is there, see the tests below.)
     for (const r of [6, 7]) {
       expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])).toEqual(usual[r])
     }
     for (const r of [4, 5]) {
       expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])[3]).toBe(Math.round(usual[r][3] * FADED_SHARE))
     }
-    // A hexagon outside the area keeps its colour at a fifth of its opacity.
+    // A hexagon outside the area keeps its colour at 30% of its opacity.
     const faded = fillOf(overviewLayerId(6), elsewhere)
     expect(faded.slice(0, 3)).toEqual(usual[6].slice(0, 3))
     expect(faded[3]).toBe(Math.round(usual[6][3] * FADED_SHARE))
-    expect(FADED_SHARE).toBe(0.2)
+    expect(FADED_SHARE).toBe(0.3)
     // deck.gl is told the colours changed.
     expect(mapState.layers.find((layer) => layer.id === overviewLayerId(6)).props.updateTriggers.getFillColor)
       .toEqual(['species', '6:b:-130.4,48.8,-130.25,48.9'])
@@ -934,25 +935,23 @@ describe('an area of interest', () => {
   })
 })
 
-describe("the area's own hexagons", () => {
-  // An area of one box at resolution 6 holding the overview's resolution 6
-  // hexagon (8628c9b47ffffff) and an empty one beside it. The map opens on
-  // resolution 4 hexagons, larger than the area's.
+describe("the map locked to the area's size", () => {
+  // An area of one box at resolution 6 (about 7 km) holding the overview's
+  // resolution 6 hexagon (8628c9b47ffffff) and an empty one beside it. The
+  // map opens on resolution 4 hexagons.
   const BOX = { west: -130.4, south: 48.8, east: -130.25, north: 48.9 }
   const AREA = { shapes: [boxShapeOf(BOX)], res: 6, cells: ['8628c9b47ffffff', '8628c9b4fffffff'] }
-  const AREA_KEY = '6:b:-130.4,48.8,-130.25,48.9'
   const INSIDE = OVERVIEW.rows[6][0]
-  const EMPTY = { h3Cell: '8628c9b4fffffff', empty: true }
   const YEARS = { from: 2000, to: 2020 }
+  const LOCKED_NOTE = 'While an area is shown, the whole map uses its hexagon size, about 7 km, at every zoom. '
+    + 'Clear the area to go back.'
 
-  // The layer of the area's own hexagons deck.gl was last given, or undefined.
-  function areaLayer() {
-    return mapState.layers.find((layer) => layer.id.startsWith('area-hexagons-'))
+  // The hexagon size label at the top left, and the legend's area line.
+  function sizeLabel() {
+    return document.querySelector('.hex-size-label').textContent
   }
-
-  // The lines of the hexagon size label at the top left.
-  function sizeLines() {
-    return [...document.querySelectorAll('.hex-size-label > div')].map((line) => line.textContent)
+  function legendNote() {
+    return document.querySelector('.legend-area')?.textContent ?? null
   }
 
   // Moves the map to the middle of the zoom tier showing this resolution.
@@ -960,151 +959,127 @@ describe("the area's own hexagons", () => {
     act(() => mapState.onMove({ viewState: { zoom: zoomShowingResolution(res) } }))
   }
 
-  // A pretend map answer from the API (overview or rank) at res: the area's
-  // hexagon and one far away at resolution 6, else one hexagon.
-  function mapAnswer(res, extra = {}) {
+  // A pretend map answer from the API (overview or rank) at res.
+  function mapAnswer(res) {
     const cells = res === 6 ? ['8628c9b47ffffff', '862800b37ffffff'] : [OVERVIEW.rows[res][0].h3Cell]
     return {
       res, year_from: 2000, year_to: 2020, years_counted: [2000, 2020], hexagon_count: cells.length,
       records_shown: 99, records_no_year_left_out: 0, cells,
-      occurrences: cells.map(() => 40), distinct_species: cells.map(() => 30), ...extra,
+      occurrences: cells.map(() => 40), distinct_species: cells.map(() => 30),
     }
   }
 
-  it('draws them above the faded map hexagons when those are larger, on the same scale', () => {
+  it("shows the area's size on the whole map at every zoom, the area bright and the rest faded", () => {
     render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
-    // Bottom to top: the map's layers, then the area's own hexagons.
-    expect(mapState.layers.map((layer) => layer.id)).toEqual([
-      'bc-hexagons-r4', 'bc-hexagons-r5', 'bc-hexagons-r6', 'bc-hexagons-r7', `area-hexagons-overview-${AREA_KEY}`,
-    ])
-    const layer = areaLayer()
-    // The area's hexagons with records, from the overview file already
-    // loaded, in their usual colours, under the basemap's labels; then the
-    // one with none, in a light plain grey.
-    expect(layer.props.data).toEqual([INSIDE, EMPTY])
+    for (const res of [4, 5, 6, 7, 4]) {
+      zoomTo(res)
+      expect(visibleLayers()).toEqual(['bc-hexagons-r6'])
+    }
+    // Only the map's own layers: no layer of the area's own, and the
+    // hexagons with no records are not drawn (the overview file has none).
+    expect(mapState.layers.map((layer) => layer.id)).toEqual([4, 5, 6, 7].map(overviewLayerId))
+    const layer = mapState.layers.find((l) => l.id === overviewLayerId(6))
+    expect(layer.props.data).toBe(OVERVIEW.rows[6])
     expect(layer.props.getFillColor(INSIDE)).toEqual(hexagonColour(INSIDE, COLOUR_SCHEMES.species))
-    expect(layer.props.getFillColor(EMPTY)).toEqual(EMPTY_AREA_FILL)
-    expect(layer.props).toMatchObject({ pickable: true, filled: true, beforeId: 'waterway_line_label' })
-    // Every map hexagon of a larger size is faded, even one all inside the area.
-    const fill = mapState.layers[0].props.getFillColor(OVERVIEW.rows[4][0])
-    expect(fill[3]).toBe(Math.round(hexagonColour(OVERVIEW.rows[4][0], COLOUR_SCHEMES.species)[3] * FADED_SHARE))
-    // The scale toggle colours them too.
-    act(() => screen.getByRole('button', { name: 'Records' }).click())
-    expect(areaLayer().props.getFillColor(INSIDE)).toEqual(hexagonColour(INSIDE, COLOUR_SCHEMES.records))
-    expect(areaLayer().props.updateTriggers.getFillColor).toEqual(['records'])
+    const elsewhere = { h3Cell: '862800b37ffffff', occurrences: 10, distinctSpecies: 5 }
+    expect(layer.props.getFillColor(elsewhere)[3])
+      .toBe(Math.round(hexagonColour(elsewhere, COLOUR_SCHEMES.species)[3] * FADED_SHARE))
   })
 
-  it('draws no layer of its own once the map shows the area\'s size or smaller, keeping the map\'s rule', () => {
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
+  it('says so in the label and the legend, and not without an area', () => {
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
+    expect(sizeLabel()).toBe("Hexagons ~7 km (the area's size)")
+    expect(legendNote()).toBe(LOCKED_NOTE)
+    rerender(<HexMap overview={OVERVIEW} species={null} />)
+    expect(sizeLabel()).toBe('Hexagons ~52 km')
+    expect(legendNote()).toBeNull()
+  })
+
+  it('follows Auto choosing another size and a size picked, and goes back to the zoom after Clear area', () => {
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
     zoomTo(5)
-    expect(areaLayer()).toBeDefined()
-    zoomTo(6)
-    expect(areaLayer()).toBeUndefined()
-    const fill = (r) => mapState.layers.find((l) => l.id === overviewLayerId(r)).props.getFillColor(OVERVIEW.rows[r][0])
-    expect(fill(6)).toEqual(hexagonColour(OVERVIEW.rows[6][0], COLOUR_SCHEMES.species))
+    expect(visibleLayers()).toEqual(['bc-hexagons-r6'])
+    // Auto moves to about 3 km (a small shape added).
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 7, picked: false }} />)
+    expect(visibleLayers()).toEqual(['bc-hexagons-r7'])
+    expect(sizeLabel()).toBe("Hexagons ~3 km (the area's size)")
+    expect(legendNote()).toContain('about 3 km')
+    // About 20 km picked by hand.
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 5, picked: true }} />)
+    expect(visibleLayers()).toEqual(['bc-hexagons-r5'])
+    expect(sizeLabel()).toBe("Hexagons ~20 km (the area's size)")
+    // Cleared: the size follows the zoom again, from where the map is now.
     zoomTo(7)
-    expect(areaLayer()).toBeUndefined()
-    expect(fill(7)).toEqual(hexagonColour(OVERVIEW.rows[7][0], COLOUR_SCHEMES.species))
+    rerender(<HexMap overview={OVERVIEW} species={null} />)
+    expect(visibleLayers()).toEqual(['bc-hexagons-r7'])
+    expect(sizeLabel()).toBe('Hexagons ~3 km')
     zoomTo(4)
-    expect(areaLayer()).toBeDefined()
+    expect(visibleLayers()).toEqual(['bc-hexagons-r4'])
   })
 
-  it('labels both sizes when they differ, and says so in the legend while drawn', () => {
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
-    expect(sizeLines()).toEqual(['Map: hexagons ~52 km', 'Area: hexagons ~7 km'])
-    expect(document.querySelector('.legend-area').textContent)
-      .toBe('Inside the area: hexagons of about 7 km, on the same scale, so they look paler.')
-    zoomTo(6)
-    expect(sizeLines()).toEqual(['Hexagons ~7 km'])
-    expect(document.querySelector('.legend-area')).toBeNull()
-    // Smaller map hexagons than the area's: both sizes, no legend line.
-    zoomTo(7)
-    expect(sizeLines()).toEqual(['Map: hexagons ~3 km', 'Area: hexagons ~7 km'])
-    expect(document.querySelector('.legend-area')).toBeNull()
-  })
-
-  it('shows one line with no area', () => {
-    render(<HexMap overview={OVERVIEW} species={null} />)
-    expect(sizeLines()).toEqual(['Hexagons ~52 km'])
-    expect(document.querySelector('.legend-area')).toBeNull()
-  })
-
-  it('outlines them for their own size at the map\'s zoom', () => {
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
-    // At the opening zoom, hexagons of about 7 km are too small for an outline.
-    expect(outlineOpacity(hexagonWidthPixels(6, 4.5))).toBe(0)
-    expect(areaLayer().props.stroked).toBe(false)
-    const zoom = zoomShowingResolution(5)
+  it("draws white edges for the locked size's hexagons on screen, none below about 20 pixels", () => {
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 7 }} />)
+    const r7 = () => mapState.layers.find((l) => l.id === overviewLayerId(7)).props
+    // At the opening zoom, hexagons of about 3 km are about 2 pixels wide.
+    expect(hexagonWidthPixels(7, 4.5)).toBeLessThan(20)
+    expect(r7().stroked).toBe(false)
+    const zoom = zoomShowingResolution(7)
     act(() => mapState.onMove({ viewState: { zoom } }))
-    const strength = outlineOpacity(hexagonWidthPixels(6, zoom))
-    expect(strength).toBeGreaterThan(0)
-    expect(areaLayer().props.stroked).toBe(true)
-    expect(areaLayer().props.getLineColor).toEqual([255, 255, 255, Math.round(strength * 255)])
+    expect(hexagonWidthPixels(7, zoom)).toBeGreaterThan(24)
+    expect(r7()).toMatchObject({ stroked: true, getLineColor: [255, 255, 255, 255] })
+    // Zoomed out to where they are about 21 pixels wide: a faint line, and
+    // under 20 none, though the zoom's own size would be larger there.
+    act(() => mapState.onMove({ viewState: { zoom: 8.02 } }))
+    expect(outlineOpacity(hexagonWidthPixels(7, 8.02))).toBe(r7().getLineColor[3] / 255)
+    act(() => mapState.onMove({ viewState: { zoom: 7.5 } }))
+    expect(r7().stroked).toBe(false)
   })
 
-  it('shows their own numbers on hover, and opens one on a click without changing the zoom, outlined', () => {
+  it('shows its own numbers on hover, and opens a hexagon on a click without changing the zoom', () => {
     const onCellClick = vi.fn()
     const props = { overview: OVERVIEW, species: null, selectedArea: AREA, onCellClick }
     const { rerender } = render(<HexMap {...props} />)
     act(() => mapState.onLoad())
-    const tooltip = mapState.getTooltip({ layer: areaLayer(), object: INSIDE })
+    const layer = mapState.layers.find((l) => l.id === overviewLayerId(6))
+    const tooltip = mapState.getTooltip({ layer, object: INSIDE })
     expect(tooltip.html).toContain('<strong>10</strong> records')
-    expect(tooltip.html).toContain('<strong>5</strong> species')
     act(() => mapState.onClick({ object: INSIDE }))
     expect(onCellClick).toHaveBeenCalledWith(INSIDE.h3Cell)
-    // One with no records: says so, and a click opens nothing.
-    expect(mapState.getTooltip({ layer: areaLayer(), object: EMPTY }).html).toBe('<div>No records</div>')
-    act(() => mapState.onClick({ object: EMPTY }))
-    expect(onCellClick).toHaveBeenCalledTimes(1)
     rerender(<HexMap {...props} selectedCell={INSIDE.h3Cell} />)
     expect(mapState.easeTo).not.toHaveBeenCalled()
     expect(mapState.layers.at(-1).id).toBe(`selected-cell-${INSIDE.h3Cell}`)
-    expect(mapState.layers.at(-2).id).toBe(`area-hexagons-overview-${AREA_KEY}`)
-    // A faded map hexagon works as before: its panel, and the map zooms to
-    // hexagons of its size when they are not the ones shown.
+    // A hexagon of another size (as after the browser's Back) off screen:
+    // the map moves to it without zooming, as zooming would not change the size.
+    mapState.bounds = [[-121, 50], [-120, 51]]
     rerender(<HexMap {...props} selectedCell={OVERVIEW.rows[5][0].h3Cell} />)
     expect(mapState.easeTo).toHaveBeenCalledTimes(1)
-    expect(mapState.easeTo.mock.calls[0][0].zoom).toBe(zoomShowingResolution(5))
-    // So does a hexagon of the area's size outside the area.
-    rerender(<HexMap {...props} selectedCell="862800b37ffffff" />)
-    expect(mapState.easeTo).toHaveBeenCalledTimes(2)
-    expect(mapState.easeTo.mock.calls[1][0].zoom).toBe(zoomShowingResolution(6))
+    const [lat, lng] = cellToLatLng(OVERVIEW.rows[5][0].h3Cell)
+    expect(mapState.easeTo.mock.calls[0][0]).toEqual({ center: [lng, lat], duration: 900 })
   })
 
-  it('asks the API once for the area\'s size with a year range, keeping the old rule until it arrives', async () => {
-    const urls = stubHexes((url) => ({ body: mapAnswer(Number(url.match(/res=(\d)/)[1])) }))
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} years={YEARS} />)
-    // Before the answer: no layer of its own, and the map's rule as before.
-    expect(areaLayer()).toBeUndefined()
-    expect(mapState.layers.find((l) => l.id === overviewLayerId(4)).props.updateTriggers.getFillColor)
-      .toEqual(['species', `${AREA_KEY}|waiting`])
-    await settle()
-    expect(urls()).toEqual([
-      '/api/overview/hexes?res=4&year_from=2000&year_to=2020',
-      '/api/overview/hexes?res=6&year_from=2000&year_to=2020',
-    ])
-    expect(areaLayer().id).toBe(`area-hexagons-years-2000-2020-${AREA_KEY}`)
-    expect(areaLayer().props.data).toEqual([{ h3Cell: '8628c9b47ffffff', occurrences: 40, distinctSpecies: 30 }, EMPTY])
-    expect(mapState.layers.find((l) => l.id === 'overview-2000-2020-r4').props.updateTriggers.getFillColor)
-      .toEqual(['species', AREA_KEY])
-    // Zooming to the area's size and out again asks for nothing more: the
-    // map at the area's size uses the same answer.
-    zoomTo(6)
-    await settle()
-    expect(visibleLayers()).toEqual(['overview-2000-2020-r6'])
-    zoomTo(4)
-    await settle()
-    expect(urls().filter((url) => url.includes('res=6'))).toHaveLength(1)
-    expect(areaLayer()).toBeDefined()
-  })
-
-  it('asks the API for a rank\'s map at the area\'s size', async () => {
-    const rank = { rank: 'genus', name: 'Turdus', id: 1, path: [{ rank: 'genus', name: 'Turdus' }] }
+  it("asks the API at the area's size for a year range, and for a rank", async () => {
     const urls = stubHexes((url) => ({ body: { ...mapAnswer(Number(url.match(/res=(\d)/)[1])), rank: 'genus' } }))
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} rank={rank} rankId="Turdus|genus" />)
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} years={YEARS} />)
     await settle()
-    expect(urls()).toEqual(['/api/ranks/genus/hexes?res=4&genus=Turdus', '/api/ranks/genus/hexes?res=6&genus=Turdus'])
-    expect(areaLayer().id.startsWith('area-hexagons-rank-')).toBe(true)
-    expect(areaLayer().props.data.map((row) => row.h3Cell)).toEqual(['8628c9b47ffffff', EMPTY.h3Cell])
+    zoomTo(4)
+    zoomTo(7)
+    await settle()
+    expect(urls()).toEqual(['/api/overview/hexes?res=6&year_from=2000&year_to=2020'])
+    expect(visibleLayers()).toEqual(['overview-2000-2020-r6'])
+    const rank = { rank: 'genus', name: 'Turdus', id: 1, path: [{ rank: 'genus', name: 'Turdus' }] }
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} rank={rank} rankId="Turdus|genus" />)
+    await settle()
+    expect(urls().at(-1)).toBe('/api/ranks/genus/hexes?res=6&genus=Turdus')
+    expect(visibleLayers()).toHaveLength(1)
+    expect(visibleLayers()[0]).toMatch(/^rank-Turdus\|genus-.*-r6$/)
+  })
+
+  it("leaves a single species' map to follow the zoom", async () => {
+    const urls = stubHexes((url) => ({ body: hexes('59PMB', Number(url.match(/res=(\d)/)[1]), ['8428c9bffffffff'], [3]) }))
+    render(<HexMap overview={OVERVIEW} species={ROBIN} selectedArea={AREA} />)
+    await settle()
+    expect(urls()).toEqual(['/api/species/59PMB/hexes?res=4'])
+    expect(sizeLabel()).toBe('Hexagons ~52 km')
+    expect(legendNote()).toBeNull()
   })
 })

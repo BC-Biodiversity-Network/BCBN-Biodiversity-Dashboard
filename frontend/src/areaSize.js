@@ -1,20 +1,22 @@
 // The hexagon size of an area of interest, chosen without regard to the
-// map's zoom: "Auto" (the default) picks the smallest hexagons at which every
-// shape passes the area's checks, and a visitor can pick a size of their own
-// in the panel instead. One area always uses one size for all its shapes.
+// map's zoom: "Auto" (the default) prefers hexagons of about 7 km
+// (AUTO_PREFERRED), and a visitor can pick a size of their own in the panel
+// instead. One area always uses one size for all its shapes, and while an
+// area is shown the whole map uses that size at every zoom (HexMap.jsx).
 //
 // The checks are the API's own (shapesProblem in areaShapes.js): each shape
 // at least MIN_AREA_HEXAGONS average hexagons, the whole area at most
-// MAX_AREA_HEXAGONS hexagons. Smaller hexagons follow the shapes more
-// closely, so Auto tries the smallest first and less land outside the shapes
-// is counted.
+// MAX_AREA_HEXAGONS hexagons. About 7 km reads well on the whole map at
+// most zooms, where about 3 km becomes specks when seen from far out, so
+// Auto uses about 3 km only for a shape too small for about 7 km, and larger
+// sizes only for an area too big for it.
 
 import { minimumAreaKm2 } from './area.js'
 import { shapeAreaKm2, shapeSizeProblem, shapesCells, shapesProblem } from './areaShapes.js'
 import { hexagonWidthMetres } from './zoomTiers.js'
 
 // The hexagon sizes an area can use (those of the maps), as H3 resolutions,
-// smallest hexagons first: the order Auto tries them in.
+// smallest hexagons first (Auto's order is autoSizes).
 export const AREA_SIZES = [7, 6, 5, 4]
 
 // A size's width in km, rounded as the map's label rounds it ("about 52 km").
@@ -27,14 +29,30 @@ export function sizeLabel(res) {
   return `About ${sizeKm(res)} km`
 }
 
-// Chooses the size for Auto: the smallest hexagons (of AREA_SIZES) at which
-// the shapes pass every check. Returns { res, cells } with the area's
-// hexagons at that size (sorted, each once), or { problem } with the API's
-// message when no size works: a shape too small even at the smallest
-// hexagons gets that size's message, anything else (too big even at the
-// largest) the largest size's.
+// The size Auto prefers: about 7 km (resolution 6).
+export const AUTO_PREFERRED = 6
+
+/**
+ * The sizes Auto tries for these shapes, in order: only about 3 km when a
+ * shape is smaller than the minimum for about 7 km (MIN_AREA_HEXAGONS
+ * average hexagons of it, about 145 km²), else about 7 km and then the
+ * larger sizes, for an area too big for it.
+ */
+export function autoSizes(shapes) {
+  const tooSmall = shapes.some((shape) => shapeAreaKm2(shape) < minimumAreaKm2(AUTO_PREFERRED))
+  return tooSmall ? [AREA_SIZES[0]] : AREA_SIZES.filter((res) => res <= AUTO_PREFERRED)
+}
+
+/**
+ * Chooses the size for Auto: the first size of autoSizes(shapes) at which
+ * the shapes pass every check. Returns { res, cells } with the area's
+ * hexagons at that size (sorted, each once), or { problem } with the API's
+ * message when no size works, at the last size tried (about 3 km for a
+ * small shape, else about 52 km).
+ */
 export function autoSize(shapes) {
-  for (const res of AREA_SIZES) {
+  const sizes = autoSizes(shapes)
+  for (const res of sizes) {
     if (shapeSizeProblem(shapes, res)) {
       continue
     }
@@ -43,9 +61,7 @@ export function autoSize(shapes) {
       return { res, cells }
     }
   }
-  const smallest = AREA_SIZES[0]
-  const tooSmallEverywhere = shapes.some((shape) => shapeAreaKm2(shape) < minimumAreaKm2(smallest))
-  return { problem: shapesProblem(shapes, tooSmallEverywhere ? smallest : AREA_SIZES[AREA_SIZES.length - 1]) }
+  return { problem: shapesProblem(shapes, sizes[sizes.length - 1]) }
 }
 
 // The hint the page adds to a size refusal (shapesProblem) at a size the

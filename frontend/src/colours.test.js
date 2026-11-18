@@ -76,13 +76,14 @@ describe('the colours', () => {
 })
 
 describe('the hexagon outline', () => {
-  it('is full at 20 pixels and over, gone at 8 and under, in quarter steps between', () => {
+  it('is full at 24 pixels and over, gone at 20 and under (no mesh), in quarter steps between', () => {
     expect(outlineOpacity(80)).toBe(1)
-    expect(outlineOpacity(20)).toBe(1)
-    expect(outlineOpacity(17)).toBe(0.75)
-    expect(outlineOpacity(14)).toBe(0.5)
-    expect(outlineOpacity(11)).toBe(0.25)
-    expect(outlineOpacity(8)).toBe(0)
+    expect(outlineOpacity(24)).toBe(1)
+    expect(outlineOpacity(23)).toBe(0.75)
+    expect(outlineOpacity(22)).toBe(0.5)
+    expect(outlineOpacity(21)).toBe(0.25)
+    expect(outlineOpacity(20)).toBe(0)
+    expect(outlineOpacity(12)).toBe(0)
     expect(outlineOpacity(3)).toBe(0)
   })
 })

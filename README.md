@@ -1740,85 +1740,92 @@ that overlap any shape even by a corner, each once (`shapesCells` in
 `frontend/src/areaShapes.js`: h3-js `polygonToCellsExperimental` with
 `containmentOverlapping`, the corners as `[lat, lng]`, exactly as the API
 finds them), all at one size, which does not depend on the map's zoom
-(`frontend/src/areaSize.js`). "Auto", the default, picks the smallest
-hexagons (about 3, 7, 20 or 52 km across, tried from the smallest) at which
-every shape covers at least `MIN_AREA_HEXAGONS` average hexagons and the
-whole area touches at most `MAX_AREA_HEXAGONS`: smaller hexagons follow the
-shapes more closely, so less land outside them is counted. It chooses again
-whenever a shape is added or removed, the whole area recounted at the new
-size; if no size works (a shape too small even at the smallest, or the area
-too big even at the largest) the shape is refused with that size's message.
-The panel's "Hexagon size" choice shows "Auto (about 3 km)" (the size it
-chose) and the four sizes ("About 52 km", ...); a size picked is kept until
+(`frontend/src/areaSize.js`). "Auto", the default, prefers hexagons of
+about 7 km (`AUTO_PREFERRED`; `autoSizes`): about 3 km only when a shape is
+too small for about 7 km (under `MIN_AREA_HEXAGONS` average hexagons of it,
+144.5 km²), and the larger sizes (about 20, then 52 km) only when the area
+is too big for about 7 km (over `MAX_AREA_HEXAGONS` hexagons). About 7 km
+reads well on the whole map at most zooms, where about 3 km becomes specks
+seen from far out, and the map shows the area's size everywhere (below).
+For example: a box around Kamloops (about 979 km², 45 hexagons) gets about
+7 km; most of BC (70,747 hexagons) too; a box of about 100 km² gets about
+3 km, and so does any area holding one; two boxes over North America
+(over 200,000 hexagons together at about 7 km) get about 20 km. (Before
+2026-11-17 Auto took the smallest size that passed, so most areas got
+about 3 km.) It chooses again whenever a shape is added or removed, the
+whole area recounted at the new size; if no size works (a shape too small
+even at about 3 km, or the area too big even at about 52 km) the shape is
+refused with that size's message. The panel's "Hexagon size" choice shows
+"Auto (about 7 km)" (the size it chose) and the four sizes ("About 52 km", ...); a size picked is kept until
 it is changed or the area cleared, and a shape (or a size) that does not
 pass at it is refused with the API's message, the page adding "Or choose
 smaller hexagons." when a shape is too small (the API's message for an area
 too big already says to use larger hexagons). Changing the size is one
 history step.
 
-How the map shows an area (`frontend/src/areaLayers.js`, so `HexMap.jsx`
-changes little) depends on whether the map's hexagons, which follow the
-zoom, are larger than the area's:
+**The map is locked to the area's size.** While an area has at least one
+shape (and the map is not a single species' map), the whole map shows
+hexagons of the area's size at every zoom, instead of changing size with
+the zoom (`lockedResolution` in `frontend/src/areaLayers.js`; `HexMap.jsx`
+uses it as its resolution). It follows the area: when Auto chooses another
+size, or the visitor picks one, the whole map changes with it, and after
+"Clear area" the size follows the zoom again. A rank's map is locked too
+(the API is asked for the rank's map at the area's size); a single
+species' map is not. So every map hexagon is either one of the area's or
+not: the area's keep their colours, every other one keeps 30% of its
+opacity (`FADED_SHARE` in `HexMap.jsx`, the one constant to change for
+more or less fading; 20%, 30% and 35% were shown to Lucia on 2026-11-17),
+and hexagons with no records are not drawn, as everywhere on the map, so
+the basemap shows through. The label at the top left says "Hexagons ~7 km
+(the area's size)" and the legend adds "While an area is shown, the whole
+map uses its hexagon size, about 7 km, at every zoom. Clear the area to go
+back." (`hexagonSizeText`, `areaLegendNote`), with the real size; the
+panel's "Hexagon size" is unchanged. A hexagon of another size opened
+while the map is locked (for example from a link made before the area) is
+moved to without zooming, as zooming would not change the size. The white
+hexagon edges follow the locked size on screen (none below about 20
+pixels, see below).
 
-- **The map's hexagons are the area's size or smaller.** Every map hexagon
-  outside the area keeps only a fifth of its opacity (`FADED_SHARE`): a
-  hexagon of the area's size is bright when it is one of the area's, a
-  finer one when the hexagon of the area's size it lies in is
-  (`selectionTest` in `area.js`). This is exact, so it is as before.
-- **The map's hexagons are larger than the area's** (a small area seen
-  from far out). A large map hexagon is usually only partly in the area,
-  so every map hexagon is faded, and the area's own hexagons are drawn on
-  top, at the area's size, coloured on the same fixed scale as the map
-  (`useAreaHexagons` and `areaHexagonLayer`). With all years and no rank
-  they come from the overview file already loaded; with a year range or a
-  rank, from the API's map at the area's size (`/api/overview/hexes` or
-  `/api/ranks/{rank}/hexes`), asked for once and kept, in one cache shared
-  with the map's own hooks (`useAnswerCache`), so the map zoomed to the
-  area's size reuses it. Until it arrives, a larger map hexagon stays
-  bright only when all of it is in the area, as before. The area's
-  hexagons with no records are drawn in a light plain grey
-  (`EMPTY_AREA_FILL`), so they read as counted but empty rather than as
-  faded land outside; their hover box says "No records" and a click opens
-  nothing. Smaller hexagons hold fewer species and records, so on the same
-  scale they look paler, and the legend says so: "Inside the area:
-  hexagons of about 3 km, on the same scale, so they look paler." Hover
-  shows an area hexagon's own numbers; a click opens its panel and
-  outlines it without changing the zoom (the map only zooms for a hexagon
-  it does not show at its own size, such as a faded map hexagon of another
-  size). Their white outline follows their own size on screen
-  (`useAreaOutline`).
+The only outline of an area is that of its shapes, the boxes and polygons
+the visitor made: a dark solid line on a wider white one (`SHAPE_OUTLINE`),
+so it reads on light and dark hexagons of either scale, at every zoom (and
+the box being dragged, beside them). It is a MapLibre line layer, added
+again whenever the area changes so it stays above the hexagons (bottom to
+top: the map's hexagons, just under the basemap's place names, the open
+hexagon's outline, then the shapes). A shared link fits the shapes in view
+(`shapesBounds`).
 
-Whenever the area's hexagons are of another size than the map's, the label
-at the top left has two lines, "Map: hexagons ~52 km" and "Area: hexagons
-~3 km" (`hexagonSizeLines`); the panel's "Hexagon size" is unchanged.
+Measured on 2026-11-17 in headless Chrome: drawing a box at the widest
+zoom, the longest frame from letting go until the locked map is drawn (the
+size chosen, the hexagons found, the map switched) was 100 to 117 ms for a
+small box (about 96 km², 33 hexagons of about 3 km) and 100 ms for a large
+one (about 110,000 km², 3,656 hexagons of about 7 km); adding a small box
+to the large one, which moves the whole map to about 3 km, 150 ms.
+Panning stays at 60 frames a second, at the widest zoom and at about 20 km.
+The whole map at one size is drawn at 60 frames a second at every size
+(73,723 hexagons at about 3 km); for all years every size is already
+loaded, so switching takes about 20 ms, and a year range or a rank at
+about 3 km arrives from the API in 0.3 to 0.4 s.
 
-Bottom to top on the map: the map's hexagons, the area's own hexagons (both
-deck.gl layers just under the basemap's place names; the area's comes
-right after the map's in `buildLayers`), the open hexagon's outline, then
-the shapes' outline, a MapLibre line layer added last. The only outline of
-an area is that of its shapes, the boxes and polygons the visitor made: a
-dark solid line on a wider white one (`SHAPE_OUTLINE`), so it reads on
-light and dark hexagons of either scale, at every zoom (and the box being
-dragged, beside them); it is added again whenever the area changes so it
-stays on top. There is no outline around the joined hexagons any more: the
-area's own hexagons show where the counted land ends (whole hexagons, a
-little past the shapes), and dropping it removed the pause it cost (h3-js
-`cellsToMultiPolygon`, 0.8 to 1.1 s for an area near the largest allowed).
-A shared link fits the shapes in view (`shapesBounds`). Measured on
-2026-11-17 in headless Chrome, each area pasted as one polygon at the
-widest zoom, the longest frame after adding the shape (main thread busy checking
-the shape, choosing the size and finding the hexagons):
+History: in step 9 (commit ef0bc89) the map kept following the zoom and
+drew the area's own hexagons on top of faded larger ones, with a grey fill
+for the area's empty hexagons; seen from far out the area's hexagons were
+specks and the grey covered the basemap, so it was replaced by the lock.
+Its measurements, the longest frame after adding a shape (each area
+pasted as one polygon at the widest zoom, hexagons of about 3 km), which
+also hold for the lock, as the outline around the joined hexagons (h3-js
+`cellsToMultiPolygon`, 0.8 to 1.1 s near the largest area allowed) is
+gone:
 
-  | Area (hexagons of about 3 km) | Before step 9 | Now |
+  | Area (hexagons of about 3 km) | Before step 9 | Step 9 |
   | --- | --- | --- |
   | 1,347 hexagons | 0.15 s | 0.10 s |
   | 25,039 hexagons | 0.50 s | 0.15 s |
   | 170,414 hexagons | 2.8 s | 0.57 to 0.58 s |
 
-The longest frame when the area's own hexagons first appear (zooming out
-from about 3 km) is 17 ms, 17 ms and 133 ms for the three; panning and
-zooming stay at 60 frames a second. A shape the
-API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
+Panning and zooming stayed at 60 frames a second.
+
+A shape the API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
 hexagons, an area touching more than `MAX_AREA_HEXAGONS` (200,000)
 hexagons, more than `MAX_AREA_POINTS` (250) points, and so on. The panel
 shows why, in the API's own words ("Shape 2 (a box) is about 9.9 km²,
@@ -2040,9 +2047,12 @@ rare species has to be easy to find on forest, parks and water.
 Every hexagon on all three maps has a 1-pixel white outline, so each one
 stands apart from its neighbours. The width is in screen pixels, so it stays
 thin at every zoom. Each zoom tier starts with hexagons about 30 pixels
-across, so the line is always a thin edge. Only when zooming out past the
-opening view, where hexagons shrink below 20 pixels, does it fade out, and it
-is gone at 8 pixels, so the far-out views do not turn into a white mesh.
+across, so the line is usually a thin edge. But hexagons can be much
+smaller on screen: zooming out past the opening view, and while an area
+locks the map to its size (hexagons of about 3 km are about 2 pixels across
+at the opening zoom). Below about 20 pixels a line on every edge makes a
+white mesh, so it fades out from 24 pixels and is gone at 20
+(`HEXAGON_OUTLINE` in `colours.js`).
 
 The legend draws each swatch with its bin's opacity over the basemap's land
 colour, with a thin white line between swatches like the outlines, so it

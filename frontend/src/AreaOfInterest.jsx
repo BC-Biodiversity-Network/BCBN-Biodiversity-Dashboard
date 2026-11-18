@@ -22,7 +22,7 @@ export const DRAW_HINT = 'Press and drag on the map to draw a box. Esc to cancel
 export const BOX_HELP = 'Box: press and drag on the map. Each shape you add joins the same area.'
 
 // What the "Hexagon size" choice says for Auto: the size it chose, "Auto
-// (about 3 km)", or "Auto" alone before there is a size.
+// (about 7 km)", or "Auto" alone before there is a size.
 export function autoLabel(res) {
   return res ? `Auto (about ${sizeKm(res)} km)` : 'Auto'
 }

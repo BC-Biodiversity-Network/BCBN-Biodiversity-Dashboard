@@ -8,10 +8,9 @@ import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
 // zoom buttons and the attribution line in the corner come out unstyled.
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import { boxFromCorners } from './area'
+import { boxFromCorners, selectionTest } from './area'
 import {
-  EMPTY_AREA_TOOLTIP, SHAPE_OUTLINE, areaHexagonLayer, areaId, areaLegendNote, hexagonSizeLines, shapesBounds,
-  useAnswerCache, useAreaHexagons, useAreaOutline,
+  SHAPE_OUTLINE, areaId, areaLegendNote, hexagonSizeText, lockedResolution, shapesBounds,
 } from './areaLayers'
 import AreaOfInterest from './AreaOfInterest'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
@@ -155,8 +154,8 @@ export function selectedCellLayer(cell) {
 
 // While an area is selected, every hexagon outside it keeps this share of
 // its usual opacity, so the selected ones, in their normal colours, stand
-// out.
-export const FADED_SHARE = 0.2
+// out. 0.3 for now; 0.2 and 0.35 were shown to Lucia too (2026-11-17).
+export const FADED_SHARE = 0.3
 
 // A hexagon's fill colour ([r, g, b, a]) faded for being outside the
 // selected area: the same colour, FADED_SHARE of its opacity.
@@ -215,9 +214,8 @@ const CLICK_AFTER_DRAW_MS = 400
 // caused hexagons from one zoom tier to show up under another. The outline of
 // the clicked hexagon (selectedCell, or null) comes last, above the rest.
 // While an area is selected (selection, see buildHexagonLayer), every
-// hexagon outside it is faded, and when the map's hexagons are larger than
-// the area's, areaLayer (see areaHexagonLayer in areaLayers.js) draws the
-// area's own hexagons above the map's, just after them.
+// hexagon outside it is faded; the map is then locked to the area's size
+// (see areaLayers.js), so resolution is the area's.
 //
 // A rank's map (rankOpen, with rankData its map data from the API, or null
 // while none has arrived; rankId names the rank) takes the overview's place:
@@ -225,7 +223,7 @@ const CLICK_AFTER_DRAW_MS = 400
 export function buildLayers({
   overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
   overviewFiltered = false, filteredOverview = null, selectedCell = null,
-  rankOpen = false, rankData = null, rankId = null, selection = null, areaLayer = null,
+  rankOpen = false, rankData = null, rankId = null, selection = null,
 }) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
@@ -248,11 +246,6 @@ export function buildLayers({
       filteredOverview.rows, true, schemeName, outline, selection))
   }
 
-  // The area's own hexagons, above the map's (never with a species open).
-  if (!speciesOpen && areaLayer) {
-    layers.push(areaLayer)
-  }
-
   if (speciesOpen && speciesData) {
     layers.push(buildHexagonLayer(
       speciesLayerId(speciesData.specieskey, speciesData.resolution),
@@ -270,12 +263,8 @@ export function buildLayers({
 // Turdus per hexagon", "Records of Turdus per hexagon".
 const RANK_CAPTION_WORDS = { species: 'Species', records: 'Records' }
 
-// The hover box for whichever map the pointer is over (and for an area's
-// own hexagon with no records, see areaLayers.js).
+// The hover box for whichever map the pointer is over.
 function tooltipFor(info) {
-  if (info.object?.empty) {
-    return EMPTY_AREA_TOOLTIP
-  }
   return info.layer?.id.startsWith('species-') ? getSpeciesTooltip(info) : getTooltip(info)
 }
 
@@ -424,10 +413,9 @@ function apiStatus(hexes, what) {
 // area.js), which adds it to the area (res, the level the map shows then,
 // plays no part any more: the area's hexagon size is its own, Auto or
 // picked in the panel, onAreaSizeChange(res or null)). selectedArea is the area ({ shapes, res, cells }, or null):
-// every hexagon outside it is faded, at its own resolution whatever the
-// zoom; when the map's hexagons are larger than the area's, all of them are
-// faded and the area's own hexagons are drawn on top (see areaLayers.js);
-// and each shape is outlined (SHAPE_OUTLINE). areaMessage (or
+// while there is one, the whole map shows hexagons of the area's size at
+// every zoom (see areaLayers.js), every hexagon outside it is faded, and
+// each shape is outlined (SHAPE_OUTLINE). areaMessage (or
 // null) is shown in the panel, for a shape refused, with an x that calls
 // onDismissAreaMessage. onAreaPasted(text) adds the shapes of a text pasted
 // in the panel's Paste tab and returns null, or why nothing was added.
@@ -442,23 +430,27 @@ export default function HexMap({
   onAreaPasted = () => null, onAreaSizeChange = () => {},
 }) {
   const mapRef = useRef(null)
-  // The answers from the API's maps, shared by the map and the area's own
-  // hexagons (see areaLayers.js), so neither asks for one the other has.
-  const apiCache = useAnswerCache()
-  const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
+  // The size the zoom chooses, the size an area locks the map to (null for
+  // none, see lockedResolution), and the size the map shows: the area's
+  // while there is one, else the zoom's.
+  const [zoomResolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
+  const lockedRes = lockedResolution(selectedArea, Boolean(species))
+  const resolution = lockedRes ?? zoomResolution
   const [schemeName, setSchemeName] = useState(DEFAULT_SCHEME)
-  // How strong the hexagon outline is, 0 to 1, from how big hexagons are on
-  // screen (see outlineOpacity). Only changes in quarter steps.
+  // How strong the hexagon outline is, 0 to 1, from how big hexagons of the
+  // size shown are on screen at the map's zoom (zoomNow; see outlineOpacity).
+  // Only changes in quarter steps.
+  const zoomNow = useRef(INITIAL_VIEW_STATE.zoom)
   const [outline, setOutline] = useState(
     () => outlineOpacity(hexagonWidthPixels(resolution, INITIAL_VIEW_STATE.zoom)))
   const speciesHexes = useSpeciesHexes(species?.key ?? null, years, resolution)
   const speciesData = species ? speciesHexes.data : null
   // The rank's map, only asked for while a rank (and no species) is open.
   const rankOpen = Boolean(rank) && !species
-  const rankHexes = useRankHexes(rankOpen ? rank : null, years, resolution, apiCache)
+  const rankHexes = useRankHexes(rankOpen ? rank : null, years, resolution)
   const rankData = rankOpen ? rankHexes.data : null
   // The overview for a year range, only asked for while no species or rank is open.
-  const overviewHexes = useOverviewHexes(species || rankOpen ? null : years, resolution, apiCache)
+  const overviewHexes = useOverviewHexes(species || rankOpen ? null : years, resolution)
   const overviewFiltered = years !== null
   // The id of the species the map was last moved to.
   const fittedFor = useRef(null)
@@ -469,26 +461,25 @@ export default function HexMap({
   const lastDrawn = useRef(0)
   // Whether the "Create an area of interest" panel is open.
   const [areaPanelOpen, setAreaPanelOpen] = useState(false)
-  // While an area is selected: which map hexagons are in it, and the
-  // area's own hexagons when the map's are larger (see areaLayers.js).
-  const areaHexagons = useAreaHexagons({
-    area: species ? null : selectedArea, mapRes: resolution, overviewRows: overview.rows, years,
-    rankRef: rankOpen ? rank : null, cache: apiCache,
-  })
-  const selection = areaHexagons.selection
-  const [areaOutline, onAreaZoom] = useAreaOutline(selectedArea?.res ?? null, INITIAL_VIEW_STATE.zoom)
-  const areaLayer = useMemo(
-    () => areaHexagonLayer(areaHexagons, selectedArea, schemeName, areaOutline, FIRST_LABEL_LAYER_ID),
-    [areaHexagons.drawn, areaHexagons.rows, areaHexagons.layerKey, selectedArea, schemeName, areaOutline])
+  // While an area is selected: which hexagons are in it (see
+  // buildHexagonLayer), worked out once per area.
+  const selection = useMemo(
+    () => (selectedArea ? { test: selectionTest(selectedArea.cells, selectedArea.res), key: areaId(selectedArea) } : null),
+    [selectedArea])
+
+  // The outline's strength for a new size shown without the map moving (an
+  // area added, cleared or resized).
+  useEffect(() => {
+    setOutline(outlineOpacity(hexagonWidthPixels(resolution, zoomNow.current)))
+  }, [resolution])
 
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
       overviewFiltered, filteredOverview: overviewHexes.data, selectedCell, rankOpen, rankData, rankId, selection,
-      areaLayer,
     }),
     [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data,
-      selectedCell, rankOpen, rankData, rankId, selection, areaLayer],
+      selectedCell, rankOpen, rankData, rankId, selection],
   )
 
   // Esc cancels drawing; so does opening a single species' map, where
@@ -578,12 +569,12 @@ export default function HexMap({
   // address names a hexagon the map does not show that way, for example
   // after the back button returns to its panel from another box or another
   // species' map: the map moves to it when it is off screen, and zooms to
-  // hexagons of its size when the map shows another size. The outline itself
+  // hexagons of its size when the map shows another size. While an area
+  // locks the map's size, zooming would not change the size, so the map only
+  // moves to a hexagon of another size, without zooming. The outline itself
   // comes from the address (selectedCell), so the panel and the outline
   // always name the same hexagon. A clicked hexagon is on screen at its own
-  // size already, so the map does not move then; nor does it for one of the
-  // area's own hexagons drawn above larger map hexagons, which shows at its
-  // own size whatever the zoom. Before the map has loaded,
+  // size already, so the map does not move then. Before the map has loaded,
   // handleLoad places it instead. (map.loaded() is not used here: MapLibre
   // says false while any source is still updating, which it is right after
   // Back as the area's outline goes, so the map never moved.)
@@ -594,11 +585,10 @@ export default function HexMap({
     }
     const [lat, lng] = cellToLatLng(selectedCell)
     const cellResolution = getResolution(selectedCell)
-    const otherSize = cellResolution !== resolutionNow.current && !areaHexagons.shows(selectedCell)
+    const otherSize = cellResolution !== resolutionNow.current
     if (otherSize || !map.getBounds().contains([lng, lat])) {
-      map.easeTo({
-        center: [lng, lat], ...(otherSize ? { zoom: zoomShowingResolution(cellResolution) } : {}), duration: 900,
-      })
+      const zoom = otherSize && lockedRes === null ? { zoom: zoomShowingResolution(cellResolution) } : {}
+      map.easeTo({ center: [lng, lat], ...zoom, duration: 900 })
     }
   }, [selectedCell, species?.id])
 
@@ -623,10 +613,9 @@ export default function HexMap({
   }
 
   // Opens the panel of the hexagon under a click, on either map; not while
-  // drawing a box, nor just after one is drawn (letting go of the mouse),
-  // nor for an area's own hexagon with no records.
+  // drawing a box, nor just after one is drawn (letting go of the mouse).
   function handleClick(info) {
-    const cell = info.object?.empty ? null : info.object?.h3Cell
+    const cell = info.object?.h3Cell
     if (cell && !drawing && Date.now() - lastDrawn.current > CLICK_AFTER_DRAW_MS) {
       onCellClick(cell)
     }
@@ -701,22 +690,24 @@ export default function HexMap({
   // Called whenever the map moves. Only stores a new resolution when the tier
   // actually changes, and a new outline strength when it moves to another
   // quarter step, so panning and ordinary zooming do not redraw the page.
+  // While an area locks the size, the tier is still followed (for when the
+  // area is cleared), and the outline is for the locked size.
   function handleMove(event) {
     const { zoom } = event.viewState
-    const wanted = pickResolution(zoom, resolution)
-    if (wanted !== resolution) {
+    zoomNow.current = zoom
+    const wanted = pickResolution(zoom, zoomResolution)
+    if (wanted !== zoomResolution) {
       setResolution(wanted)
     }
-    const wantedOutline = outlineOpacity(hexagonWidthPixels(wanted, zoom))
+    const wantedOutline = outlineOpacity(hexagonWidthPixels(lockedRes ?? wanted, zoom))
     if (wantedOutline !== outline) {
       setOutline(wantedOutline)
     }
-    onAreaZoom(zoom)
   }
 
   const overviewReady = !overview.loading && !overview.error
-  // The legend's line about the area's own hexagons, or null.
-  const areaNote = areaLegendNote(areaHexagons, selectedArea)
+  // The legend's line while an area locks the map's size, or null.
+  const areaNote = areaLegendNote(lockedRes)
 
   let legend = null
   if (rankOpen) {
@@ -782,9 +773,7 @@ export default function HexMap({
               </button>
             </div>
           )}
-          <div className="hex-size-label">
-            {hexagonSizeLines(resolution, species ? null : selectedArea).map((line) => <div key={line}>{line}</div>)}
-          </div>
+          <div className="hex-size-label">{hexagonSizeText(resolution, lockedRes !== null)}</div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
           <AreaOfInterest open={areaPanelOpen} onOpenChange={openAreaPanel}

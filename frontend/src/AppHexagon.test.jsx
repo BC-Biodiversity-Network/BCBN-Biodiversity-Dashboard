@@ -758,8 +758,8 @@ describe('the year range and the address', () => {
 })
 
 describe('an area of interest', () => {
-  // A box around Kamloops (45 hexagons at resolution 6, 249 at 7, the size
-  // Auto picks for it, as for the others below), one near Prince
+  // A box around Kamloops (45 hexagons at resolution 6, the size Auto picks
+  // for it, as for the others below; 249 at 7), one near Prince
   // George (fully outside it), one over the east part of the Kamloops box,
   // and a box far too small to ask about; the addresses of areas of them.
   const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
@@ -773,7 +773,7 @@ describe('an area of interest', () => {
   const BOTH_SEARCH = `?area=${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`
   const PRINCE_GEORGE_SEARCH = `?area=${PRINCE_GEORGE_TEXT}`
   // How many hexagons the Kamloops box touches at the size Auto picks.
-  const KAMLOOPS_CELLS = boxCells(KAMLOOPS, 7).length
+  const KAMLOOPS_CELLS = boxCells(KAMLOOPS, 6).length
 
   // Draws a box on the map, at a resolution.
   function drawBox(box, res = 6) {
@@ -828,9 +828,9 @@ describe('an area of interest', () => {
     await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     expect(calls()).toEqual({ added: 1, replaced: 0 })
     expect(window.history.state).toEqual({ areaDepth: 0, areaBefore: '' })
-    expect(areaText()).toBe(`Area ${KAMLOOPS_TEXT} at 7 (${KAMLOOPS_CELLS} hexagons) on the overview`)
+    expect(areaText()).toBe(`Area ${KAMLOOPS_TEXT} at 6 (${KAMLOOPS_CELLS} hexagons) on the overview`)
     expect(seen.map.selectedArea.cells).toHaveLength(KAMLOOPS_CELLS)
-    expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([7, false])
+    expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, false])
     expect(seen.map.onClearArea).toBeTypeOf('function')
     expect(seen.map.onShowArea).toBeNull()
   })
@@ -843,9 +843,9 @@ describe('an area of interest', () => {
     expect(history.goes).not.toHaveBeenCalled()
     expect(window.history.state).toEqual({ areaDepth: 1, areaBefore: '' })
     expect(mapAreaText()).toBe(`${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`)
-    expect(areaText()).toContain(`Area ${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT} at 7`)
+    expect(areaText()).toContain(`Area ${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT} at 6`)
     const both = [boxShapeOf(KAMLOOPS), boxShapeOf(PRINCE_GEORGE)]
-    expect(seen.map.selectedArea.cells).toEqual(shapesCells(both, 7).cells)
+    expect(seen.map.selectedArea.cells).toEqual(shapesCells(both, 6).cells)
     // Back: the area with only the first box, then before it.
     await pressBack(KAMLOOPS_SEARCH)
     expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
@@ -859,9 +859,9 @@ describe('an area of interest', () => {
     await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH, 4)
     // Drawn while the map shows another size: the zoom plays no part.
     await drawBoxAndWait(OVERLAPPING, `?area=${KAMLOOPS_TEXT};b:-120.3,50.7,-119.8,50.95`, 5)
-    const joined = shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(OVERLAPPING)], 7).cells
+    const joined = shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(OVERLAPPING)], 6).cells
     expect(seen.map.selectedArea.cells).toEqual(joined)
-    expect(joined.length).toBeLessThan(KAMLOOPS_CELLS + boxCells(OVERLAPPING, 7).length)
+    expect(joined.length).toBeLessThan(KAMLOOPS_CELLS + boxCells(OVERLAPPING, 6).length)
   })
 
   it('keeps the area when a new box is refused, and says why in the API\'s words', async () => {
@@ -1141,14 +1141,21 @@ describe('an area of interest', () => {
     it('lets Auto choose again when shapes are added or removed', async () => {
       await openAt('')
       await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
-      expect(seen.map.selectedArea.res).toBe(7)
-      // Most of BC does not fit at the smallest size: the whole area moves up one.
+      expect(seen.map.selectedArea.res).toBe(6)
+      // Most of BC still fits at about 7 km: the size stays.
       await drawBoxAndWait(BC, `?area=${KAMLOOPS_TEXT};${BC_TEXT}`)
       expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, false])
       expect(seen.map.selectedArea.cells).toEqual(shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(BC)], 6).cells)
-      // Without it, back to the smallest.
       await pressMapButton('Back', KAMLOOPS_SEARCH)
-      expect(seen.map.selectedArea.res).toBe(7)
+      // A box of about 75 km², too small for about 7 km: the whole area
+      // moves down to about 3 km.
+      const small = { west: -120.3, south: 50.6, east: -120.18, north: 50.68 }
+      await drawBoxAndWait(small, `?area=${KAMLOOPS_TEXT};b:-120.3,50.6,-120.18,50.68`)
+      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([7, false])
+      expect(seen.map.selectedArea.cells).toEqual(shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(small)], 7).cells)
+      // Without it, back to about 7 km.
+      await pressMapButton('Back', KAMLOOPS_SEARCH)
+      expect(seen.map.selectedArea.res).toBe(6)
     })
 
     it('keeps a size picked as one history step, until Auto is chosen again or the area cleared', async () => {
@@ -1166,8 +1173,8 @@ describe('an area of interest', () => {
       // The browser's Back undoes the box, then the size.
       await pressBack(`${KAMLOOPS_SEARCH}&area_res=6`)
       await pressBack(KAMLOOPS_SEARCH)
-      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([7, false])
-      // Picked again (the smallest, the same as Auto's choice but kept), then Auto again.
+      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, false])
+      // Picked again (about 3 km, smaller than Auto's choice), then Auto again.
       pickSize(7)
       await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=7`))
       pickSize(null)
@@ -1269,7 +1276,7 @@ describe('an area of interest', () => {
       await act(async () => {})
       expect(calls()).toEqual({ added: 1, replaced: 0 })
       expect(seen.map.selectedArea.shapes.map((shape) => shape.isBox)).toEqual([false, false])
-      expect(areaText()).toBe(`Area ${TWO_TEXT} at 7 (${seen.map.selectedArea.cells.length} hexagons) on the overview`)
+      expect(areaText()).toBe(`Area ${TWO_TEXT} at 6 (${seen.map.selectedArea.cells.length} hexagons) on the overview`)
       await pressBack('')
       expect(seen.map.selectedArea).toBeNull()
     })

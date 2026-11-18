@@ -148,6 +148,26 @@ def gbif_rings_search_url(keys, rings, years=None):
     return gbif_search_url(keys, rings_wkt(rings), years)
 
 
+def gbif_area_link_maker(rings, years=None):
+    """Return a function that writes the GBIF search for some species keys
+    inside an area of shapes (rings, see rings_wkt) for the years: the same
+    text as gbif_rings_search_url(keys, rings, years), but with the area's
+    outline written and encoded once, so the CSV of an area does not write a
+    detailed outline again for each of its thousands of rows. The function
+    takes the keys (a card's key and every key merged into it)."""
+    params = [("geometry", one) for one in rings_wkt(rings)] + [("occurrenceStatus", "PRESENT")]
+    if years:
+        params.append(("year", f"{years[0]},{years[1]}"))
+    tail = "&".join(f"{form_encode(name)}={form_encode(str(value))}" for name, value in params)
+    head = f"{GBIF_OCCURRENCE_SEARCH}?{form_encode('checklistKey')}={form_encode(GBIF_CHECKLIST_KEY)}"
+
+    def link(keys):
+        """Return the search for these keys inside the area."""
+        return head + "".join(f"&taxonKey={form_encode(str(key))}" for key in keys) + "&" + tail
+
+    return link
+
+
 def gbif_search_url(keys, geometry, years=None):
     """Write a GBIF occurrence search address, the one place the links are
     made: the Catalogue of Life checklist, one taxonKey per key, the area

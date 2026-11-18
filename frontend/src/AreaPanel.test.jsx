@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import AreaPanel, { areaSizeText, wholeHexagonsNote } from './AreaPanel'
+import AreaPanel, { CSV_LINK_ONCE_NOTE, areaSizeText, wholeHexagonsNote } from './AreaPanel'
 import { boxShapeOf, readAreaText } from './areaShapes'
 import {
   AREA_BC_ONLY_NOTE, AREA_GBIF_NOTE, GBIF_COUNT_NOTE, areaGbifNote, gbifAreaSearchUrl, gbifBoxSearchUrl,
@@ -104,6 +104,20 @@ describe('the area panel', () => {
     expect(screen.getByRole('combobox')).toBeTruthy()
     expect(urls()[0]).toBe('/api/area?offset=0&limit=50&area=b%3A-120.6%2C50.55%2C-120.1%2C50.8&res=6'
       + '&year_from=2000&q=robin&status=yellow&sort=english')
+  })
+
+  it('says beside Download CSV when the CSV gives the GBIF link once, and not otherwise', async () => {
+    stubArea(() => ({ body: answer({ csv_link_once: true }) }))
+    show()
+    const link = await screen.findByRole('link', { name: 'Download the species in this area as a CSV file' })
+    expect(link.closest('.csv-download').nextElementSibling.textContent).toBe(CSV_LINK_ONCE_NOTE)
+    expect(CSV_LINK_ONCE_NOTE).toBe('This area is detailed, so the CSV gives the GBIF link once at the top instead of '
+      + 'on every row.')
+    cleanup()
+    stubArea(() => ({ body: answer({ csv_link_once: false }) }))
+    show()
+    await screen.findByRole('link', { name: 'Download the species in this area as a CSV file' })
+    expect(screen.queryByText(CSV_LINK_ONCE_NOTE)).toBeNull()
   })
 
   it('downloads the whole list, never one page of it', async () => {

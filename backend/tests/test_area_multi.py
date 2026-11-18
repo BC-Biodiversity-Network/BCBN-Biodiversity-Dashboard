@@ -463,3 +463,94 @@ def test_too_many_points_and_too_long_a_text_are_refused(client):
     assert response.json()["detail"].startswith("The area has 251 points, more than the 250")
     from api.area import AREA_TEXT_MAX_LENGTH
     assert get_area(client, area="b:" + "1" * AREA_TEXT_MAX_LENGTH, res=7).status_code == 422
+
+
+
+# --- A detailed area's CSV gives its GBIF link once -------------------------------------------
+
+from api.area import CSV_ROW_BYTES_BESIDE_LINK, CSV_ROW_LINKS_MAX_BYTES, csv_link_once  # noqa: E402
+from api.export import AREA_COLUMNS, AREA_LINK_ONCE_LINES, r_line  # noqa: E402
+from api.gbif_links import gbif_area_link_maker, gbif_rings_search_url  # noqa: E402
+
+
+def download(client, **params):
+    """Ask for an area CSV and return (header lines, column names, rows as
+    dicts), each header line's text without its quotes."""
+    import csv as csv_module
+    import io
+    response = client.get("/api/export/area", params=params)
+    assert response.status_code == 200, response.text
+    rows = list(csv_module.reader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
+    count = next(index for index, row in enumerate(rows) if not row[0].startswith("# "))
+    assert all(len(row) == 1 for row in rows[:count])
+    columns = rows[count]
+    return [row[0] for row in rows[:count]], columns, [dict(zip(columns, row)) for row in rows[count + 1:]]
+
+
+def test_the_link_maker_writes_exactly_the_links_it_replaces():
+    shapes = read_area_shapes(f"{A_BOX};{B_TRIANGLE};{circle_text(120)}")
+    rings = [shape.ring for shape in shapes]
+    for years in (None, (2000, 2020)):
+        make = gbif_area_link_maker(rings, years)
+        for keys in ([], ["AAAA"], ["BBBB", "OLD1"]):
+            assert make(keys) == gbif_rings_search_url(keys, rings, years)
+
+
+def test_the_limit_is_decided_in_one_place():
+    assert CSV_ROW_LINKS_MAX_BYTES == 50_000_000
+    rows = CSV_ROW_LINKS_MAX_BYTES // (CSV_ROW_BYTES_BESIDE_LINK + 1000)
+    assert not csv_link_once(rows, 1000)
+    assert csv_link_once(rows + 1, 1000)
+
+
+def test_under_the_limit_every_row_has_its_link_and_taxon_key(client):
+    text = f"{A_BOX};{B_TRIANGLE}"
+    answer = get_area(client, area=text, res=7).json()
+    assert answer["csv_link_once"] is False
+    header, columns, rows = download(client, area=text, res=7)
+    assert len(header) == 4 and header[3] == "# " + r_line(4)
+    assert columns == AREA_COLUMNS == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records",
+                                       "taxon_key", "gbif_link"]
+    rings = [shape.ring for shape in read_area_shapes(text)]
+    by_key = {row["specieskey"]: row for row in rows}
+    assert by_key["BBBB"]["taxon_key"] == "BBBB | OLD1"
+    assert by_key["BBBB"]["gbif_link"] == gbif_rings_search_url(["BBBB", "OLD1"], rings)
+    assert by_key["AAAA"]["taxon_key"] == "AAAA"
+
+
+def test_over_the_limit_the_header_gives_the_link_once(client, monkeypatch):
+    # A limit so low that the test area's two-row file is over it.
+    monkeypatch.setattr(api.area, "CSV_ROW_LINKS_MAX_BYTES", 100)
+    text = f"{A_BOX};{B_TRIANGLE}"
+    answer = get_area(client, area=text, res=7).json()
+    assert answer["csv_link_once"] is True
+    # The panel's page of species still has each species' link.
+    assert all(result["gbif_link"] for result in answer["results"])
+    header, columns, rows = download(client, area=text, res=7)
+    assert columns == AREA_COLUMNS
+    assert all(row["gbif_link"] == "" for row in rows)
+    assert {row["specieskey"]: row["taxon_key"] for row in rows}["BBBB"] == "BBBB | OLD1"
+    assert len(header) == 9
+    assert header[3] == f"# GBIF link for this whole area: {answer['area_gbif_link']}"
+    assert header[4:8] == [
+        "# This area is too detailed to repeat its outline on every row, so each row has the species' GBIF "
+        "taxon_key instead of a link.",
+        "# To see one species in this area on GBIF:",
+        "# 1. Open the link above.",
+        '# 2. Choose the species under "Scientific name" in GBIF\'s filters, or add &taxonKey= and the row\'s '
+        "taxon_key to the end of the link (once for each key, when the row has several).",
+    ]
+    assert header[8] == "# To read in R: read.csv(file, skip = 9)"
+    assert len(AREA_LINK_ONCE_LINES) == 5
+
+
+def test_over_the_limit_the_file_still_reads_with_its_own_skip(client, monkeypatch):
+    import io
+
+    import pandas
+    monkeypatch.setattr(api.area, "CSV_ROW_LINKS_MAX_BYTES", 100)
+    response = client.get("/api/export/area", params={"area": f"{A_BOX};{B_TRIANGLE}", "res": 7})
+    frame = pandas.read_csv(io.BytesIO(response.content), skiprows=9, encoding="utf-8-sig", dtype=str,
+                            keep_default_na=False)
+    assert list(frame.columns) == AREA_COLUMNS
+    assert set(frame["specieskey"]) == {"AAAA", "BBBB", "CCCC", "DDDD"}

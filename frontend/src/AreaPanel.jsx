@@ -35,6 +35,11 @@ export function wholeHexagonsNote(area) {
   return 'It counts the whole of every hexagon the shapes touch, so the area counted is larger than the shapes.'
 }
 
+// The note beside "Download CSV" when the API says the area is too detailed
+// to repeat its GBIF link on every row of the CSV (csv_link_once).
+export const CSV_LINK_ONCE_NOTE = 'This area is detailed, so the CSV gives the GBIF link once at the top instead of on '
+  + 'every row.'
+
 // The message when the area's answer could not be loaded: the API's own
 // words for a request it refused (a box too small or too big, say), else
 // that the API could not be reached or failed.
@@ -112,6 +117,7 @@ export default function AreaPanel({
                   not while they load or with nothing to list. */}
               <CsvDownload href={areaExportUrl(area, options)} disabled={!current || data.matching === 0}
                 label="Download the species in this area as a CSV file" />
+              {data.csv_link_once && <p className="hexagon-note">{CSV_LINK_ONCE_NOTE}</p>}
               {data.matching === 0
                 ? <p className="hexagon-note">{noMatchText(list)}</p>
                 : (

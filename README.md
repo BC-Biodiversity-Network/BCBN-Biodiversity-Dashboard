@@ -1222,7 +1222,7 @@ work out goes in.
 | `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `licence` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
-| `GET /api/export/area` | as `/api/area` (see "The area search" below): the area (`area=`, or an old request's box), `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the area's shapes) |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the area (`area=`, or an old request's box), `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5, `taxon_key` and `gbif_link` (the species inside the area's shapes; see "A detailed area" below) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1332,6 +1332,38 @@ work out goes in.
   in UTC, the date GBIF cites it by and the species card shows. `gbif_link` is the GBIF search the hexagon
   panel links to for that species: its card key and every key merged into
   it, the hexagon, and the years counted.
+- **A detailed area.** The area download has `taxon_key` (the species'
+  GBIF taxon keys, its card key and every key merged into it, joined with
+  ` | `) and `gbif_link`, the GBIF search for that species inside the
+  area's shapes, one `geometry` per shape. That link holds the whole
+  outline, so a detailed area made every row long: 50 boxes over about
+  34,000 species gave 254 MB in 48 s. Two changes (November 2026). First,
+  the outline is written and encoded once and reused for every row
+  (`gbif_area_link_maker` in `backend/api/gbif_links.py`; the same text as
+  before): that alone took the 50 boxes from 48 s to 6.4 s, a 250-point
+  polygon from 38 s to 4.9 s and one box from 2.6 s to 1.5 s. Second,
+  before writing the file its size is estimated, the rows (the list's
+  `matching`) times 60 bytes beside the link (40 to 43 on average, 88 at
+  most, measured) plus the link's length, and when it is over
+  `CSV_ROW_LINKS_MAX_BYTES` (50 MB) `gbif_link` is left empty on every row
+  (`csv_link_once` in `backend/api/area.py`, the one place this is
+  decided). Measured as a browser downloads it (gzip): 30 MB took 1.4 s,
+  110 MB 3.4 s, 254 MB 6.5 s; the largest file kept under the limit, 47.6
+  MB, takes 1.9 s, and a file over it, now about 1 to 2 MB, about 1 to 1.5
+  s. The header then has 5 more lines before the line for R, which counts
+  them all (`AREA_LINK_ONCE_LINES` in `export.py`): "GBIF link for this
+  whole area: ...", "This area is too detailed to repeat its outline on
+  every row, so each row has the species' GBIF taxon_key instead of a
+  link.", "To see one species in this area on GBIF:", "1. Open the link
+  above." and "2. Choose the species under "Scientific name" in GBIF's
+  filters, or add &taxonKey= and the row's taxon_key to the end of the link
+  (once for each key, when the row has several).", then "To read in R:
+  read.csv(file, skip = 9)". GBIF's search page takes a species as
+  `taxonKey`, as every link of the site does (on GBIF's API, the one-box
+  Kamloops link gave 421,901 records, and with `&taxonKey=59PMB` 6,520, all
+  *Turdus migratorius*). The area answer says it as `csv_link_once`, and
+  the area panel then says beside "Download CSV": "This area is detailed,
+  so the CSV gives the GBIF link once at the top instead of on every row."
 - **The file.** UTF-8 with a byte order mark (BOM) at the very start, so
   Excel on Windows shows accented letters correctly; standard CSV quoting
   (a value with a comma, a quote mark or a line break is quoted); lines
@@ -1340,7 +1372,8 @@ work out goes in.
   `bcbn_species_Chordata_2000-2020_2026-11-09.csv` or
   `bcbn_species_hexagon_872800b30ffffff_2026-11-09.csv` (letters, digits,
   `-` and `_` only; the date is the export date in Vancouver). It always
-  starts (after the BOM) with exactly 4 lines, each one CSV field in double
+  starts (after the BOM) with exactly 4 lines (9 for a detailed area, see
+  above, its last line saying so), each one CSV field in double
   quotes starting with `# ` (a quote mark inside written twice, by Python's
   `csv` module), so a spreadsheet such as Excel shows each line whole in
   column A instead of splitting it at its commas, for example

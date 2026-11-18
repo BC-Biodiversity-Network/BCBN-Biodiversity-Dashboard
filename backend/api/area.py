@@ -75,7 +75,7 @@ from dataclasses import dataclass
 import h3
 
 from api.cells import DEFAULT_PAGE_SIZE, cards_gbif_keys, hexagons_list
-from api.gbif_links import gbif_rings_search_url
+from api.gbif_links import gbif_area_link_maker, gbif_rings_search_url
 from api.hexes import HexesRequestError, year_range
 from api.ranks import require_rank
 from api.sensitive import hidden_species
@@ -104,6 +104,20 @@ MAX_AREA_POINTS = 250
 # more decimals, and is as long as a whole request may be for uvicorn (16
 # KB), so it only stops a request that could not get through anyway.
 AREA_TEXT_MAX_LENGTH = 16_000
+
+# The largest area CSV, estimated before it is written, that still gives
+# each species row its own GBIF link (a link holds the whole area's outline,
+# so a detailed area makes every row long). Measured on a laptop in November
+# 2026, downloading as a browser does (gzip): 30 MB took 1.4 s, 110 MB 3.4 s
+# and 254 MB 6.5 s, so about 50 MB takes 2 s. Past it, each row has the
+# species' GBIF taxon keys instead and the area's link is given once in the
+# header (see csv_link_once).
+CSV_ROW_LINKS_MAX_BYTES = 50_000_000
+
+# What a species row of the area CSV takes beside its link, in bytes, for
+# the estimate: 40 to 43 on average and 88 at most on the real data in
+# November 2026, plus the taxon_key column.
+CSV_ROW_BYTES_BESIDE_LINK = 60
 
 # The radius of the sphere H3 measures areas on, in km (H3's authalic Earth
 # radius), so a box's area compares with h3.average_hexagon_area.
@@ -651,6 +665,15 @@ def box_shape(west, south, east, north):
     return [AreaShape(ring=((w, s), (e, s), (e, n), (w, n)), is_box=True, box=box)]
 
 
+def csv_link_once(row_count, link_length):
+    """Whether the area CSV gives the area's GBIF link once, in its header,
+    instead of on every species row: when its estimated size, row_count rows
+    of CSV_ROW_BYTES_BESIDE_LINK bytes plus a link of link_length characters
+    each, is over CSV_ROW_LINKS_MAX_BYTES. The one place this is decided:
+    the area answer says it (csv_link_once) and the CSV follows it."""
+    return row_count * (CSV_ROW_BYTES_BESIDE_LINK + link_length) > CSV_ROW_LINKS_MAX_BYTES
+
+
 def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset=0,
                  limit=DEFAULT_PAGE_SIZE, rank=None, rank_given=None, statuses=None, sort=None):
     """Return the answer for the hexagons under an area (see the top of this
@@ -680,12 +703,19 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
     cells = area_cells(shapes, res)
     _, part = hexagons_list(data, cursor, res, cells, years, hidden, q, statuses, sort, offset, limit, path)
 
-    # Each species' GBIF search inside the area's shapes (one geometry per
-    # shape; for one box, the box's own link), for the years counted.
+    # Each species' GBIF taxon keys (its card key and every key merged into
+    # it) and its GBIF search inside the area's shapes (one geometry per
+    # shape; for one box, the box's own link), for the years counted. The
+    # outline is written once and reused for every species. For the CSV
+    # (limit None) of an area too detailed to repeat it on every row
+    # (csv_link_once), the rows get no link at all, only the keys.
     keys = cards_gbif_keys(cursor, [result["specieskey"] for result in part["results"]])
     rings = [shape.ring for shape in shapes]
+    area_link = gbif_area_link_maker(rings, years)
+    link_once = csv_link_once(part["matching"], len(area_link(["XXXXX"])))
     for result in part["results"]:
-        result["gbif_link"] = gbif_rings_search_url(keys[result["specieskey"]], rings, years)
+        result["taxon_keys"] = keys[result["specieskey"]]
+        result["gbif_link"] = None if link_once and limit is None else area_link(result["taxon_keys"])
 
     return {
         "box": dict(zip(("west", "south", "east", "north"), box)) if box else None,
@@ -704,6 +734,9 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
         # these records on GBIF" (gbifAreaSearchUrl in gbifLinks.js gives
         # the same link).
         "area_gbif_link": gbif_rings_search_url([], rings, years),
+        # Whether the CSV of this list gives that link once, in its header,
+        # instead of a link on every row (see csv_link_once).
+        "csv_link_once": link_once,
         "year_from": year_from,
         "year_to": year_to,
         # The years actually counted (a missing bound filled in), or null

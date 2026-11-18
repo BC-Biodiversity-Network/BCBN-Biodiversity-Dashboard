@@ -53,8 +53,14 @@ first and last records, and so on) goes in a file.
     Hexagon species list (6 columns): the same 5 and gbif_link, the GBIF
         search the hexagon panel links to for that species, hexagon and
         years (gbif_links.py).
-    Area species list (6 columns): the same 6, gbif_link being the GBIF
-        search for that species inside the box (area.py).
+    Area species list (7 columns): the same 5, taxon_key (the species'
+        GBIF taxon keys, its card key and every key merged into it, joined
+        with " | ") and gbif_link, the GBIF search for that species inside
+        the area's shapes (area.py). For an area too detailed to repeat its
+        outline on every row (csv_link_once in area.py: the file would be
+        over about 50 MB), gbif_link is left empty and the header gives the
+        area's own GBIF link once, with how to use taxon_key with it
+        (AREA_LINK_ONCE_LINES), so that file has more than 4 header lines.
 
 The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
 start, so Excel on Windows reads it as UTF-8 and shows accented letters
@@ -96,14 +102,40 @@ VANCOUVER = ZoneInfo("America/Vancouver")
 BOM = "\ufeff"
 
 # How many "# " lines come before the column names, and the last of them.
+# Every file has 4, except an area's that is too detailed to repeat its
+# GBIF link on every row (see AREA_LINK_ONCE_LINES); its last line then says
+# how many to skip.
 HEADER_LINE_COUNT = 4
-R_LINE = "To read in R: read.csv(file, skip = 4)"
+
+
+def r_line(count):
+    """Return the last header line of a file with count header lines: how to
+    read it in R, skipping them all."""
+    return f"To read in R: read.csv(file, skip = {count})"
+
+
+R_LINE = r_line(HEADER_LINE_COUNT)
+
+# The header lines an area CSV gets, after its source line, when each row
+# has the species' GBIF taxon keys instead of a link (csv_link_once in
+# area.py). {link} is the area's own GBIF link, for every species. GBIF's
+# search page takes a species as taxonKey (the parameter our own links use).
+AREA_LINK_ONCE_LINES = [
+    "GBIF link for this whole area: {link}",
+    "This area is too detailed to repeat its outline on every row, so each row has the species' GBIF taxon_key "
+    "instead of a link.",
+    "To see one species in this area on GBIF:",
+    "1. Open the link above.",
+    '2. Choose the species under "Scientific name" in GBIF\'s filters, or add &taxonKey= and the row\'s taxon_key '
+    "to the end of the link (once for each key, when the row has several).",
+]
 
 # The columns of each file.
 DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
                    "licence"]
 SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
+AREA_COLUMNS = SPECIES_COLUMNS + ["taxon_key", "gbif_link"]
 
 # What each dataset row is read from (d is lunaris_datasets, s is
 # dataset_search, whose checked_licences are the source check's): the id,
@@ -197,14 +229,16 @@ def file_name(kind, parts, date):
 
 
 def csv_text(header_lines, columns, rows):
-    """Return the whole file: the 4 header lines, each starting with "# ",
-    the column names, and the rows, with standard CSV quoting. None is
+    """Return the whole file: the header lines (4, or more for a detailed
+    area), each starting with "# ", the last saying how many to skip in R,
+    then the column names, and the rows, with standard CSV quoting. None is
     written as an empty value. Each header line is one quoted CSV field,
     so a spreadsheet shows the whole sentence in its first column instead
     of cutting it at every comma."""
     lines = [one_line(line) for line in header_lines]
-    if len(lines) != HEADER_LINE_COUNT:
-        raise ValueError(f"a download has exactly {HEADER_LINE_COUNT} header lines; got {len(lines)}")
+    if len(lines) < HEADER_LINE_COUNT or lines[-1] != r_line(len(lines)):
+        raise ValueError(f"a download has at least {HEADER_LINE_COUNT} header lines, the last saying how many to "
+                         f"skip; got {len(lines)}")
     buffer = io.StringIO(newline="")
     # The header lines: always in double quotes, any quote mark inside
     # written twice, by the csv module's own quoting. one_line has already
@@ -490,14 +524,19 @@ def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
                 year_from=None, year_to=None, rank=None, rank_given=None, area_from_text=False):
     """Return (file name, CSV text) of every species in the hexagons under
     an area (shapes, a list of AreaShape) for these options, in the list's
-    order, each with its GBIF search inside the area for the years counted.
+    order, each with its GBIF taxon keys (taxon_key) and its GBIF search
+    inside the area for the years counted; for an area too detailed to
+    repeat its outline on every row (the answer's csv_link_once), the rows
+    have no link and the header gives the area's link once, with how to use
+    the keys with it (AREA_LINK_ONCE_LINES), before the line for R.
     area_from_text says the area came as area text, so header line 2
     describes its shapes (area_text); an old request's box keeps its old
     words. The list is the area search's own (area_species with no page
     limit), so it raises what that raises."""
     answer = area_species(data, shapes, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
-    rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
+    rows = [species_row(result, result["records"]) + [joined_values(result["taxon_keys"]), result["gbif_link"]]
+            for result in answer["results"]]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
     parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} of about {size} "
@@ -510,4 +549,9 @@ def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
     header = [f"BCBN species list for an area, exported {date}",
               "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)
-    return name, csv_text(header, HEXAGON_COLUMNS, rows)
+    if answer["csv_link_once"]:
+        # The area's link and how to use it, before the line for R, which
+        # then counts every header line.
+        extra = [line.format(link=answer["area_gbif_link"]) for line in AREA_LINK_ONCE_LINES]
+        header[-1:] = extra + [r_line(len(header) + len(extra))]
+    return name, csv_text(header, AREA_COLUMNS, rows)

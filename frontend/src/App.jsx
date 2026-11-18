@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchMeta } from './api'
-import { groupOutline } from './area'
 import { addPastedShapes } from './areaPaste'
 import { areaText as writeAreaText, areaTextProblem, boxShapeOf } from './areaShapes'
 import { pickedSizeProblem, sizedArea } from './areaSize'
@@ -183,11 +182,9 @@ export default function App({
   const shownArea = sized && !sized.problem
     ? { shapes: addressArea.shapes, res: sized.res, picked: addressArea.res !== null } : null
   const areaCells = shownArea ? sized.cells : null
-  // The area as the map draws it: its shapes, its size, its hexagons and the
-  // outline around the whole group (see groupOutline), worked out once per
-  // area.
-  const mapArea = useMemo(
-    () => (shownArea ? { ...shownArea, cells: areaCells, outline: groupOutline(areaCells) } : null), [areaText])
+  // The area as the map draws it: its shapes, its size and its hexagons,
+  // the same object for the same area.
+  const mapArea = useMemo(() => (shownArea ? { ...shownArea, cells: areaCells } : null), [areaText])
   // What was wrong with the last shape drawn (the API's words), or null.
   const [areaMessage, setAreaMessage] = useState(null)
   // Whether the area panel is open and on screen (a hexagon's panel covers

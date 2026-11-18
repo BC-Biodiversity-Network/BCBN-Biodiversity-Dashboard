@@ -8,9 +8,12 @@ import { cellToBoundary, cellToLatLng, getResolution } from 'h3-js'
 // zoom buttons and the attribution line in the corner come out unstyled.
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import { boxFromCorners, selectionTest } from './area'
+import { boxFromCorners } from './area'
+import {
+  EMPTY_AREA_TOOLTIP, SHAPE_OUTLINE, areaHexagonLayer, areaId, areaLegendNote, hexagonSizeLines, shapesBounds,
+  useAnswerCache, useAreaHexagons, useAreaOutline,
+} from './areaLayers'
 import AreaOfInterest from './AreaOfInterest'
-import { areaText } from './areaShapes'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
@@ -19,7 +22,7 @@ import { useOverviewHexes, useRankHexes, useSpeciesHexes } from './speciesHexes'
 import YearFilter from './YearFilter'
 import { yearsLabel } from './yearRange'
 import {
-  FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonSizeLabel, hexagonWidthPixels, pickResolution, zoomShowingResolution,
+  FIT_MAX_ZOOM, MAX_ZOOM, RESOLUTIONS, hexagonWidthPixels, pickResolution, zoomShowingResolution,
 } from './zoomTiers'
 
 // The basemap style. Swap this one line to change providers (the Datasets
@@ -161,12 +164,6 @@ export function fadedColour([red, green, blue, alpha]) {
   return [red, green, blue, Math.round(alpha * FADED_SHARE)]
 }
 
-// The outline around a selected area's whole group of hexagons: a dark line
-// on a wider white one, so it reads on light and dark hexagons of either
-// scale (blue or orange). Each of the area's shapes is drawn dashed in the
-// same two colours.
-export const GROUP_OUTLINE = { dark: '#1a1a1a', light: '#ffffff', darkWidth: 2.5, lightWidth: 6 }
-
 // A box ({ west, south, east, north }) as a GeoJSON outline, for the map to
 // draw the box itself, while it is dragged and once it is drawn.
 export function boxOutline({ west, south, east, north }) {
@@ -181,8 +178,8 @@ export function boxOutline({ west, south, east, north }) {
 }
 
 // The area's shapes, and the box being dragged (or null), as GeoJSON lines
-// for the map to draw dashed: each ring closed by going back to its first
-// corner.
+// for the map to draw (see SHAPE_OUTLINE in areaLayers.js): each ring closed
+// by going back to its first corner.
 export function shapesOutline(shapes, dragged = null) {
   const rings = shapes.map((shape) => shape.ring)
   const features = rings.map((ring) => ({
@@ -218,7 +215,9 @@ const CLICK_AFTER_DRAW_MS = 400
 // caused hexagons from one zoom tier to show up under another. The outline of
 // the clicked hexagon (selectedCell, or null) comes last, above the rest.
 // While an area is selected (selection, see buildHexagonLayer), every
-// hexagon outside it is faded.
+// hexagon outside it is faded, and when the map's hexagons are larger than
+// the area's, areaLayer (see areaHexagonLayer in areaLayers.js) draws the
+// area's own hexagons above the map's, just after them.
 //
 // A rank's map (rankOpen, with rankData its map data from the API, or null
 // while none has arrived; rankId names the rank) takes the overview's place:
@@ -226,7 +225,7 @@ const CLICK_AFTER_DRAW_MS = 400
 export function buildLayers({
   overviewRows, resolution, schemeName, speciesOpen, speciesData, outline = 1,
   overviewFiltered = false, filteredOverview = null, selectedCell = null,
-  rankOpen = false, rankData = null, rankId = null, selection = null,
+  rankOpen = false, rankData = null, rankId = null, selection = null, areaLayer = null,
 }) {
   const layers = RESOLUTIONS.map((r) => {
     const rows = overviewRows[r]
@@ -249,6 +248,11 @@ export function buildLayers({
       filteredOverview.rows, true, schemeName, outline, selection))
   }
 
+  // The area's own hexagons, above the map's (never with a species open).
+  if (!speciesOpen && areaLayer) {
+    layers.push(areaLayer)
+  }
+
   if (speciesOpen && speciesData) {
     layers.push(buildHexagonLayer(
       speciesLayerId(speciesData.specieskey, speciesData.resolution),
@@ -266,8 +270,12 @@ export function buildLayers({
 // Turdus per hexagon", "Records of Turdus per hexagon".
 const RANK_CAPTION_WORDS = { species: 'Species', records: 'Records' }
 
-// The hover box for whichever map the pointer is over.
+// The hover box for whichever map the pointer is over (and for an area's
+// own hexagon with no records, see areaLayers.js).
 function tooltipFor(info) {
+  if (info.object?.empty) {
+    return EMPTY_AREA_TOOLTIP
+  }
   return info.layer?.id.startsWith('species-') ? getSpeciesTooltip(info) : getTooltip(info)
 }
 
@@ -312,21 +320,6 @@ function crosshairCursor() {
 // The cursor otherwise: deck.gl's own, a hand that grabs while dragging.
 function dragCursor({ isDragging }) {
   return isDragging ? 'grabbing' : 'grab'
-}
-
-// The box around a GeoJSON outline (see groupOutline in area.js), as
-// [[west, south], [east, north]].
-export function outlineBounds(outline) {
-  const points = outline.geometry.coordinates.flat(2)
-  const lngs = points.map(([lng]) => lng)
-  const lats = points.map(([, lat]) => lat)
-  return [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]]
-}
-
-// A short text naming an area (its resolution and area text), to tell
-// areas apart.
-function areaId(area) {
-  return `${area.res}:${areaText(area.shapes)}`
 }
 
 // Puts the deck.gl layers onto the MapLibre map.
@@ -430,10 +423,11 @@ function apiStatus(hexes, what) {
 // go calls onAreaDrawn(box, res) with the box (see boxFromCorners in
 // area.js), which adds it to the area (res, the level the map shows then,
 // plays no part any more: the area's hexagon size is its own, Auto or
-// picked in the panel, onAreaSizeChange(res or null)). selectedArea is the area ({ shapes, res, cells, outline }, or null):
+// picked in the panel, onAreaSizeChange(res or null)). selectedArea is the area ({ shapes, res, cells }, or null):
 // every hexagon outside it is faded, at its own resolution whatever the
-// zoom, one outline is drawn around the whole group (outline, see
-// groupOutline in area.js), and each shape is drawn dashed. areaMessage (or
+// zoom; when the map's hexagons are larger than the area's, all of them are
+// faded and the area's own hexagons are drawn on top (see areaLayers.js);
+// and each shape is outlined (SHAPE_OUTLINE). areaMessage (or
 // null) is shown in the panel, for a shape refused, with an x that calls
 // onDismissAreaMessage. onAreaPasted(text) adds the shapes of a text pasted
 // in the panel's Paste tab and returns null, or why nothing was added.
@@ -448,6 +442,9 @@ export default function HexMap({
   onAreaPasted = () => null, onAreaSizeChange = () => {},
 }) {
   const mapRef = useRef(null)
+  // The answers from the API's maps, shared by the map and the area's own
+  // hexagons (see areaLayers.js), so neither asks for one the other has.
+  const apiCache = useAnswerCache()
   const [resolution, setResolution] = useState(() => pickResolution(INITIAL_VIEW_STATE.zoom, null))
   const [schemeName, setSchemeName] = useState(DEFAULT_SCHEME)
   // How strong the hexagon outline is, 0 to 1, from how big hexagons are on
@@ -458,10 +455,10 @@ export default function HexMap({
   const speciesData = species ? speciesHexes.data : null
   // The rank's map, only asked for while a rank (and no species) is open.
   const rankOpen = Boolean(rank) && !species
-  const rankHexes = useRankHexes(rankOpen ? rank : null, years, resolution)
+  const rankHexes = useRankHexes(rankOpen ? rank : null, years, resolution, apiCache)
   const rankData = rankOpen ? rankHexes.data : null
   // The overview for a year range, only asked for while no species or rank is open.
-  const overviewHexes = useOverviewHexes(species || rankOpen ? null : years, resolution)
+  const overviewHexes = useOverviewHexes(species || rankOpen ? null : years, resolution, apiCache)
   const overviewFiltered = years !== null
   // The id of the species the map was last moved to.
   const fittedFor = useRef(null)
@@ -472,19 +469,26 @@ export default function HexMap({
   const lastDrawn = useRef(0)
   // Whether the "Create an area of interest" panel is open.
   const [areaPanelOpen, setAreaPanelOpen] = useState(false)
-  // While an area is selected: which hexagons are in it (see
-  // buildHexagonLayer), worked out once per area.
-  const selection = useMemo(
-    () => (selectedArea ? { test: selectionTest(selectedArea.cells, selectedArea.res), key: areaId(selectedArea) } : null),
-    [selectedArea])
+  // While an area is selected: which map hexagons are in it, and the
+  // area's own hexagons when the map's are larger (see areaLayers.js).
+  const areaHexagons = useAreaHexagons({
+    area: species ? null : selectedArea, mapRes: resolution, overviewRows: overview.rows, years,
+    rankRef: rankOpen ? rank : null, cache: apiCache,
+  })
+  const selection = areaHexagons.selection
+  const [areaOutline, onAreaZoom] = useAreaOutline(selectedArea?.res ?? null, INITIAL_VIEW_STATE.zoom)
+  const areaLayer = useMemo(
+    () => areaHexagonLayer(areaHexagons, selectedArea, schemeName, areaOutline, FIRST_LABEL_LAYER_ID),
+    [areaHexagons.drawn, areaHexagons.rows, areaHexagons.layerKey, selectedArea, schemeName, areaOutline])
 
   const layers = useMemo(
     () => buildLayers({
       overviewRows: overview.rows, resolution, schemeName, speciesOpen: Boolean(species), speciesData, outline,
       overviewFiltered, filteredOverview: overviewHexes.data, selectedCell, rankOpen, rankData, rankId, selection,
+      areaLayer,
     }),
     [overview.rows, resolution, schemeName, species, speciesData, outline, overviewFiltered, overviewHexes.data,
-      selectedCell, rankOpen, rankData, rankId, selection],
+      selectedCell, rankOpen, rankData, rankId, selection, areaLayer],
   )
 
   // Esc cancels drawing; so does opening a single species' map, where
@@ -577,7 +581,9 @@ export default function HexMap({
   // hexagons of its size when the map shows another size. The outline itself
   // comes from the address (selectedCell), so the panel and the outline
   // always name the same hexagon. A clicked hexagon is on screen at its own
-  // size already, so the map does not move then. Before the map has loaded,
+  // size already, so the map does not move then; nor does it for one of the
+  // area's own hexagons drawn above larger map hexagons, which shows at its
+  // own size whatever the zoom. Before the map has loaded,
   // handleLoad places it instead. (map.loaded() is not used here: MapLibre
   // says false while any source is still updating, which it is right after
   // Back as the area's outline goes, so the map never moved.)
@@ -588,7 +594,7 @@ export default function HexMap({
     }
     const [lat, lng] = cellToLatLng(selectedCell)
     const cellResolution = getResolution(selectedCell)
-    const otherSize = cellResolution !== resolutionNow.current
+    const otherSize = cellResolution !== resolutionNow.current && !areaHexagons.shows(selectedCell)
     if (otherSize || !map.getBounds().contains([lng, lat])) {
       map.easeTo({
         center: [lng, lat], ...(otherSize ? { zoom: zoomShowingResolution(cellResolution) } : {}), duration: 900,
@@ -598,14 +604,13 @@ export default function HexMap({
 
   // When the page opens with a hexagon in the address (a shared link), moves
   // the map to it, at a zoom where hexagons of its size are shown; with an
-  // area, fits its whole group of hexagons (which reaches past the box) in
-  // view beside the panel.
+  // area, fits its shapes in view beside the panel.
   function handleLoad() {
     mapReady.current = true
     const map = mapRef.current
     if (map && selectedArea) {
       const container = map.getContainer()
-      map.fitBounds(outlineBounds(selectedArea.outline), {
+      map.fitBounds(shapesBounds(selectedArea.shapes), {
         padding: fitPadding(container.clientWidth, container.clientHeight), duration: 0,
       })
       return
@@ -618,9 +623,10 @@ export default function HexMap({
   }
 
   // Opens the panel of the hexagon under a click, on either map; not while
-  // drawing a box, nor just after one is drawn (letting go of the mouse).
+  // drawing a box, nor just after one is drawn (letting go of the mouse),
+  // nor for an area's own hexagon with no records.
   function handleClick(info) {
-    const cell = info.object?.h3Cell
+    const cell = info.object?.empty ? null : info.object?.h3Cell
     if (cell && !drawing && Date.now() - lastDrawn.current > CLICK_AFTER_DRAW_MS) {
       onCellClick(cell)
     }
@@ -705,9 +711,12 @@ export default function HexMap({
     if (wantedOutline !== outline) {
       setOutline(wantedOutline)
     }
+    onAreaZoom(zoom)
   }
 
   const overviewReady = !overview.loading && !overview.error
+  // The legend's line about the area's own hexagons, or null.
+  const areaNote = areaLegendNote(areaHexagons, selectedArea)
 
   let legend = null
   if (rankOpen) {
@@ -719,6 +728,7 @@ export default function HexMap({
         leftOut={noDateNote(rankData)}
         status={apiStatus(rankHexes, `the map of this ${rank.rank}`)}
         statusIsError={Boolean(rankHexes.error)}
+        areaNote={areaNote}
       />
     )
   } else if (species) {
@@ -744,11 +754,13 @@ export default function HexMap({
         leftOut={noDateNote(data)}
         status={apiStatus(overviewHexes, 'the map for these years')}
         statusIsError={Boolean(overviewHexes.error)}
+        areaNote={areaNote}
       />
     )
   } else if (overviewReady) {
     legend = (
-      <Legend scheme={COLOUR_SCHEMES[schemeName]} caption={COLOUR_SCHEMES[schemeName].legendCaption} />
+      <Legend scheme={COLOUR_SCHEMES[schemeName]} caption={COLOUR_SCHEMES[schemeName].legendCaption}
+        areaNote={areaNote} />
     )
   }
 
@@ -770,7 +782,9 @@ export default function HexMap({
               </button>
             </div>
           )}
-          <div className="hex-size-label">{hexagonSizeLabel(resolution)}</div>
+          <div className="hex-size-label">
+            {hexagonSizeLines(resolution, species ? null : selectedArea).map((line) => <div key={line}>{line}</div>)}
+          </div>
           {!species && <SchemeToggle current={schemeName} onChange={setSchemeName} />}
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
           <AreaOfInterest open={areaPanelOpen} onOpenChange={openAreaPanel}
@@ -811,26 +825,18 @@ export default function HexMap({
       >
         <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawing ? noTooltip : tooltipFor}
           onClick={handleClick} getCursor={drawing ? crosshairCursor : dragCursor} />
-        {/* The outline around the selected group of hexagons, then each
-            shape dashed above it (and the box being dragged); both are added
-            again (a new key) whenever the area changes, so they always sit
-            above the hexagons. */}
-        {selectedArea && (
-          <Source key={`group-${areaId(selectedArea)}`} id="area-group" type="geojson" data={selectedArea.outline}>
-            <Layer id="area-group-edge" type="line"
-              paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': GROUP_OUTLINE.lightWidth }} />
-            <Layer id="area-group-line" type="line"
-              paint={{ 'line-color': GROUP_OUTLINE.dark, 'line-width': GROUP_OUTLINE.darkWidth }} />
-          </Source>
-        )}
+        {/* Each of the area's shapes outlined (and the box being dragged),
+            the area's only outline: added again (a new key) whenever the
+            area changes, so it always sits above the hexagons, last. */}
         {(drag || selectedArea) && (
           <Source key={selectedArea ? `shapes-${areaId(selectedArea)}` : 'shapes'} id="area-box" type="geojson"
             data={shapesOutline(selectedArea?.shapes ?? [], drag ? boxFromCorners(drag.from, drag.to) : null)}>
-            {/* A white edge under a dark dashed line, so the box shows on
+            {/* A white edge under a dark solid line, so the shapes show on
                 light and dark hexagons alike. */}
-            <Layer id="area-box-edge" type="line" paint={{ 'line-color': GROUP_OUTLINE.light, 'line-width': 3 }} />
+            <Layer id="area-box-edge" type="line"
+              paint={{ 'line-color': SHAPE_OUTLINE.light, 'line-width': SHAPE_OUTLINE.lightWidth }} />
             <Layer id="area-box-line" type="line"
-              paint={{ 'line-color': GROUP_OUTLINE.dark, 'line-width': 1.5, 'line-dasharray': [3, 2] }} />
+              paint={{ 'line-color': SHAPE_OUTLINE.dark, 'line-width': SHAPE_OUTLINE.darkWidth }} />
           </Source>
         )}
       </Map>

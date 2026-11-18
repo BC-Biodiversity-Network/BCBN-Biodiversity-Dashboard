@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { areaExportUrl, fetchArea } from './api'
 import {
-  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, boxAreaKm2, boxCells, boxFromCorners, groupOutline,
+  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, boxAreaKm2, boxCells, boxFromCorners,
   minimumAreaKm2, selectionTest,
 } from './area'
 import { boxShapeOf, pyFixed, readAreaText, shapesProblem } from './areaShapes'
@@ -91,21 +91,6 @@ describe('the hexagons under a box', () => {
 })
 
 describe('the selected group of hexagons on the map', () => {
-  it('has one outline around the outside of the whole group, not one per hexagon', () => {
-    const cells = boxCells(KAMLOOPS, 6)
-    const outline = groupOutline(cells)
-    expect(outline.type).toBe('Feature')
-    expect(outline.geometry.type).toBe('MultiPolygon')
-    // One shape with one ring (no holes), closed, longitude first.
-    expect(outline.geometry.coordinates).toHaveLength(1)
-    expect(outline.geometry.coordinates[0]).toHaveLength(1)
-    const ring = outline.geometry.coordinates[0][0]
-    expect(ring[0]).toEqual(ring[ring.length - 1])
-    expect(ring.every(([lng, lat]) => lng < -119 && lng > -121.5 && lat > 50 && lat < 51.5)).toBe(true)
-    // Far fewer points than the hexagons' own corners: only the outside.
-    expect(ring.length).toBeLessThan(cells.length * 6)
-  })
-
   it('tells which hexagons are in it, at its own resolution, finer ones and coarser ones', () => {
     const cells = boxCells(KAMLOOPS, 6)
     const inside = selectionTest(cells, 6)

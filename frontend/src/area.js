@@ -1,11 +1,11 @@
 // The area search's rules on the front end for a box: the box between two
-// corners of a drag, its area, the hexagons it selects, and how the map
-// outlines and fades them (backend/api/area.py, whose rules these copy; a
+// corners of a drag, its area, the hexagons it selects, and which map
+// hexagons stay bright (backend/api/area.py, whose rules these copy; a
 // back end test runs this file with node to check they still agree). An
 // area of several shapes, its checks and its messages are in areaShapes.js.
 
 import {
-  POLYGON_TO_CELLS_FLAGS, cellToChildrenSize, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
+  POLYGON_TO_CELLS_FLAGS, cellToChildrenSize, cellToParent, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
 } from 'h3-js'
 
 // The smallest box, in average hexagons of the resolution it is drawn at:
@@ -78,18 +78,6 @@ export function boxCells({ west, south, east, north }, res) {
   return polygonToCellsExperimental(corners, res, POLYGON_TO_CELLS_FLAGS.containmentOverlapping).sort()
 }
 
-// The outline of a group of hexagons (cells, all at one resolution) as
-// one GeoJSON shape around the outside of the whole group, not around each
-// hexagon, for the map to draw: h3-js joins them (about 0.8 s for the
-// largest box allowed, 117,442 hexagons, so it is worked out once per box).
-export function groupOutline(cells) {
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'MultiPolygon', coordinates: cellsToMultiPolygon(cells, true) },
-  }
-}
-
 // A test of whether a hexagon the map shows is in the selected group (cells,
 // at resolution res), whatever resolution the map shows now, so the map
 // keeps bright only what the area counts: at the same resolution, the
@@ -97,8 +85,9 @@ export function groupOutline(cells) {
 // lies in is; at a coarser one (the area's hexagons are smaller than the
 // map's, which happens since the area's size no longer follows the zoom),
 // every one of its smaller hexagons at res is in the group, so a large
-// hexagon only partly in the area is faded, and the area's outline shows
-// where it really ends. Returns a function of a hexagon's id.
+// hexagon only partly in the area is faded (the map then draws the area's
+// own hexagons on top once it has them, see areaLayers.js). Returns a
+// function of a hexagon's id.
 export function selectionTest(cells, res) {
   const chosen = new Set(cells)
   // How many of the group's hexagons lie in each larger hexagon, for each

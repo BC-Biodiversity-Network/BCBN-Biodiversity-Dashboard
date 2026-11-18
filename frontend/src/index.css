@@ -263,7 +263,9 @@ body {
 }
 
 /* Under the species map's colours: how many records in how many hexagons,
-   and whether the map is loading or failed. */
+   and whether the map is loading or failed; under the overview's, the line
+   about an area's own hexagons (legend-area). */
+.legend-area,
 .legend-summary,
 .legend-left-out,
 .legend-status {

@@ -11,9 +11,10 @@ import { binColours, legendEdgeLabels } from './colours'
 //
 // scheme is one of COLOUR_SCHEMES; caption can hold markup (the species name
 // in italics); summary, leftOut (how many records with no date a year range
-// left out) and status are short lines of text, or null.
+// left out), status and areaNote (about an area's own hexagons drawn on the
+// map, see areaLegendNote in areaLayers.js) are short lines of text, or null.
 export default function Legend({
-  scheme, caption, summary = null, leftOut = null, status = null, statusIsError = false,
+  scheme, caption, summary = null, leftOut = null, status = null, statusIsError = false, areaNote = null,
 }) {
   return (
     <div className="legend">
@@ -37,6 +38,7 @@ export default function Legend({
         ))}
       </div>
 
+      {areaNote && <div className="legend-area">{areaNote}</div>}
       {summary && <div className="legend-summary">{summary}</div>}
       {leftOut && <div className="legend-left-out">{leftOut}</div>}
       {status && (

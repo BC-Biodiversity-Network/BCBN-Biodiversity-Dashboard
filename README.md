@@ -1754,23 +1754,70 @@ it is changed or the area cleared, and a shape (or a size) that does not
 pass at it is refused with the API's message, the page adding "Or choose
 smaller hexagons." when a shape is too small (the API's message for an area
 too big already says to use larger hexagons). Changing the size is one
-history step. While an area is selected, every hexagon outside it keeps only
-a fifth of its opacity (`FADED_SHARE`), at any zoom: a finer hexagon counts
-as selected when the hexagon of the area's size it lies in is; a coarser one
-only when every one of the area's smaller hexagons inside it is selected, so
-the map never keeps bright land the area does not count (a large hexagon
-only partly in the area is faded, and the area's outline shows where it
-ends) (`selectionTest` in `area.js`), so the selected ones keep their
-normal colours and stand out. One outline goes around the outside of
-the whole selected group, not around each hexagon (`groupOutline` in
-`area.js`, h3-js `cellsToMultiPolygon`, about 1.1 s for an area near the
-largest allowed (170,414 hexagons), worked out once per area): a dark line on a wider white one, so it
-reads on light and dark hexagons of either colour scale. Each shape is
-drawn dashed above it, thinner (and the box being dragged, beside them). Both are MapLibre line layers, added again
-whenever the area changes so they stay above the hexagons. A shared link
-fits the whole group in view (it reaches past the box). Checked on
-2026-11-09 on a light area (Fort Nelson) and a dark one (Vancouver), at
-resolution 4 and 7, on both scales, desktop and phone width. A shape the
+history step.
+
+How the map shows an area (`frontend/src/areaLayers.js`, so `HexMap.jsx`
+changes little) depends on whether the map's hexagons, which follow the
+zoom, are larger than the area's:
+
+- **The map's hexagons are the area's size or smaller.** Every map hexagon
+  outside the area keeps only a fifth of its opacity (`FADED_SHARE`): a
+  hexagon of the area's size is bright when it is one of the area's, a
+  finer one when the hexagon of the area's size it lies in is
+  (`selectionTest` in `area.js`). This is exact, so it is as before.
+- **The map's hexagons are larger than the area's** (a small area seen
+  from far out). A large map hexagon is usually only partly in the area,
+  so every map hexagon is faded, and the area's own hexagons are drawn on
+  top, at the area's size, coloured on the same fixed scale as the map
+  (`useAreaHexagons` and `areaHexagonLayer`). With all years and no rank
+  they come from the overview file already loaded; with a year range or a
+  rank, from the API's map at the area's size (`/api/overview/hexes` or
+  `/api/ranks/{rank}/hexes`), asked for once and kept, in one cache shared
+  with the map's own hooks (`useAnswerCache`), so the map zoomed to the
+  area's size reuses it. Until it arrives, a larger map hexagon stays
+  bright only when all of it is in the area, as before. The area's
+  hexagons with no records are drawn in a light plain grey
+  (`EMPTY_AREA_FILL`), so they read as counted but empty rather than as
+  faded land outside; their hover box says "No records" and a click opens
+  nothing. Smaller hexagons hold fewer species and records, so on the same
+  scale they look paler, and the legend says so: "Inside the area:
+  hexagons of about 3 km, on the same scale, so they look paler." Hover
+  shows an area hexagon's own numbers; a click opens its panel and
+  outlines it without changing the zoom (the map only zooms for a hexagon
+  it does not show at its own size, such as a faded map hexagon of another
+  size). Their white outline follows their own size on screen
+  (`useAreaOutline`).
+
+Whenever the area's hexagons are of another size than the map's, the label
+at the top left has two lines, "Map: hexagons ~52 km" and "Area: hexagons
+~3 km" (`hexagonSizeLines`); the panel's "Hexagon size" is unchanged.
+
+Bottom to top on the map: the map's hexagons, the area's own hexagons (both
+deck.gl layers just under the basemap's place names; the area's comes
+right after the map's in `buildLayers`), the open hexagon's outline, then
+the shapes' outline, a MapLibre line layer added last. The only outline of
+an area is that of its shapes, the boxes and polygons the visitor made: a
+dark solid line on a wider white one (`SHAPE_OUTLINE`), so it reads on
+light and dark hexagons of either scale, at every zoom (and the box being
+dragged, beside them); it is added again whenever the area changes so it
+stays on top. There is no outline around the joined hexagons any more: the
+area's own hexagons show where the counted land ends (whole hexagons, a
+little past the shapes), and dropping it removed the pause it cost (h3-js
+`cellsToMultiPolygon`, 0.8 to 1.1 s for an area near the largest allowed).
+A shared link fits the shapes in view (`shapesBounds`). Measured on
+2026-11-17 in headless Chrome, each area pasted as one polygon at the
+widest zoom, the longest frame after adding the shape (main thread busy checking
+the shape, choosing the size and finding the hexagons):
+
+  | Area (hexagons of about 3 km) | Before step 9 | Now |
+  | --- | --- | --- |
+  | 1,347 hexagons | 0.15 s | 0.10 s |
+  | 25,039 hexagons | 0.50 s | 0.15 s |
+  | 170,414 hexagons | 2.8 s | 0.57 to 0.58 s |
+
+The longest frame when the area's own hexagons first appear (zooming out
+from about 3 km) is 17 ms, 17 ms and 133 ms for the three; panning and
+zooming stay at 60 frames a second. A shape the
 API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
 hexagons, an area touching more than `MAX_AREA_HEXAGONS` (200,000)
 hexagons, more than `MAX_AREA_POINTS` (250) points, and so on. The panel
@@ -1806,7 +1853,7 @@ area, not only that rank). Right under the link, always: "BCBN's data
 covers BC only; GBIF also shows records outside BC." (an area can reach the
 sea or another province, where BCBN has no records but GBIF does). The panel and the CSV ask the API with the
 area text (`area=`, `areaQuery` in `frontend/src/api.js`). If the API counts a different number of hexagons
-than the map outlined, the browser's console says so. The hexagon panel and
+than the map found, the browser's console says so. The hexagon panel and
 the area panel share their loading (`useListAnswer` in
 `frontend/src/HexagonPanel.jsx`).
 
@@ -1822,8 +1869,8 @@ old link has one) as a size picked, so it opens exactly as before; an
 address whose area text the API would refuse, or whose shapes fit no size
 at Auto, opens with no area.
 
-**The area stays until it is cleared.** Once drawn, the area (its shapes,
-the outline and the faded hexagons around it) stays on the map and in the
+**The area stays until it is cleared.** Once drawn, the area (its shapes'
+outline, its hexagons and the faded map around them) stays on the map and in the
 address until the panel's "Clear area" removes it; a new box drawn anywhere
 on the map is added to it (a box refused keeps the area as it was and says
 why), and a shape's x or "Back" removes one. Every other move

@@ -5,7 +5,8 @@ import { cellToBoundary } from 'h3-js'
 import { describe, expect, it } from 'vitest'
 
 import {
-  BC_BOUNDARY_WKT, GBIF_CHECKLIST_KEY, GBIF_COUNT_NOTE, cellWkt, gbifBcSearchUrl, gbifCellSearchUrl, gbifLeftOutNote,
+  BC_BOUNDARY_WKT, GBIF_CHECKLIST_KEY, GBIF_COUNT_NOTE, boxWkt, cellWkt, gbifAreaSearchUrl, gbifBcSearchUrl,
+  gbifBoxSearchUrl, gbifCellSearchUrl, gbifLeftOutNote, ringIsClockwise, ringWkt, ringsWkt,
 } from './gbifLinks'
 
 const CELL = '8728d1aacffffff'
@@ -155,5 +156,37 @@ describe('the BC records link', () => {
   it('shares its note with the hexagon panel', () => {
     expect(GBIF_COUNT_NOTE).toBe(
       'GBIF shows its current data, without the cleaning of our snapshot, so its count may differ a little from ours.')
+  })
+})
+
+describe('the GBIF link of an area of several shapes', () => {
+  const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
+  const BOX_RING = [[-120.6, 50.55], [-120.1, 50.55], [-120.1, 50.8], [-120.6, 50.8]]
+
+  it('gives exactly the box link for a single box', () => {
+    expect(ringsWkt([BOX_RING])).toEqual([boxWkt(KAMLOOPS)])
+    expect(gbifAreaSearchUrl({ rings: [BOX_RING], years: [2000, 2020] }))
+      .toBe(gbifBoxSearchUrl({ box: KAMLOOPS, years: [2000, 2020] }))
+    expect(gbifAreaSearchUrl({ keys: ['59PMB'], rings: [BOX_RING] })).toBe(gbifBoxSearchUrl({ keys: ['59PMB'], box: KAMLOOPS }))
+  })
+
+  it('writes each ring closed and counter-clockwise, keeping its first corner first', () => {
+    const clockwise = [[0, 0], [0, 1], [1, 1], [1, 0]]
+    expect(ringIsClockwise(clockwise)).toBe(true)
+    expect(ringWkt(clockwise)).toBe('POLYGON((0.000000 0.000000,1.000000 0.000000,1.000000 1.000000,'
+      + '0.000000 1.000000,0.000000 0.000000))')
+    // Already counter-clockwise: kept as it is.
+    expect(ringWkt([[0, 0], [1, 0], [0.5, 1]])).toBe('POLYGON((0.000000 0.000000,1.000000 0.000000,'
+      + '0.500000 1.000000,0.000000 0.000000))')
+  })
+
+  it('sends one geometry parameter per shape, in order', () => {
+    const url = new URL(gbifAreaSearchUrl({ rings: [BOX_RING, [[-121, 50], [-120.8, 50], [-120.9, 50.2]]] }))
+    expect(url.searchParams.getAll('geometry')).toEqual([
+      boxWkt(KAMLOOPS),
+      'POLYGON((-121.000000 50.000000,-120.800000 50.000000,-120.900000 50.200000,-121.000000 50.000000))',
+    ])
+    expect([...url.searchParams.keys()]).toEqual(['checklistKey', 'geometry', 'geometry', 'occurrenceStatus'])
+    expect(url.searchParams.get('checklistKey')).toBe(GBIF_CHECKLIST_KEY)
   })
 })

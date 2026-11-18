@@ -1911,3 +1911,221 @@ body {
   margin: 0 0 12px;
   font-size: 24px;
 }
+
+/* The "Create an area of interest" panel under its button (as in the
+   approved mockup): a white card listing the area's shapes, each with an x,
+   the "Draw" tab with its "Box" button, and "Back" and "Clear area". */
+.aoi-panel {
+  /* Above the legend at the bottom left while open (see
+     .top-left-controls:has(.aoi-panel) below), and never taller than the
+     screen leaves room for: a long list of shapes scrolls inside the
+     panel. */
+  position: relative;
+  max-height: max(240px, calc(100vh - 330px));
+  overflow-y: auto;
+  width: min(300px, calc(100vw - 24px));
+  padding: 8px 10px 10px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: #1a1a1a;
+}
+
+.aoi-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aoi-close {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #184f95;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.aoi-shapes {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.aoi-shapes li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border: 1px solid #d6dbe1;
+  border-radius: 6px;
+}
+
+.aoi-remove {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #555;
+  cursor: pointer;
+}
+
+/* "Hexagon size": the label and its choice on one line. */
+.aoi-size {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.aoi-size select {
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.aoi-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 4px;
+  border-radius: 8px;
+  background: #f1f4f8;
+}
+
+.aoi-tab {
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.aoi-tab.on {
+  background: #fff;
+  color: #1a1a1a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.aoi-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.aoi-pane .aoi-row {
+  margin-top: 0;
+}
+
+.aoi-button {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #d6dbe1;
+  border-radius: 6px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: #184f95;
+  cursor: pointer;
+}
+
+.aoi-button.on {
+  border-color: #184f95;
+  background: #184f95;
+  color: #fff;
+}
+
+.aoi-button:disabled {
+  color: #aab2bd;
+  cursor: default;
+}
+
+.aoi-button:focus-visible,
+.aoi-tab:focus-visible,
+.aoi-close:focus-visible,
+.aoi-remove:focus-visible {
+  outline: 2px solid #184f95;
+  outline-offset: 2px;
+}
+
+.aoi-small {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+/* The Paste tab: the text box, "Add" (filled blue) beside "Fill in an
+   example" (a link), and why a paste was not added, in red. */
+.aoi-paste {
+  box-sizing: border-box;
+  width: 100%;
+  height: 90px;
+  padding: 6px;
+  border: 1px solid #d6dbe1;
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.aoi-paste-row {
+  align-items: center;
+  margin-top: 6px;
+}
+
+.aoi-button.aoi-add {
+  flex: none;
+  border-color: #256abf;
+  background: #256abf;
+  color: #fff;
+}
+
+.aoi-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #184f95;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.aoi-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #b3261e;
+}
+
+.aoi-link:focus-visible,
+.aoi-paste:focus-visible {
+  outline: 2px solid #184f95;
+  outline-offset: 2px;
+}
+
+/* While the area of interest panel is open, the map's top left controls
+   go above the legend (both sit on the map at the same level otherwise, and
+   the legend, coming later in the page, would cover the panel's foot). */
+.top-left-controls:has(.aoi-panel) {
+  z-index: 2;
+}
+
+.aoi-message {
+  margin-top: 8px;
+  box-shadow: none;
+  background: #fdf3f2;
+}

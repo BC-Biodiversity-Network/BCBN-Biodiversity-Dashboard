@@ -7,6 +7,9 @@
 // VITE_API_BASE when building, for example
 //   VITE_API_BASE=https://api.example.org/api npm run build
 // and nothing else needs to change.
+
+import { areaText } from './areaShapes.js'
+
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
 // The shortest search the API accepts: 2 letters or digits. The same rule as
@@ -311,28 +314,26 @@ export function cellExportUrl(cell, options = {}) {
 }
 
 // The query string of an area's answer, without paging: the one place that
-// writes an area's box, resolution and list options the way the API takes
+// writes an area's shapes, resolution and list options the way the API takes
 // them, for the area panel (fetchArea) and for its CSV download
-// (areaExportUrl). area is { box: { west, south, east, north }, res } (see
-// readArea in route.js); the other options are those of fetchCell (years,
-// q, status, sort, rank), never a species. params is where to add them (a
-// new, empty query string when not given).
+// (areaExportUrl). area is { shapes, res } (see readArea in route.js); its
+// shapes go as the area text (area=, areaText in areaShapes.js), so the API
+// reads exactly the shapes the page holds. The other options are those of
+// fetchCell (years, q, status, sort, rank), never a species. params is where
+// to add them (a new, empty query string when not given).
 function areaQuery(area, { years = null, q = '', status = [], sort = null, rank = null } = {},
   params = new URLSearchParams()) {
-  const { west, south, east, north } = area.box
-  params.set('west', String(west))
-  params.set('south', String(south))
-  params.set('east', String(east))
-  params.set('north', String(north))
+  params.set('area', areaText(area.shapes))
   params.set('res', String(area.res))
   return cellQuery({ years, q, status, sort, rank }, params)
 }
 
-// Fetches the species in every hexagon under a box drawn on the map
-// (/api/area): area is { box, res }, the options are fetchCell's (years, q,
-// status, sort, rank), and offset and limit choose the page. Returns the
-// API's answer: the box, hexagon_count, the totals and one page of species,
-// each with its GBIF link.
+// Fetches the species in every hexagon under an area of shapes drawn on the
+// map (/api/area): area is { shapes, res }, the options are fetchCell's
+// (years, q, status, sort, rank), and offset and limit choose the page.
+// Returns the API's answer: hexagon_count, shape_count, shapes,
+// area_gbif_link, the totals and one page of species, each with its GBIF
+// link.
 export function fetchArea(area, { offset = 0, limit = 50, signal, ...options } = {}) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   return fetchJson(`/area?${areaQuery(area, options, params)}`, signal)
@@ -340,7 +341,7 @@ export function fetchArea(area, { offset = 0, limit = 50, signal, ...options } =
 
 // The address of the CSV download of an area's species list
 // (/api/export/area): every species the area panel's list has for the same
-// box and options, never a page of them.
+// area and options, never a page of them.
 export function areaExportUrl(area, options = {}) {
   return apiAddress('/export/area', areaQuery(area, options))
 }

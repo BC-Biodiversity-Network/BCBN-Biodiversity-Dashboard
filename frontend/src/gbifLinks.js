@@ -84,10 +84,27 @@ export function gbifBcSearchUrl({ keys }) {
   return gbifSearchUrl({ keys, geometry: BC_BOUNDARY_WKT })
 }
 
-// The note under the area panel's GBIF link: the link searches the box
-// itself, while our numbers count every hexagon the box touches.
+// The note under the area panel's GBIF link for an area of one box: the
+// link searches the box itself, while our numbers count every hexagon the
+// box touches.
 export const AREA_GBIF_NOTE = 'GBIF searches only the box you drew. Our numbers include every hexagon the box '
   + 'touches, so GBIF usually shows fewer records.'
+
+// The note always under the area panel's GBIF link: an area can reach past
+// BC (the sea, another province), where BCBN has no records but GBIF does.
+export const AREA_BC_ONLY_NOTE = "BCBN's data covers BC only; GBIF also shows records outside BC."
+
+// The same note for an area of shapeCount shapes (AREA_GBIF_NOTE for one
+// box; for one polygon or several shapes, it names them).
+export function areaGbifNote(shapeCount, isBox = true) {
+  if (shapeCount === 1 && isBox) {
+    return AREA_GBIF_NOTE
+  }
+  const what = shapeCount === 1 ? 'polygon' : 'shapes'
+  const touches = shapeCount === 1 ? 'touches' : 'touch'
+  return `GBIF searches only inside the ${what} you drew. Our numbers include every hexagon the ${what} `
+    + `${touches}, so GBIF usually shows fewer records.`
+}
 
 // A box ({ west, south, east, north }) as WKT for GBIF: a closed 5-point
 // polygon running counter-clockwise (west-south, east-south, east-north,
@@ -108,15 +125,68 @@ export function gbifBoxSearchUrl({ keys = [], box, years = null }) {
   return gbifSearchUrl({ keys, geometry: boxWkt(box), years })
 }
 
-// Writes a GBIF occurrence search address, the one place both links are
+// True when a ring of [lng, lat] corners (not closed) runs clockwise on a
+// map with longitude across and latitude up: its signed area (the shoelace
+// sum, added up in this order, as ring_is_clockwise in
+// backend/api/gbif_links.py does, so both sides get the same sign) is
+// below zero.
+export function ringIsClockwise(ring) {
+  let total = 0
+  for (let index = 0; index < ring.length; index += 1) {
+    const [lng, lat] = ring[index]
+    const [nextLng, nextLat] = ring[(index + 1) % ring.length]
+    total += lng * nextLat - nextLng * lat
+  }
+  return total < 0
+}
+
+// One ring of [lng, lat] corners (not closed, as the area's shapes hold
+// them) as WKT for GBIF: POLYGON((lng lat,...)), turned counter-clockwise if
+// it was clockwise (keeping its first corner first), closed by repeating
+// the first corner, six decimals. The same text as ring_wkt in
+// backend/api/gbif_links.py.
+export function ringWkt(ring) {
+  let corners = [...ring]
+  if (ringIsClockwise(corners)) {
+    corners = [corners[0], ...corners.slice(1).reverse()]
+  }
+  corners.push(corners[0])
+  const points = corners.map(([lng, lat]) => `${lng.toFixed(DECIMALS)} ${lat.toFixed(DECIMALS)}`)
+  return `POLYGON((${points.join(',')}))`
+}
+
+// The GBIF geometry values of an area's shapes (rings, each as ringWkt
+// takes it): one POLYGON per shape, in the order given. GBIF searches the
+// union of several geometry parameters, where a MULTIPOLYGON of
+// overlapping shapes is refused (tested on GBIF's API in November 2026).
+export function ringsWkt(rings) {
+  return rings.map(ringWkt)
+}
+
+// The address of a GBIF occurrence search inside an area of one or more
+// shapes (rings, see ringsWkt), one geometry parameter per shape, PRESENT
+// records only, for a year range ([from, to]) or every year (null). With no
+// keys (the area panel's link) it finds every species there; with keys,
+// only those species (as gbif_rings_search_url in
+// backend/api/gbif_links.py writes each species' link). A box's ring
+// (west-south, east-south, east-north, west-north) gives exactly
+// gbifBoxSearchUrl's link.
+export function gbifAreaSearchUrl({ keys = [], rings, years = null }) {
+  return gbifSearchUrl({ keys, geometry: ringsWkt(rings), years })
+}
+
+// Writes a GBIF occurrence search address, the one place the links are
 // made: the Catalogue of Life checklist, one taxonKey per species key, the
-// area as WKT, PRESENT records only, and the years ([from, to]) when given.
+// area as WKT (one geometry, or a list of them, one parameter each),
+// PRESENT records only, and the years ([from, to]) when given.
 function gbifSearchUrl({ keys, geometry, years = null }) {
   const params = new URLSearchParams({ checklistKey: GBIF_CHECKLIST_KEY })
   for (const key of keys) {
     params.append('taxonKey', key)
   }
-  params.set('geometry', geometry)
+  for (const one of Array.isArray(geometry) ? geometry : [geometry]) {
+    params.append('geometry', one)
+  }
   params.set('occurrenceStatus', 'PRESENT')
   if (years) {
     params.set('year', `${years[0]},${years[1]}`)

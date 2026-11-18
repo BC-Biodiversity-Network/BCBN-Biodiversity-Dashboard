@@ -494,7 +494,11 @@ class ApiData:
                   each catalogue (source id) of the datasets, to its
                   readable name; filled in by datasets.prepare_datasets()
     reserves      the reserve outlines and the cells that touch them
-                  (reserves.ReserveData; off when the files are missing)"""
+                  (reserves.ReserveData; off when the files are missing)
+    licence_decisions
+                  the hand-decided list of datasets whose own licence is
+                  set aside, by dataset id (dataset_licences.py); filled in
+                  by datasets.prepare_datasets()"""
 
     def __init__(self, connection, settings, meta, merged_keys,
                  bcsee_includes_without_status, reserves=None):
@@ -508,6 +512,7 @@ class ApiData:
         self.search_keys = {}
         self.dataset_copies = {}
         self.dataset_catalogues = {}
+        self.licence_decisions = {}
 
     def cursor(self):
         """Return a new cursor for one request. Each request gets its own,

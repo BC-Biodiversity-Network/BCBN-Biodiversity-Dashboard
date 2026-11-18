@@ -1218,15 +1218,17 @@ comes from the sources goes in as it is, plus one number BCBN works out
 for the species lists: each species' record count, the number the list
 shows (Evan agreed on 2026-11-10 that the lists should have it). The
 Datasets file also has each record's abstract and subjects as harvested
-from Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too).
-Nothing else BCBN or its models work out goes in.
+from Lunaris (Evan, 2026-11-10: it is public, and Lunaris shows it too),
+and the licence its detail page shows (Reyna asked for it at the steering
+committee on 2026-11-13, and Evan agreed). Nothing else BCBN or its models
+work out goes in.
 
 | Endpoint | Options | Columns |
 | --- | --- | --- |
-| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link` |
+| `GET /api/export/datasets` | as `/api/datasets`: `q`, `sort`, `catalogue`, `final_class`, `frontend_group`, `year_from`, `year_to`, `organism`, `access`, `mappable`, `species` | `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`, `doi`, `link`, `licence` |
 | `GET /api/export/ranks/{rank}` | as `/api/ranks/{rank}`: the rank's path (`kingdom` to `genus`), `q`, `status`, `sort`, `year_from`, `year_to` | `specieskey`, `scientific_name`, `english_name`, `bcsee_status`, `records` |
 | `GET /api/export/hexes/{cell}` | as `/api/hexes/{cell}`: `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` |
-| `GET /api/export/area` | as `/api/area` (see "The area search" below): the box, `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5 and `gbif_link` (the species inside the box) |
+| `GET /api/export/area` | as `/api/area` (see "The area search" below): the area (`area=`, or an old request's box), `res`, `q`, `status`, `sort`, `year_from`, `year_to`, `rank` with its path; `species=` gives 400 | the same 5, `taxon_key` and `gbif_link` (the species inside the area's shapes; see "A detailed area" below) |
 
 - **Rows.** Every row the list keeps for the same options, in the order the
   list shows; paging options are ignored. The rows come from the lists' own
@@ -1234,9 +1236,10 @@ Nothing else BCBN or its models work out goes in.
   `rank_card` and `cell_species` with no page limit), so a download always
   matches its list, leaves out the species `sensitive.py` hides (none for
   now), and gets the list's 400 or 404 answer for a bad request.
-- **Columns.** The Datasets file has exactly 8 columns, in this order
-  (Lucia's choice, 2026-11-10): `title`, `abstract`, `subjects`,
-  `creators`, `published`, `catalogue`, `doi`, `link`. `title`,
+- **Columns.** The Datasets file has exactly 9 columns, in this order:
+  `title`, `abstract`, `subjects`, `creators`, `published`, `catalogue`,
+  `doi`, `link` (Lucia's choice, 2026-11-10), then `licence` (steering
+  committee, 2026-11-13). `title`,
   `abstract`, `subjects` and `creators` are as harvested. Creators are
   joined with `; `; subjects with ` | `, which no harvested subject holds
   (the code refuses a value that does, rather than write a cell that
@@ -1251,9 +1254,61 @@ Nothing else BCBN or its models work out goes in.
   Header line 3 of the Datasets file says so in short: `Source: Lunaris
   dataset records from our harvest of 2026-10-20 (HTML tags removed from
   titles and abstracts, extra spaces from titles, abstracts and subjects;
-  one description per record); each row links to the original catalogue`.
+  one description per record); licence: from the Lunaris record, or from
+  the original catalogue where the record has none or was wrong; checked
+  against each original catalogue by BCBN in November 2026 (HTML tags
+  removed); each row links to the original catalogue`.
+  `licence` is what the Licence row of the dataset's detail page shows, by
+  the page's own rule (`backend/api/dataset_licences.py` follows
+  `readLicence` and `shownLicences` in `frontend/src/datasetText.js`, which
+  the Licence row of `DatasetDetail.jsx` uses;
+  `backend/tests/test_dataset_licences.py` runs both with node and jsdom
+  and checks they agree, on made-up entries and, where the real data is
+  in `backend/data/api`, on every shown dataset: all 3,578 on
+  2026-11-17). The record's own rights entries come first; only
+  when it has no licence does the page (and the file) use the licences
+  the November 2026 source check found (`dataset_source_checks.parquet`;
+  112 records on 2026-11-16, 3,452 use their own, 14 have none and the
+  cell is empty). The one exception is a short hand-decided list,
+  `backend/api/licence_hand_decisions.csv` (columns `dataset_id`, `title`,
+  `reason`, `decided_by`): for a dataset on it, the record's own licence
+  is set aside and the checked one is shown, on the page and in the CSV.
+  On 2026-11-17 it holds 9 datasets ("Claude's reading, approved by
+  Lucia, 2026-11-17"): 7 Polar Data Catalogue records whose licence link,
+  `https://www.polardata.ca/pdcinput/public/termsofuse`, no longer worked
+  on 17 November 2026
+  (the check found PDC Terms of Use, `https://polardata.ca/policy/usage`),
+  and 2 City of Surrey datasets on Abacus Open Data whose record gives a
+  link to Schedule 1 of the B.C. Freedom of Information and Protection of
+  Privacy Act, which is not a licence (the Abacus Terms tab, read on 17
+  November 2026, and the check,
+  give the Open Government Licence - Surrey v2.0). The harvested text stays
+  in the data unchanged. The list sits with the API's code because it is
+  tracked by git and `data/` is not; the API reads it once when it starts
+  (`prepare_datasets`), refuses to start if a listed dataset is not shown,
+  has another title, or has no checked licence to show instead, and gives
+  each dataset's `record_licence_set_aside` (the reason, or null) in
+  `/api/datasets` and `/api/datasets/{id}`. The page (`shownLicences` in
+  `datasetText.js`) then shows the checked licence marked "(checked by
+  BCBN)", its tip giving the reason in place of "did not include a
+  licence"; the list item's licence label follows the same rule. To add a
+  dataset, add a row and restart the API. A rights entry with no name and an
+  `info:eu-repo/semantics/` URI is an access right, shown under Access on
+  the page, never as a licence (every record has one); the name `None`
+  with no URI means no licence. Each licence is written as the page's full
+  text, never shortened, as plain text (193 records hold HTML in a
+  licence; tags are taken out and entities read, as on the page, and an
+  HTML link a catalogue split across the name and the URI is joined
+  again, as for the Street Tree record of Maple Ridge), then its link in
+  brackets when the page links it (http or https), for example `Open
+  Government Licence (https://opengov.mapleridge.ca/pages/open-government-licence)`.
+  A licence given only as a URI is named as on the page (the SPDX id,
+  such as `CC0-1.0`, for an spdx.org address, else the URI itself, then
+  not repeated in brackets). Several licences would be joined with ` | `
+  (no record had more than one on 2026-11-16, and none holds `|`).
   The records' other harvested fields (publisher, the DataCite place
-  names, boxes and points, rights, the OAI identifier) are not exported. The API's
+  names, boxes and points, the raw rights list, the OAI identifier) are
+  not exported. The API's
   data files do not store the harvest date, so it is written in
   `backend/api/export.py` (`LUNARIS_HARVEST_DATE`), and a test checks it
   against the harvest folder `export_lunaris_datasets.py` reads
@@ -1263,7 +1318,8 @@ Nothing else BCBN or its models work out goes in.
   resource type, contributors, affiliations, related items, translated
   titles); there is no language field, only `xml:lang` on some texts.
   The BC class, organisms, looked-up places, hand decisions and checked
-  licences are never exported. `published` is the issued date as stored; `catalogue` the
+  access are never exported (checked licences only as the page shows
+  them, in `licence`). `published` is the issued date as stored; `catalogue` the
   catalogue name the Datasets page shows; `doi` the DOI when the record's
   identifier is one (from the `https://doi.org/` link), else empty, never
   another kind of id; `link` the link to the original catalogue the page
@@ -1283,6 +1339,38 @@ Nothing else BCBN or its models work out goes in.
   in UTC, the date GBIF cites it by and the species card shows. `gbif_link` is the GBIF search the hexagon
   panel links to for that species: its card key and every key merged into
   it, the hexagon, and the years counted.
+- **A detailed area.** The area download has `taxon_key` (the species'
+  GBIF taxon keys, its card key and every key merged into it, joined with
+  ` | `) and `gbif_link`, the GBIF search for that species inside the
+  area's shapes, one `geometry` per shape. That link holds the whole
+  outline, so a detailed area made every row long: 50 boxes over about
+  34,000 species gave 254 MB in 48 s. Two changes (November 2026). First,
+  the outline is written and encoded once and reused for every row
+  (`gbif_area_link_maker` in `backend/api/gbif_links.py`; the same text as
+  before): that alone took the 50 boxes from 48 s to 6.4 s, a 250-point
+  polygon from 38 s to 4.9 s and one box from 2.6 s to 1.5 s. Second,
+  before writing the file its size is estimated, the rows (the list's
+  `matching`) times 60 bytes beside the link (40 to 43 on average, 88 at
+  most, measured) plus the link's length, and when it is over
+  `CSV_ROW_LINKS_MAX_BYTES` (50 MB) `gbif_link` is left empty on every row
+  (`csv_link_once` in `backend/api/area.py`, the one place this is
+  decided). Measured as a browser downloads it (gzip): 30 MB took 1.4 s,
+  110 MB 3.4 s, 254 MB 6.5 s; the largest file kept under the limit, 47.6
+  MB, takes 1.9 s, and a file over it, now about 1 to 2 MB, about 1 to 1.5
+  s. The header then has 5 more lines before the line for R, which counts
+  them all (`AREA_LINK_ONCE_LINES` in `export.py`): "GBIF link for this
+  whole area: ...", "This area is too detailed to repeat its outline on
+  every row, so each row has the species' GBIF taxon_key instead of a
+  link.", "To see one species in this area on GBIF:", "1. Open the link
+  above." and "2. Choose the species under "Scientific name" in GBIF's
+  filters, or add &taxonKey= and the row's taxon_key to the end of the link
+  (once for each key, when the row has several).", then "To read in R:
+  read.csv(file, skip = 9)". GBIF's search page takes a species as
+  `taxonKey`, as every link of the site does (on GBIF's API, the one-box
+  Kamloops link gave 421,901 records, and with `&taxonKey=59PMB` 6,520, all
+  *Turdus migratorius*). The area answer says it as `csv_link_once`, and
+  the area panel then says beside "Download CSV": "This area is detailed,
+  so the CSV gives the GBIF link once at the top instead of on every row."
 - **The file.** UTF-8 with a byte order mark (BOM) at the very start, so
   Excel on Windows shows accented letters correctly; standard CSV quoting
   (a value with a comma, a quote mark or a line break is quoted); lines
@@ -1291,7 +1379,8 @@ Nothing else BCBN or its models work out goes in.
   `bcbn_species_Chordata_2000-2020_2026-11-09.csv` or
   `bcbn_species_hexagon_872800b30ffffff_2026-11-09.csv` (letters, digits,
   `-` and `_` only; the date is the export date in Vancouver). It always
-  starts (after the BOM) with exactly 4 lines, each one CSV field in double
+  starts (after the BOM) with exactly 4 lines (9 for a detailed area, see
+  above, its last line saying so), each one CSV field in double
   quotes starting with `# ` (a quote mark inside written twice, by Python's
   `csv` module), so a spreadsheet such as Excel shows each line whole in
   column A instead of splitting it at its commas, for example
@@ -1300,7 +1389,8 @@ Nothing else BCBN or its models work out goes in.
   export date; how the list was made (the search words, filters, years,
   rank path or hexagon, and order used, and for species what `records`
   means); the sources (for datasets the
-  Lunaris records, the harvest date and what the harvest changed; for
+  Lunaris records, the harvest date, what the harvest changed and where
+  the licence comes from; for
   species the GBIF download DOI, the Catalogue of
   Life release and the BCSEE export date, from `/api/meta`); and
   `"# To read in R: read.csv(file, skip = 4)"`. Line breaks in anything a
@@ -1325,14 +1415,53 @@ Nothing else BCBN or its models work out goes in.
 
 Evan asked that a user can draw a box on the map and get everything in the
 hexagons under it; the rules were decided with Lucia in November 2026
-(`backend/api/area.py`).
+(`backend/api/area.py`). An area can now be made of several shapes, boxes
+and polygons (later also pasted or uploaded ones, turned into polygons in
+the front end).
 
-`GET /api/area?west=&south=&east=&north=&res=` plus the hexagon panel's
-list options (`year_from`, `year_to`, `q`, `status`, `sort`, `offset`,
-`limit`, and `rank` with its path) gives the species in every hexagon at
-`res` (4 to 7) that overlaps the box, even by a corner. The edges are in
-degrees (west less than east, south less than north; a box across the
-180th meridian is not taken).
+`GET /api/area?area=&res=` plus the hexagon panel's list options
+(`year_from`, `year_to`, `q`, `status`, `sort`, `offset`, `limit`, and
+`rank` with its path) gives the species in every hexagon at `res` (4 to 7)
+that overlaps any of the area's shapes, even by a corner; a hexagon in two
+shapes counts once.
+
+- **The area text** (`area=`, read by `read_area_shapes`): one or more
+  shapes separated by `;`. `b:west,south,east,north` is a box (west less
+  than east, south less than north). `p:lng,lat,lng,lat,...` is a polygon,
+  its first point not repeated at the end (a repeated one is dropped; so
+  is a point given twice in a row). Numbers are plain degrees (`-120.6`,
+  `50`, `.5`; no exponent). Each shape is checked: longitude -180 to 180,
+  latitude -90 to 90, a polygon with at least 3 different points whose
+  edges never cross or touch (checked exactly on the numbers the search
+  uses), and no two joined corners 180 or more degrees of longitude apart
+  (that would be read as crossing the 180th meridian). Example, a box and
+  a triangle: `area=b:-123.3,49.1,-122.9,49.4;p:-121,50,-120.8,50,-120.9,50.2`.
+- **Old links still work.** `area=west,south,east,north` with no prefix is
+  one box, and an old request's `west=&south=&east=&north=` is read
+  exactly as before (same answers, same CSV, same messages). A request
+  giving both `area=` and any of the four edges gets 400.
+- **The limits.** Each shape must cover at least `MIN_AREA_HEXAGONS` (4)
+  average hexagons; the whole area may touch at most `MAX_AREA_HEXAGONS`
+  (200,000) hexagons; and it may have at most `MAX_AREA_POINTS` (250)
+  points in all, a box counting as 4. The point limit is there because the
+  area goes into the page's address and into the GBIF link: 250 points
+  make a link of about 6,200 characters, about as long as the species
+  card's link with BC's boundary (6,209). GBIF's own API refused addresses
+  over about 4,000 characters in November 2026; what gbif.org accepts is
+  to be checked by hand, and the limit may change with it. The area text
+  may be at most `AREA_TEXT_MAX_LENGTH` (16,000) characters.
+- **Areas.** A box's area is worked out as before (exact for a box). A
+  polygon's uses the spherical polygon formula turf uses (`ringArea` in
+  `@turf/area`, from Chamberlain and Duquette 2007), on H3's sphere; for a
+  box's four corners it gives the box formula.
+- **The answer** also gives `shape_count`, `shapes` (each one's `type`,
+  `box` or `polygon`, its `point_count` and the box around it, `bounds`)
+  and `area_gbif_link`, GBIF's search for every species in the area's
+  shapes for the years counted: one `geometry` parameter per shape, each
+  ring closed and counter-clockwise (GBIF searches the union of several
+  geometry parameters, where a MULTIPOLYGON of overlapping shapes is
+  refused). `box` is the box for an area of one box, else null, and
+  `box_area_km2` is the sum of the shapes' areas (overlaps counted twice).
 
 - **Counting.** The answer is the hexagon panel's, for those hexagons
   together, from the same code (`hexagons_list` in `backend/api/cells.py`):
@@ -1342,9 +1471,9 @@ degrees (west less than east, south less than north; a box across the
   counts and rank. Species `backend/api/sensitive.py` hides at that
   resolution are left out of all of it. Each species has `gbif_link`, the
   GBIF search for its keys (its card key and every key merged into it)
-  inside the box for the years counted; the box is written as a closed,
-  counter-clockwise 5-point polygon (`box_wkt` in
-  `backend/api/gbif_links.py`). `species=` gives 400 for now: a single
+  inside the area's shapes for the years counted (`gbif_rings_search_url`
+  in `backend/api/gbif_links.py`; a single box gives exactly the closed,
+  counter-clockwise 5-point polygon of `box_wkt`, as before). `species=` gives 400 for now: a single
   species' map is not covered yet.
 - **Which hexagons.** The h3 package's polygon to cells search in its
   "overlap" mode. The answer gives their number (`hexagon_count`), the box,
@@ -1357,16 +1486,20 @@ degrees (west less than east, south less than north; a box across the
   2026-11-09 the two gave the same hexagons for 400 random boxes in BC
   (31,482 hexagons), and `backend/tests/test_area.py` runs h3-js with node
   to check a few boxes every time.
-- **The smallest box** is `MIN_AREA_HEXAGONS` (4) average hexagons of the
-  resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
+- **The smallest shape** (each shape, box or polygon) is
+  `MIN_AREA_HEXAGONS` (4) average hexagons of the resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
   nobody can draw a box tightly around one small place, such as a First
   Nations reserve, and pull out that place's records alone. The box's area
   is worked out on H3's sphere, so it compares with H3's average hexagon
   area like for like. A smaller box gives 400 saying its area and the
   minimum.
-- **The largest box** touches at most `MAX_AREA_HEXAGONS` (200,000)
-  hexagons; a larger one gives 400 suggesting a coarser resolution, checked
-  from its area before any hexagon is found. Measured on 2026-11-09 on a
+- **The largest area** touches at most `MAX_AREA_HEXAGONS` (200,000)
+  hexagons; a larger one gives 400 suggesting a coarser resolution. Each
+  shape is first checked from its area, before any hexagon is found; then
+  the shapes' hexagons are added one shape at a time, and the search stops
+  as soon as the joined set passes the maximum. A 250-point polygon at
+  resolution 7 takes about 1 ms to 0.55 s to search (263 to 197,074
+  hexagons). Measured on 2026-11-09 on a
   laptop with the real data:
 
   | Box | Res | Hexagons | `/api/area` | Download |
@@ -1380,17 +1513,26 @@ degrees (west less than east, south less than north; a box across the
   Finding all of BC's 492,555 resolution 7 hexagons and counting them
   took 1.9 s and 220 MB more memory, and the map only shows resolution 7
   when zoomed in, so such a box is not a normal request.
-- **Errors (400):** a missing or non-numeric edge, an edge outside -180 to
-  180 or -90 to 90, west not less than east, south not less than north,
-  `res` not 4 to 7, a box below the minimum or over the maximum, a bad
-  filter, status, sort or year range, a rank not named, or `species=`. A
-  rank no species has gives 404.
+- **Errors (400):** no area at all, both `area=` and the edges, bad area
+  text (each case with its own message, naming the shape: "The polygon
+  ..." or "Shape 2 (a box) ..."), a missing or non-numeric edge, an edge
+  outside -180 to 180 or -90 to 90, west not less than east, south not
+  less than north, `res` not 4 to 7, a shape below the minimum, an area
+  over the maximum or with too many points, a bad filter, status, sort or
+  year range, a rank not named, or `species=`. A rank no species has gives
+  404.
 
 `GET /api/export/area` takes the same parameters minus paging and gives the
 whole list as a CSV file, as the other downloads do (see "The CSV
-downloads" above). Its second header line names the box, how many hexagons
-touch it and their size ("45 hexagons of about 36 km² each"), then the other
-options used; the file is named for example `bcbn_species_area_2026-11-09.csv`,
+downloads" above). Its second header line says how many hexagons touch the
+area and their size ("45 hexagons of about 36 km² each"), then the area:
+an old request's box as before ("the box west -123.3, south 49.1, east
+-122.9, north 49.4"), else its one shape ("a box west ...", "a polygon
+with 6 points within west ..., south ..., east ..., north ...", the box
+around it) or its shapes numbered ("2 shapes (1: a box ...; 2: a polygon
+...)"), at most 10 of them and then "and N more shapes, each written out in
+the gbif_link column", so the line stays readable; then the other options
+used; the file is named for example `bcbn_species_area_2026-11-09.csv`,
 with the rank name and the years when there are some
 (`bcbn_species_area_Chordata_2000-2020_2026-11-09.csv`).
 
@@ -1407,7 +1549,7 @@ and the code.
 
 ### The reserve layer and reminder
 
-Option A of the November 2026 proposal: whenever a hexagon or a drawn box
+Option A of the November 2026 proposal: whenever a hexagon or an area of interest
 touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
 
 - `GET /api/reserves` (no parameters) gives the map layer: every reserve's
@@ -1418,7 +1560,7 @@ touches a First Nations reserve, the answer says so (`backend/api/reserves.py`).
   answers `{"available": false, "source": null, "outlines": null}`.
 - `GET /api/hexes/{cell}` (both panels) and `GET /api/area` have
   `reserve_names`: the names of the reserves the hexagon, or any of the
-  box's hexagons, touches, sorted, each once (empty when none).
+  area's hexagons, touches, sorted, each once (empty when none).
 - Their downloads (`/api/export/hexes/{cell}`, `/api/export/area`) end
   header line 2, after the list's options and the note on the `records`
   column, with a full stop and "This area includes First Nations reserve land
@@ -1600,79 +1742,146 @@ size, and while a panel is open the map stays on the hexagon rather than
 moving to a newly opened species. The page tests the history rules on a
 real browser history (`frontend/src/AppHexagon.test.jsx`).
 
-**Draw a box (the area search).** A "Draw a box" button sits with the
-map's controls at the top left (`DrawBoxControl` in `frontend/src/HexMap.jsx`),
-on the overview and on a rank map; on a single species' map it is greyed
-out, saying on hover that it is not available there yet. Pressing it starts
-drawing: the map stops panning and zooming by drag (MapLibre's drag pan,
-rotate, touch zoom, box zoom and double-click zoom are switched off), the
-cursor is a crosshair (set through deck.gl's `getCursor`, which would
-otherwise put its own back), the hover box is hidden, and the hint "Drag to
-draw a box. Esc to cancel." shows; dragging with the mouse or one finger
-draws the box, Esc or the button ("Cancel drawing") cancels, and so does
+**Create an area of interest (the area search).** A "Create an area of
+interest" button sits with the map's controls at the top left, on the
+overview and on a rank map; on a single species' map it is greyed out,
+saying on hover that it is not available there yet. It opens a small panel
+(`frontend/src/AreaOfInterest.jsx`, as in the mockup Lucia approved on
+2026-11-17): "No shapes yet", "1 shape" or "N shapes" at the top, the list
+of shapes ("Shape 1: box", ...) each with an x that removes it, the "Draw"
+tab with a "Box" button (the "Paste" tab and "Polygon" come later), then
+"Back" (removes the last shape) and "Clear area" (removes them all), and
+"Close". Every shape drawn or pasted joins the same area.
+
+The "Paste" tab (`frontend/src/areaPaste.js`) takes polygons as WKT
+(`POLYGON`, `MULTIPOLYGON`, optionally `SRID=4326;` and a Z or M number,
+which is left out) or GeoJSON (`Polygon`, `MultiPolygon`, a `Feature` with
+one, or a `FeatureCollection` of them), longitude then latitude in degrees
+(WGS 84), each ring closed or not. "Fill in an example" puts a polygon of
+about 14,000 km² around Kamloops in the box. "Add" adds every polygon as a
+polygon shape (`p:...` in the area text, a pasted rectangle staying a
+polygon), its corners rounded to 4 decimals as drawn ones are, all in one
+address entry, so the back button takes the whole paste away; the area's
+hexagon size follows the same rule as for a box drawn (below). It is all
+or nothing: if any part is refused nothing is added, the text stays in the
+box and the reason shows under it, naming the shape by its place in the
+area ("Shape 3 (a polygon) has a hole; holes are not supported yet."). It
+refuses empty or unreadable text, other geometry types, holes, a GeoJSON
+`crs` or WKT `SRID` other than WGS 84, points outside -180 to 180 and -90 to
+90 (which also catches metres and latitude first), and then, with the API's
+own checks and words (`areaTextProblem` and `shapesProblem`), crossing
+edges, fewer than 3 points, the 180th meridian, more than 250 points in the
+area, a shape too small and an area too big. At most `PASTE_MAX_CHARACTERS`
+(200,000) characters are read; on a laptop the slowest text that size took
+about 30 ms. A shape outside the hexagons our data covers (the sea, or
+outside BC) is added like any other: the panel says "0 records of 0
+species" and "No species in this area.", the CSV button is greyed out, and
+the GBIF link still searches the shape, where GBIF may well have records
+(BCBN's data is BC only). "Box" starts drawing: the
+map stops panning and zooming by drag (MapLibre's drag pan, rotate, touch
+zoom, box zoom and double-click zoom are switched off), the cursor is a
+crosshair (set through deck.gl's `getCursor`, which would otherwise put its
+own back), the hover box is hidden, and the hint "Press and drag on the map
+to draw a box. Esc to cancel." shows; dragging with the mouse or one finger
+draws the box, Esc, "Box" again or closing the panel cancels, and so does
 any change of page (Back or Forward, a link, another hexagon, area, species
 or rank), so the map never stays in drawing mode on a page it was not
 started on. Whenever the address names a hexagon, the map shows it as it
 was when clicked: it moves to the hexagon when it is off screen and zooms
 to hexagons of its size when the map shows another size (`HexMap.jsx`),
-so the panel and the outline on the map always agree. The box's
-edges keep 4 decimals (about 11 m). The hexagons it selects are those at
-the resolution the map showed when it was drawn that overlap it even by a
-corner (`boxCells` in `frontend/src/area.js`: h3-js
-`polygonToCellsExperimental` with `containmentOverlapping`, the corners as
-`[lat, lng]`, exactly as the API finds them); that resolution stays with
-the box whatever the zoom. While an area is selected, every hexagon outside
-it keeps only a fifth of its opacity (`FADED_SHARE`), at any zoom (a finer
-hexagon counts as selected when the hexagon it lies in is, a coarser one
-when it holds one: `selectionTest` in `area.js`), so the selected ones keep
-their normal colours and stand out. One outline goes around the outside of
+so the panel and the outline on the map always agree. A box's
+edges keep 4 decimals (about 11 m). The hexagons the area selects are those
+that overlap any shape even by a corner, each once (`shapesCells` in
+`frontend/src/areaShapes.js`: h3-js `polygonToCellsExperimental` with
+`containmentOverlapping`, the corners as `[lat, lng]`, exactly as the API
+finds them), all at one size, which does not depend on the map's zoom
+(`frontend/src/areaSize.js`). "Auto", the default, picks the smallest
+hexagons (about 3, 7, 20 or 52 km across, tried from the smallest) at which
+every shape covers at least `MIN_AREA_HEXAGONS` average hexagons and the
+whole area touches at most `MAX_AREA_HEXAGONS`: smaller hexagons follow the
+shapes more closely, so less land outside them is counted. It chooses again
+whenever a shape is added or removed, the whole area recounted at the new
+size; if no size works (a shape too small even at the smallest, or the area
+too big even at the largest) the shape is refused with that size's message.
+The panel's "Hexagon size" choice shows "Auto (about 3 km)" (the size it
+chose) and the four sizes ("About 52 km", ...); a size picked is kept until
+it is changed or the area cleared, and a shape (or a size) that does not
+pass at it is refused with the API's message, the page adding "Or choose
+smaller hexagons." when a shape is too small (the API's message for an area
+too big already says to use larger hexagons). Changing the size is one
+history step. While an area is selected, every hexagon outside it keeps only
+a fifth of its opacity (`FADED_SHARE`), at any zoom: a finer hexagon counts
+as selected when the hexagon of the area's size it lies in is; a coarser one
+only when every one of the area's smaller hexagons inside it is selected, so
+the map never keeps bright land the area does not count (a large hexagon
+only partly in the area is faded, and the area's outline shows where it
+ends) (`selectionTest` in `area.js`), so the selected ones keep their
+normal colours and stand out. One outline goes around the outside of
 the whole selected group, not around each hexagon (`groupOutline` in
-`area.js`, h3-js `cellsToMultiPolygon`, about 0.8 s for the largest box
-allowed, worked out once per box): a dark line on a wider white one, so it
-reads on light and dark hexagons of either colour scale. The box itself is
-drawn dashed above it, thinner. Both are MapLibre line layers, added again
+`area.js`, h3-js `cellsToMultiPolygon`, about 1.1 s for an area near the
+largest allowed (170,414 hexagons), worked out once per area): a dark line on a wider white one, so it
+reads on light and dark hexagons of either colour scale. Each shape is
+drawn dashed above it, thinner (and the box being dragged, beside them). Both are MapLibre line layers, added again
 whenever the area changes so they stay above the hexagons. A shared link
 fits the whole group in view (it reaches past the box). Checked on
 2026-11-09 on a light area (Fort Nelson) and a dark one (Vancouver), at
-resolution 4 and 7, on both scales, desktop and phone width. A box
-smaller than `MIN_AREA_HEXAGONS` (4) average hexagons of its resolution or
-touching more than `MAX_AREA_HEXAGONS` (200,000) hexagons is not asked
-about: the map shows why under the button, with the box's size and the
-limit (`areaProblem` in `area.js`, the API's own checks, copied; a back end
-test runs `area.js` with node to check its limits, areas, hexagons and GBIF
-link still match `backend/api/area.py`).
+resolution 4 and 7, on both scales, desktop and phone width. A shape the
+API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
+hexagons, an area touching more than `MAX_AREA_HEXAGONS` (200,000)
+hexagons, more than `MAX_AREA_POINTS` (250) points, and so on. The panel
+shows why, in the API's own words ("Shape 2 (a box) is about 9.9 km²,
+smaller than the minimum of ..."; `areaTextProblem` and `shapesProblem` in
+`areaShapes.js`, copies of `backend/api/area.py` that a back end test runs
+with node, message for message). The old wording of `area.js` ("This box is
+about ..., zoom in first for smaller hexagons") is gone, so the page, the
+API and the CSV say the same thing.
 
 The area panel (`frontend/src/AreaPanel.jsx`, from `GET /api/area`) takes
 the side panel like the hexagon panel: "Species in this area" (on a rank
-map "Genus *Turdus* in this area", only that rank's species), the box's size
-in km², how many hexagons it touches and their size, the line "It counts the
-whole of every hexagon the box touches, so the area counted is larger than
-the box.", the records and species for the years with the records a year
+map "Genus *Turdus* in this area", only that rank's species), what the
+area is and the hexagons it touches: for one shape the box's (or polygon's)
+size in km² as before ("A box of about 979 km² touching 45 hexagons of
+about 36 km² each."), for several "2 shapes touching 79 hexagons of about
+36 km² each." (boxes around Kamloops and Prince George at resolution 6; the
+size is always one average hexagon at the area's resolution, as for one
+shape, and shapes can overlap, so no total size is given), the line "It
+counts the whole of every hexagon the box touches, so the area counted is
+larger than the box." ("the shapes touch ... than the shapes" for several), the records and species for the years with the records a year
 range left out, the species list with the hexagon panel's controls
 (`SpeciesListControls`, page buttons), a Download CSV button
 (`GET /api/export/area` with the same options, no paging), and "See these
-records on GBIF": a GBIF search of the box itself, every species, for the
-years counted (`gbifBoxSearchUrl` in `frontend/src/gbifLinks.js`), with the
-notes "GBIF searches only the box you drew. Our numbers include every
-hexagon the box touches, so GBIF usually shows fewer records." and
+records on GBIF": a GBIF search of the shapes themselves (one `geometry`
+per shape), every species, for the years counted (`gbifAreaSearchUrl` in
+`frontend/src/gbifLinks.js`, the same link as the API's `area_gbif_link`),
+with the notes "GBIF searches only the box you drew. Our numbers include
+every hexagon the box touches, so GBIF usually shows fewer records." ("only
+inside the shapes you drew ... the shapes touch" for several) and
 `GBIF_COUNT_NOTE` (and on a rank map that GBIF shows every species in the
-box, not only that rank). If the API counts a different number of hexagons
+area, not only that rank). Right under the link, always: "BCBN's data
+covers BC only; GBIF also shows records outside BC." (an area can reach the
+sea or another province, where BCBN has no records but GBIF does). The panel and the CSV ask the API with the
+area text (`area=`, `areaQuery` in `frontend/src/api.js`). If the API counts a different number of hexagons
 than the map outlined, the browser's console says so. The hexagon panel and
 the area panel share their loading (`useListAnswer` in
 `frontend/src/HexagonPanel.jsx`).
 
-The address holds the area as `area=west,south,east,north&area_res=6`, with
-its list options as `area_q`, `area_sort`, `area_status` and `area_page`
-(`readArea` and `mapSearch` in `frontend/src/route.js`; for example
-`?rank=phylum&kingdom=Animalia&phylum=Chordata&area=-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
-so a shared link opens the same box, fitted in view.
+The address holds the area as its area text, `area=b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54`
+(written with its colons and semicolons as they are), with `area_res=6` only
+when a hexagon size was picked (none for "Auto"), and its list options
+as `area_q`, `area_sort`, `area_status` and `area_page` (`readArea` and
+`mapSearch` in `frontend/src/route.js`; for example
+`?rank=phylum&kingdom=Animalia&phylum=Chordata&area=b:-120.6,50.55,-120.1,50.8&area_res=6&year_from=2000&year_to=2020`),
+so a shared link opens the same shapes, fitted in view. An old link's
+`area=west,south,east,north` opens as one box, and its `area_res` (every
+old link has one) as a size picked, so it opens exactly as before; an
+address whose area text the API would refuse, or whose shapes fit no size
+at Auto, opens with no area.
 
-**The area stays until it is cleared.** Once drawn, the area (its box, the
-outline and the faded hexagons around it) stays on the map and in the
-address until the map's "Clear area" button (beside "Draw a box" while an
-area exists) removes it; a new box drawn anywhere on the map replaces it
-(one area at a time; a box too small or too big keeps the old area and
-says why). Every other move
+**The area stays until it is cleared.** Once drawn, the area (its shapes,
+the outline and the faded hexagons around it) stays on the map and in the
+address until the panel's "Clear area" removes it; a new box drawn anywhere
+on the map is added to it (a box refused keeps the area as it was and says
+why), and a shape's x or "Back" removes one. Every other move
 keeps it: clicking a hexagon opens that hexagon's panel on top of the area
 panel, which stays loaded under it; opening a species (from the area's
 list, a hexagon's list or the search box) keeps the area in the address,
@@ -1687,7 +1896,8 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | After | The address entry | Back then |
 | --- | --- | --- |
 | Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
-| Drawing another box (anywhere on the map) | goes back past every entry holding the old box, then added as the area's first entry (closes an open hexagon panel) | returns to before the first box, never to the old box |
+| Drawing another box (anywhere on the map) | added, with the box joined to the area (closes an open hexagon panel) | returns to the area without that box |
+| A shape's x, or the panel's "Back" | added, without that shape (no area at all when it was the only one) | returns to the area with the shape |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |
@@ -1697,12 +1907,10 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | "Clear area" on a shared link's area | the link's entry, and any entry added since, become one entry without the area (a hexagon's panel stays open) | leaves the page, as from the link |
 
 "Clear area" takes the area out of the history, not only out of the
-address, and so does a new box for the old one: every entry that holds an
-area records how far it is from the entry before the area began
-(`withAreaHistory`, `clearAreaMove` and `newAreaMove` in
+address: every entry that holds an area records how far it is from the
+entry before the area began (`withAreaHistory` and `clearAreaMove` in
 `frontend/src/route.js`), so neither a panel's x nor Back can bring a
-cleared or replaced area back. A shared link's area is replaced on the
-link's own entry. Forward cannot either once a hexagon's panel or a rank
+cleared area back, whatever shapes it had along the way. Forward cannot either once a hexagon's panel or a rank
 was open; right after drawing, Forward can redo the box, as for any Back.
 
 **Download CSV.** Four lists have a "Download CSV" button (the area panel's,

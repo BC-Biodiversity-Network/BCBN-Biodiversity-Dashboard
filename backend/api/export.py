@@ -22,17 +22,26 @@ number BCBN works out: each species' record count, the same number the list
 shows (asked for by Evan on 2026-11-10). Nothing else BCBN computes (years,
 first and last records, and so on) goes in a file.
 
-    Datasets (8 columns): title, abstract, subjects, creators, published,
-        catalogue, doi, link. title, abstract and subjects as harvested from
-        Lunaris (public, and Lunaris shows them too; Evan, 2026-11-10; the
-        harvest took out HTML tags and extra spaces), the subjects joined
-        with " | ", which no harvested subject holds; creators as harvested,
-        joined with "; "; the issued date as stored, the catalogue name the
-        page shows, the DOI when the record's identifier is one (never
-        another kind of id), and the link to the original catalogue the
-        page uses (Lucia's choice of columns, 2026-11-10). Nothing BCBN or
-        its models made (the BC class, the organisms, looked-up places, hand
-        decisions, checked licences or access) goes in.
+    Datasets (9 columns): title, abstract, subjects, creators, published,
+        catalogue, doi, link, licence. title, abstract and subjects as
+        harvested from Lunaris (public, and Lunaris shows them too; Evan,
+        2026-11-10; the harvest took out HTML tags and extra spaces), the
+        subjects joined with " | ", which no harvested subject holds;
+        creators as harvested, joined with "; "; the issued date as stored,
+        the catalogue name the page shows, the DOI when the record's
+        identifier is one (never another kind of id), and the link to the
+        original catalogue the page uses (Lucia's choice of columns,
+        2026-11-10). Then the licence the dataset's detail page shows, by
+        the page's own rule (dataset_licences.py): the record's own
+        licences, or when it has none, the ones BCBN found when checking the
+        original catalogue in November 2026 (also for the few datasets on
+        the hand-decided list, whose own licence is set aside); access
+        rights left out; each
+        in full as plain text, with its link in brackets; several joined
+        with " | " (asked for by Reyna at the steering committee on
+        2026-11-13, Evan agreeing). Nothing else BCBN or its models made
+        (the BC class, the organisms, looked-up places, hand decisions,
+        checked access) goes in.
     Species lists (5 columns): specieskey, scientific_name, english_name,
         bcsee_status, records: the card's Catalogue of Life name (no
         authorship), the English name the card shows, the BC statuses the
@@ -44,8 +53,14 @@ first and last records, and so on) goes in a file.
     Hexagon species list (6 columns): the same 5 and gbif_link, the GBIF
         search the hexagon panel links to for that species, hexagon and
         years (gbif_links.py).
-    Area species list (6 columns): the same 6, gbif_link being the GBIF
-        search for that species inside the box (area.py).
+    Area species list (7 columns): the same 5, taxon_key (the species'
+        GBIF taxon keys, its card key and every key merged into it, joined
+        with " | ") and gbif_link, the GBIF search for that species inside
+        the area's shapes (area.py). For an area too detailed to repeat its
+        outline on every row (csv_link_once in area.py: the file would be
+        over about 50 MB), gbif_link is left empty and the header gives the
+        area's own GBIF link once, with how to use taxon_key with it
+        (AREA_LINK_ONCE_LINES), so that file has more than 4 header lines.
 
 The file: UTF-8 text with a byte order mark (BOM, three bytes) at the very
 start, so Excel on Windows reads it as UTF-8 and shows accented letters
@@ -77,6 +92,7 @@ from zoneinfo import ZoneInfo
 
 from api.area import area_species
 from api.cells import cards_gbif_keys, cell_species
+from api.dataset_licences import shown_licences
 from api.datasets import dataset_request, ordered_datasets
 import h3
 
@@ -90,17 +106,46 @@ VANCOUVER = ZoneInfo("America/Vancouver")
 BOM = "\ufeff"
 
 # How many "# " lines come before the column names, and the last of them.
+# Every file has 4, except an area's that is too detailed to repeat its
+# GBIF link on every row (see AREA_LINK_ONCE_LINES); its last line then says
+# how many to skip.
 HEADER_LINE_COUNT = 4
-R_LINE = "To read in R: read.csv(file, skip = 4)"
+
+
+def r_line(count):
+    """Return the last header line of a file with count header lines: how to
+    read it in R, skipping them all."""
+    return f"To read in R: read.csv(file, skip = {count})"
+
+
+R_LINE = r_line(HEADER_LINE_COUNT)
+
+# The header lines an area CSV gets, after its source line, when each row
+# has the species' GBIF taxon keys instead of a link (csv_link_once in
+# area.py). {link} is the area's own GBIF link, for every species. GBIF's
+# search page takes a species as taxonKey (the parameter our own links use).
+AREA_LINK_ONCE_LINES = [
+    "GBIF link for this whole area: {link}",
+    "This area is too detailed to repeat its outline on every row, so each row has the species' GBIF taxon_key "
+    "instead of a link.",
+    "To see one species in this area on GBIF:",
+    "1. Open the link above.",
+    '2. Choose the species under "Scientific name" in GBIF\'s filters, or add &taxonKey= and the row\'s taxon_key '
+    "to the end of the link (once for each key, when the row has several).",
+]
 
 # The columns of each file.
-DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link"]
+DATASET_COLUMNS = ["title", "abstract", "subjects", "creators", "published", "catalogue", "doi", "link",
+                   "licence"]
 SPECIES_COLUMNS = ["specieskey", "scientific_name", "english_name", "bcsee_status", "records"]
 HEXAGON_COLUMNS = SPECIES_COLUMNS + ["gbif_link"]
+AREA_COLUMNS = SPECIES_COLUMNS + ["taxon_key", "gbif_link"]
 
-# What each dataset row is read from (d is lunaris_datasets), in the order
-# dataset_row takes them.
-DATASET_SQL_COLUMNS = "d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, d.link_type"
+# What each dataset row is read from (d is lunaris_datasets, s is
+# dataset_search, whose checked_licences are the source check's): the id,
+# then the values dataset_row takes, in its order.
+DATASET_SQL_COLUMNS = ("d.id, d.title, d.abstract, d.subjects, d.creators, d.issued, d.source_name, d.link, "
+                       "d.link_type, d.licences, s.checked_licences")
 
 # The date of the Lunaris harvest the datasets come from. The API's data
 # files do not store it (lunaris_datasets.parquet has no date), so it is
@@ -114,16 +159,24 @@ LUNARIS_HARVEST_DATE = "2026-10-20"
 # the harvest did to it (checked against the raw XML on 2026-11-10: HTML
 # tags taken out of 762 abstracts and 14 titles, runs of spaces and line
 # breaks made one space in abstracts, titles and 38 subject lists, one
-# description kept per record).
+# description kept per record), and where the licence comes from (the
+# detail page's rule, dataset_licences.py; the export takes HTML tags out
+# of licences, as the page does). "or was wrong" covers the few datasets
+# on the hand-decided list (a dead licence link, or a record "licence" that
+# is not one), whose checked licence is shown; the page's own tip explains
+# each one. "checked against each original catalogue" is the November 2026
+# source check, which covered every dataset the site shows.
 DATASETS_SOURCE_LINE = (
     f"Source: Lunaris dataset records from our harvest of {LUNARIS_HARVEST_DATE} (HTML tags removed from "
     "titles and abstracts, extra spaces from titles, abstracts and subjects; one description per record); "
+    "licence: from the Lunaris record, or from the original catalogue where the record has none or was wrong; "
+    "checked against each original catalogue by BCBN in November 2026 (HTML tags removed); "
     "each row links to the original catalogue")
 
-# How the subjects column joins a record's subjects. No harvested subject
-# holds it (checked on 2026-11-10), so the list can always be split again;
-# joined_values refuses a value that holds it rather than write a list that
-# cannot be.
+# How the subjects and licence columns join several values. No harvested
+# subject holds it (checked on 2026-11-10), nor any licence (checked on
+# 2026-11-16), so the list can always be split again; joined_values refuses
+# a value that holds it rather than write a list that cannot be.
 LIST_SEPARATOR = " | "
 
 # A link the Datasets page follows (isWebLink in datasetText.js), and the
@@ -197,14 +250,16 @@ def file_name(kind, parts, date):
 
 
 def csv_text(header_lines, columns, rows):
-    """Return the whole file: the 4 header lines, each starting with "# ",
-    the column names, and the rows, with standard CSV quoting. None is
+    """Return the whole file: the header lines (4, or more for a detailed
+    area), each starting with "# ", the last saying how many to skip in R,
+    then the column names, and the rows, with standard CSV quoting. None is
     written as an empty value. Each header line is one quoted CSV field,
     so a spreadsheet shows the whole sentence in its first column instead
     of cutting it at every comma."""
     lines = [one_line(line) for line in header_lines]
-    if len(lines) != HEADER_LINE_COUNT:
-        raise ValueError(f"a download has exactly {HEADER_LINE_COUNT} header lines; got {len(lines)}")
+    if len(lines) < HEADER_LINE_COUNT or lines[-1] != r_line(len(lines)):
+        raise ValueError(f"a download has at least {HEADER_LINE_COUNT} header lines, the last saying how many to "
+                         f"skip; got {len(lines)}")
     buffer = io.StringIO(newline="")
     # The header lines: always in double quotes, any quote mark inside
     # written twice, by the csv module's own quoting. one_line has already
@@ -266,12 +321,16 @@ def joined_values(values):
     return LIST_SEPARATOR.join(values) or None
 
 
-def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type):
-    """Return one dataset's row: the 8 columns (see the top of this file),
-    from the values DATASET_SQL_COLUMNS reads. Text is written as stored,
-    never shortened."""
+def dataset_row(title, abstract, subjects, creators, issued, source_name, link, link_type, licences,
+                checked_licences, record_licence_set_aside=False):
+    """Return one dataset's row: the 9 columns (see the top of this file),
+    from the values DATASET_SQL_COLUMNS reads after the id. Text is written
+    as stored, never shortened; the licence is the one the detail page
+    shows (dataset_licences.shown_licences), record_licence_set_aside being
+    true for a dataset on the hand-decided list."""
     return [title, abstract, joined_values(subjects), "; ".join(creators or []), issued, source_name,
-            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None]
+            dataset_doi(link, link_type), link if WEB_LINK.match(link or "") else None,
+            joined_values(shown_licences(licences, checked_licences, record_licence_set_aside))]
 
 
 def datasets_search_line(data, request):
@@ -312,7 +371,8 @@ def export_datasets(data, date, query=None, catalogue=None, final_class=None, fr
     cursor = data.cursor()
     request = dataset_request(data, cursor, query, catalogue, final_class, frontend_group, sort,
                               year_from, year_to, organism, access, mappable, species)
-    rows = [dataset_row(*row) for row in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
+    rows = [dataset_row(*values, record_licence_set_aside=dataset_id in data.licence_decisions)
+            for dataset_id, *values in ordered_datasets(cursor, request, DATASET_SQL_COLUMNS)]
     header = [f"BCBN Datasets search results, exported {date}",
               datasets_search_line(data, request),
               DATASETS_SOURCE_LINE,
@@ -462,21 +522,70 @@ def degrees(value):
     return format(value, ".6f").rstrip("0").rstrip(".")
 
 
-def export_area(data, date, west, south, east, north, res, q=None, statuses=None, sort=None,
-                year_from=None, year_to=None, rank=None, rank_given=None):
-    """Return (file name, CSV text) of every species in the hexagons under a
-    box for these options, in the list's order, each with its GBIF search
-    inside the box for the years counted. The list is the area search's own
-    (area_species with no page limit), so it raises what that raises."""
-    answer = area_species(data, west, south, east, north, res, year_from, year_to, q, 0, None, rank,
+# The most shapes header line 2 describes one by one; past this it says how
+# many more there are (each is written out in full in the gbif_link
+# column), so the line stays readable.
+MAX_SHAPES_DESCRIBED = 10
+
+
+def edges_text(bounds):
+    """Return a box's edges for a header line: "west -123.3, south 49.1,
+    east -122.9, north 49.4" (bounds as shape_bounds gives them)."""
+    return (f"west {degrees(bounds['west'])}, south {degrees(bounds['south'])}, "
+            f"east {degrees(bounds['east'])}, north {degrees(bounds['north'])}")
+
+
+def shape_text(summary):
+    """Return one shape for a header line, from its summary in the answer
+    (shapes_summary in area.py): "a box west ..., south ..., east ...,
+    north ..." or "a polygon with 6 points within west ..., ..." (the box
+    around it; the polygon itself is in the gbif_link column)."""
+    if summary["type"] == "box":
+        return f"a box {edges_text(summary['bounds'])}"
+    return f"a polygon with {summary['point_count']:,} points within {edges_text(summary['bounds'])}"
+
+
+def area_text(answer, from_text=True):
+    """Return how header line 2 names the area. An old request's box
+    (from_text false, and an area of one box): "the box west ..., south
+    ..., east ..., north ...", as before shapes came in. Otherwise its one
+    shape ("a box ..."), or "2 shapes (1: a box ...; 2: a polygon ...)", at
+    most MAX_SHAPES_DESCRIBED of them, then how many more."""
+    if not from_text and answer["box"]:
+        return f"the box {edges_text(answer['box'])}"
+    summaries = answer["shapes"]
+    if len(summaries) == 1:
+        return shape_text(summaries[0])
+    described = [f"{number}: {shape_text(summary)}"
+                 for number, summary in enumerate(summaries[:MAX_SHAPES_DESCRIBED], start=1)]
+    more = len(summaries) - len(described)
+    if more:
+        described.append(f"and {more:,} more {'shape' if more == 1 else 'shapes'}, each written out in the "
+                         "gbif_link column")
+    return f"{len(summaries):,} shapes ({'; '.join(described)})"
+
+
+def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
+                year_from=None, year_to=None, rank=None, rank_given=None, area_from_text=False):
+    """Return (file name, CSV text) of every species in the hexagons under
+    an area (shapes, a list of AreaShape) for these options, in the list's
+    order, each with its GBIF taxon keys (taxon_key) and its GBIF search
+    inside the area for the years counted; for an area too detailed to
+    repeat its outline on every row (the answer's csv_link_once), the rows
+    have no link and the header gives the area's link once, with how to use
+    the keys with it (AREA_LINK_ONCE_LINES), before the line for R.
+    area_from_text says the area came as area text, so header line 2
+    describes its shapes (area_text); an old request's box keeps its old
+    words. The list is the area search's own (area_species with no page
+    limit), so it raises what that raises."""
+    answer = area_species(data, shapes, res, year_from, year_to, q, 0, None, rank,
                           rank_given, statuses, sort)
-    rows = [species_row(result, result["records"]) + [result["gbif_link"]] for result in answer["results"]]
-    box = answer["box"]
+    rows = [species_row(result, result["records"]) + [joined_values(result["taxon_keys"]), result["gbif_link"]]
+            for result in answer["results"]]
     count = answer["hexagon_count"]
     size = km2_text(h3.average_hexagon_area(answer["res"], "km^2"))
     parts = [f"species in the {count:,} {'hexagon' if count == 1 else 'hexagons'} of about {size} "
-             f"{'' if count == 1 else 'each '}that touch the box west {degrees(box['west'])}, "
-             f"south {degrees(box['south'])}, east {degrees(box['east'])}, north {degrees(box['north'])}"]
+             f"{'' if count == 1 else 'each '}that touch {area_text(answer, area_from_text)}"]
     if answer["rank"]:
         label = answer["rank"]
         parts.append(f"only {label['rank']} {label['name']} ({path_text(label['path'])})")
@@ -485,4 +594,9 @@ def export_area(data, date, west, south, east, north, res, q=None, statuses=None
     header = [f"BCBN species list for an area, exported {date}",
               list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)
-    return name, csv_text(header, HEXAGON_COLUMNS, rows)
+    if answer["csv_link_once"]:
+        # The area's link and how to use it, before the line for R, which
+        # then counts every header line.
+        extra = [line.format(link=answer["area_gbif_link"]) for line in AREA_LINK_ONCE_LINES]
+        header[-1:] = extra + [r_line(len(header) + len(extra))]
+    return name, csv_text(header, AREA_COLUMNS, rows)

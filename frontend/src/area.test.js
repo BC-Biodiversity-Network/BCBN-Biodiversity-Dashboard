@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { areaExportUrl, fetchArea } from './api'
 import {
-  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, areaProblem, boxAreaKm2, boxCells, boxFromCorners,
-  boxSizeProblem, groupOutline, minimumAreaKm2, selectionTest,
+  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, boxAreaKm2, boxCells, boxFromCorners, groupOutline,
+  minimumAreaKm2, selectionTest,
 } from './area'
+import { boxShapeOf, pyFixed, readAreaText, shapesProblem } from './areaShapes'
 import { AREA_GBIF_NOTE, GBIF_CHECKLIST_KEY, boxWkt, gbifBoxSearchUrl } from './gbifLinks'
 import { AREA_LIST, NO_LIST, isPlainMap, mapSearch, readArea, readAreaPanelOpen, readList } from './route'
 
@@ -50,26 +51,25 @@ describe('a box drawn on the map', () => {
 })
 
 describe('a box too small or too big', () => {
+  // The checks are the API's, with its words (shapesProblem in
+  // areaShapes.js); the old ones of this file are gone.
   it.each([4, 5, 6, 7])('is too small under 4 hexagons (resolution %i), saying its size and the minimum', (res) => {
     const smallest = minimumAreaKm2(res)
-    const problem = areaProblem(boxWithArea(smallest * 0.99), res)
-    expect(problem).toContain(`smaller than the minimum of ${smallest.toLocaleString('en-US', {
-      minimumFractionDigits: 1, maximumFractionDigits: 1 })} km²`)
-    expect(problem).toContain(`This box is about ${(smallest * 0.99).toLocaleString('en-US', {
-      minimumFractionDigits: 1, maximumFractionDigits: 1 })} km²`)
-    expect(problem).toContain(`for hexagons of this size (4 hexagons of about ${getHexagonAreaAvg(res, 'km2').toLocaleString('en-US', {
-      minimumFractionDigits: 1, maximumFractionDigits: 1 })} km²)`)
+    const problem = shapesProblem([boxShapeOf(boxWithArea(smallest * 0.99))], res)
+    expect(problem).toBe(`The box is about ${pyFixed(smallest * 0.99, 1)} km², smaller than the minimum of `
+      + `${pyFixed(smallest, 1)} km² for hexagons of about ${pyFixed(getHexagonAreaAvg(res, 'km2'), 1)} km² (4 times `
+      + 'their average area). Draw a larger box.')
     expect(problem).not.toMatch(/resolution/i)
-    expect(areaProblem(boxWithArea(smallest * 1.01), res)).toBeNull()
+    expect(shapesProblem([boxShapeOf(boxWithArea(smallest * 1.01))], res)).toBeNull()
   })
 
   it('is too big over 200,000 hexagons, saying about how many, before any hexagon is found', () => {
-    const allOfBc = { west: -139.1, south: 48.2, east: -114, north: 60 }
-    const problem = boxSizeProblem(allOfBc, 7)
-    expect(problem).toMatch(/^This box touches about 4\d\d,\d\d\d hexagons of about 5\.2 km², more than the 200,000/)
+    const allOfBc = boxShapeOf({ west: -139.1, south: 48.2, east: -114, north: 60 })
+    const problem = shapesProblem([allOfBc], 7)
+    expect(problem).toMatch(/^The box touches about 4\d\d,\d\d\d hexagons of about 5\.2 km², more than the 200,000/)
     expect(problem).not.toMatch(/resolution/i)
-    expect(problem).toContain('zoom out first for larger hexagons')
-    expect(areaProblem(allOfBc, 6)).toBeNull()
+    expect(problem).toContain('Draw a smaller box or use larger hexagons.')
+    expect(shapesProblem([allOfBc], 6)).toBeNull()
   })
 })
 
@@ -114,44 +114,80 @@ describe('the selected group of hexagons on the map', () => {
     // At resolution 7, the hexagons inside a selected one are selected.
     expect(cellToChildren(cells[0], 7).every(inside)).toBe(true)
     expect(cellToChildren('862800b37ffffff', 7).some(inside)).toBe(false)
-    // At resolution 4 and 5, the hexagons holding a selected one are.
-    expect(inside(cellToParent(cells[0], 5))).toBe(true)
-    expect(inside(cellToParent(cells[0], 4))).toBe(true)
+    // At resolution 4 and 5, a hexagon is selected only when every hexagon
+    // inside it is: the map never keeps bright land the area does not count.
+    const chosen = new Set(cells)
+    for (const res of [4, 5]) {
+      const parents = [...new Set(cells.map((cell) => cellToParent(cell, res)))]
+      for (const parent of parents) {
+        expect(inside(parent)).toBe(cellToChildren(parent, 6).every((child) => chosen.has(child)))
+      }
+      if (res === 4) {
+        expect(parents.some(inside)).toBe(false)
+      }
+    }
     expect(inside('842800bffffffff')).toBe(false)
+    const whole = cellToChildren('852800b3fffffff', 6)
+    const wholeTest = selectionTest([...whole, ...cells], 6)
+    expect(wholeTest('852800b3fffffff')).toBe(true)
+    expect(selectionTest(whole.slice(1), 6)('852800b3fffffff')).toBe(false)
   })
 })
 
 describe('the area in the address', () => {
+  // The box around Kamloops as an area of one shape, and with a second box.
+  const ONE = { shapes: [boxShapeOf(KAMLOOPS)], res: 6 }
+  const TWO_TEXT = 'b:-120.6,50.55,-120.1,50.8;b:-123,53.8,-122.5,54'
+
   it('comes back from the address as it went in, with its list options under area_', () => {
-    const area = { box: KAMLOOPS, res: 6 }
     const list = { q: 'thrush', sort: 'english', status: ['red', 'none'], page: 2 }
-    const search = mapSearch({ rank: CHORDATA, area, areaList: list, years: { from: 2000, to: 2020 } })
-    expect(search).toBe('?rank=phylum&kingdom=Animalia&phylum=Chordata&area=-120.6,50.55,-120.1,50.8&area_res=6'
+    const search = mapSearch({ rank: CHORDATA, area: ONE, areaList: list, years: { from: 2000, to: 2020 } })
+    expect(search).toBe('?rank=phylum&kingdom=Animalia&phylum=Chordata&area=b:-120.6,50.55,-120.1,50.8&area_res=6'
       + '&area_q=thrush&area_sort=english&area_status=red&area_status=none&area_page=2&year_from=2000&year_to=2020')
-    expect(readArea(search)).toEqual(area)
+    expect(readArea(search)).toEqual(ONE)
     expect(readList(search, AREA_LIST)).toEqual(list)
     expect(isPlainMap(search.replace(/rank=[^&]*&kingdom=Animalia&phylum=Chordata&/, ''))).toBe(false)
   })
 
+  it('writes several shapes as readable area text, and reads them back', () => {
+    const two = { shapes: readAreaText(TWO_TEXT), res: 6 }
+    const search = mapSearch({ area: two })
+    expect(search).toBe(`?area=${TWO_TEXT}&area_res=6`)
+    expect(readArea(search)).toEqual(two)
+    // Written the way URLSearchParams writes it, it reads the same.
+    expect(readArea(`?${new URLSearchParams({ area: TWO_TEXT, area_res: '6' })}`)).toEqual(two)
+  })
+
+  it('opens an old link (area=west,south,east,north) as one box', () => {
+    expect(readArea('?area=-120.6,50.55,-120.1,50.8&area_res=6')).toEqual(ONE)
+  })
+
   it('leaves the defaults out, keeps an area with a hexagon, and its panel closed when asked', () => {
-    expect(mapSearch({ area: { box: KAMLOOPS, res: 7 }, areaList: NO_LIST }))
-      .toBe('?area=-120.6,50.55,-120.1,50.8&area_res=7')
-    const both = mapSearch({ cell: '872800b30ffffff', area: { box: KAMLOOPS, res: 7 } })
-    expect(both).toBe('?cell=872800b30ffffff&area=-120.6,50.55,-120.1,50.8&area_res=7')
-    expect(readArea(both)).toEqual({ box: KAMLOOPS, res: 7 })
-    const closed = mapSearch({ area: { box: KAMLOOPS, res: 7 }, areaPanelOpen: false })
-    expect(closed).toBe('?area=-120.6,50.55,-120.1,50.8&area_res=7&area_panel=closed')
+    const seven = { ...ONE, res: 7 }
+    expect(mapSearch({ area: seven, areaList: NO_LIST })).toBe('?area=b:-120.6,50.55,-120.1,50.8&area_res=7')
+    const both = mapSearch({ cell: '872800b30ffffff', area: seven })
+    expect(both).toBe('?cell=872800b30ffffff&area=b:-120.6,50.55,-120.1,50.8&area_res=7')
+    expect(readArea(both)).toEqual(seven)
+    const closed = mapSearch({ area: seven, areaPanelOpen: false })
+    expect(closed).toBe('?area=b:-120.6,50.55,-120.1,50.8&area_res=7&area_panel=closed')
     expect(readAreaPanelOpen(closed)).toBe(false)
-    expect(readAreaPanelOpen('?area=-120.6,50.55,-120.1,50.8&area_res=7')).toBe(true)
+    expect(readAreaPanelOpen('?area=b:-120.6,50.55,-120.1,50.8&area_res=7')).toBe(true)
     // A species' card keeps the area in the address (not shown on its map).
-    expect(mapSearch({ species: '59PMB', area: { box: KAMLOOPS, res: 7 } }))
-      .toBe('?species=59PMB&area=-120.6,50.55,-120.1,50.8&area_res=7')
+    expect(mapSearch({ species: '59PMB', area: seven }))
+      .toBe('?species=59PMB&area=b:-120.6,50.55,-120.1,50.8&area_res=7')
+  })
+
+  it('reads an address without area_res as Auto, and writes Auto without it', () => {
+    expect(readArea('?area=b:-120.6,50.55,-120.1,50.8')).toEqual({ ...ONE, res: null })
+    expect(readArea('?area=-120.6,50.55,-120.1,50.8')).toEqual({ ...ONE, res: null })
+    expect(mapSearch({ area: { ...ONE, res: null } })).toBe('?area=b:-120.6,50.55,-120.1,50.8')
   })
 
   it.each([
-    '?area=-120.6,50.55,-120.1&area_res=6', '?area=-120.6,50.55,-120.1,50.8', '?area=-120.6,50.55,-120.1,50.8&area_res=3',
+    '?area=-120.6,50.55,-120.1&area_res=6', '?area=-120.6,50.55,-120.1,50.8&area_res=3',
     '?area=-120.1,50.55,-120.6,50.8&area_res=6', '?area=-120.6,50.8,-120.1,50.55&area_res=6',
     '?area=-200,50.55,-120.1,50.8&area_res=6', '?area=a,50.55,-120.1,50.8&area_res=6', '?area=,50.55,-120.1,50.8&area_res=6',
+    '?area=b:0,0,1,1;&area_res=6', '?area=p:0,0,1,1,1,0,0,1&area_res=6', '?area=x:0,0,1,1&area_res=6',
   ])('is not read from an address that cannot hold one (%s)', (search) => {
     expect(readArea(search)).toBeNull()
   })
@@ -168,12 +204,12 @@ describe('the area requests', () => {
     return urls
   }
 
-  it('ask for the box, its resolution and the list\'s options, the page only for the list', async () => {
+  it('ask for the area, its resolution and the list\'s options, the page only for the list', async () => {
     const urls = recordUrls()
-    const area = { box: KAMLOOPS, res: 6 }
+    const area = { shapes: [boxShapeOf(KAMLOOPS)], res: 6 }
     const options = { years: { from: 2000, to: 2020 }, q: ' thrush ', status: ['red'], sort: 'english', rank: CHORDATA }
     await fetchArea(area, { ...options, offset: 50, limit: 50 })
-    expect(urls[0]).toBe('/api/area?offset=50&limit=50&west=-120.6&south=50.55&east=-120.1&north=50.8&res=6'
+    expect(urls[0]).toBe('/api/area?offset=50&limit=50&area=b%3A-120.6%2C50.55%2C-120.1%2C50.8&res=6'
       + '&rank=phylum&kingdom=Animalia&phylum=Chordata&year_from=2000&year_to=2020&q=thrush&status=red&sort=english')
     const exportUrl = areaExportUrl(area, { ...options, offset: 50, limit: 50 })
     expect(exportUrl.split('?')[0]).toBe('/api/export/area')
@@ -181,8 +217,8 @@ describe('the area requests', () => {
   })
 
   it('never ask for a species (the API refuses it for an area)', () => {
-    expect(areaExportUrl({ box: KAMLOOPS, res: 6 }, { species: '59PMB' }))
-      .toBe('/api/export/area?west=-120.6&south=50.55&east=-120.1&north=50.8&res=6')
+    expect(areaExportUrl({ shapes: [boxShapeOf(KAMLOOPS)], res: 6 }, { species: '59PMB' }))
+      .toBe('/api/export/area?area=b%3A-120.6%2C50.55%2C-120.1%2C50.8&res=6')
   })
 })
 

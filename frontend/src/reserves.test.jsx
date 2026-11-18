@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AreaPanel from './AreaPanel'
+import { boxShapeOf } from './areaShapes'
 import HexagonPanel, { ReserveReminder } from './HexagonPanel'
 import IndigenousDataPage from './IndigenousDataPage'
 import {
@@ -17,7 +18,8 @@ import SiteFooter from './SiteFooter'
 // Every reserve name here is made up.
 
 const CELL = '872800b30ffffff'
-const AREA = { box: { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, res: 6 }
+const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
+const AREA = { shapes: [boxShapeOf(KAMLOOPS)], res: 6 }
 
 // Made-up names using the letters the real ones do.
 const SEVEN = ['ALPHA 1', 'K’IT TSAḎẔE', 'WǪCHIIGII NANÉɁ', 'Made-up Creek 2', 'GAT TAH KWĄ', 'SIXTH 6', 'SEVENTH 7']
@@ -51,7 +53,8 @@ const ASKED = {
 // A pretend /api/area answer, with reserve_names.
 function areaAnswer(names) {
   return {
-    ...cellAnswer(names), box: AREA.box, res: 6, box_area_km2: 979.4, minimum_area_km2: 144.5, hexagon_count: 45,
+    ...cellAnswer(names), box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 144.5,
+    hexagon_count: 45,
     rank: null,
   }
 }

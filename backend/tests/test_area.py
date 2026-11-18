@@ -177,7 +177,8 @@ def test_the_download_holds_the_whole_list_with_four_header_lines(client):
                          "for this list's area and years")
     assert header[2].startswith("# Source: GBIF occurrence download https://doi.org/10.15468/dl.test;")
     assert header[3] == "# To read in R: read.csv(file, skip = 4)"
-    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records", "gbif_link"]
+    assert columns == ["specieskey", "scientific_name", "english_name", "bcsee_status", "records", "taxon_key",
+                       "gbif_link"]
     # Paging options never cut the download.
     assert [row["specieskey"] for row in rows] == ["AAAA", "CCCC"]
     assert rows[0]["scientific_name"] == "Turdus migratorius" and rows[0]["bcsee_status"] == "Yellow"

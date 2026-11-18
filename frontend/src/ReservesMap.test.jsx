@@ -55,6 +55,7 @@ vi.mock('@deck.gl/geo-layers', () => ({
 }))
 
 // Imported after the stand-ins above, which vitest puts in place first.
+import { boxShapeOf } from './areaShapes'
 import HexMap from './HexMap'
 import { NO_RESERVE_OUTLINES, RESERVE_LABEL_MIN_ZOOM } from './reserves'
 
@@ -180,7 +181,9 @@ describe('the reserve layer', () => {
     const outline = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] } }
     show({
       reserves: AVAILABLE, reservesShown: true,
-      selectedArea: { box: { west: -123, south: 49, east: -122, north: 50 }, res: 6, cells: [], outline },
+      selectedArea: {
+        shapes: [boxShapeOf({ west: -123, south: 49, east: -122, north: 50 })], res: 6, cells: [], outline,
+      },
     })
     const ids = Object.keys(mapState.mapLayers)
     expect(ids.indexOf('reserves-label')).toBeLessThan(ids.indexOf('area-group-edge'))

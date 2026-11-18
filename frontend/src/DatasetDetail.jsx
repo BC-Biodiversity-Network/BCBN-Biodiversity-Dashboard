@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react'
 
 import {
   capitalised, checkedAccessLabel, coordinateFields, creatorsLabel, harvestedDegrees, identifierLabel, isWebLink,
-  issuedLabel, looksLikeHtml, plainText, readLicences, shownCoordinates, shownDegrees,
+  issuedLabel, looksLikeHtml, plainText, readLicences, shownCoordinates, shownDegrees, shownLicences,
 } from './datasetText'
 import InfoTip from './InfoTip'
 import { speciesMapSearch } from './route'
@@ -109,7 +109,10 @@ function DetailRow({ label, note, children }) {
 // (ignoring case), which the line under the title already gives. Where BCBN
 // checked the original catalogue (dataset.source_check), its access is shown
 // instead of the record's when the two differ, and its licence when the
-// record has none, each marked "(checked by BCBN)" with a tip.
+// record has none, each marked "(checked by BCBN)" with a tip. A dataset on
+// BCBN's hand-decided list (dataset.record_licence_set_aside, the reason)
+// shows the checked licence the same way, its tip giving that reason in
+// place of "did not include a licence" (shownLicences has the rule).
 function Details({ dataset }) {
   const creators = creatorsLabel(dataset.creators)
   const publisher = dataset.publisher?.trim()
@@ -118,10 +121,14 @@ function Details({ dataset }) {
   const published = issuedLabel(dataset.issued)
   const identifier = identifierLabel(dataset.link, dataset.link_type)
   const subjects = dataset.subjects ?? []
-  const { licences, accessRights } = readLicences(dataset.licences)
+  const { accessRights } = readLicences(dataset.licences)
   const check = dataset.source_check
   const checkedAccess = check?.access_matches_record === false ? checkedAccessLabel(check) : null
-  const checkedLicences = licences.length === 0 ? readLicences(check?.licences).licences : []
+  const setAsideBecause = dataset.record_licence_set_aside
+  const shown = shownLicences(dataset.licences, check?.licences, Boolean(setAsideBecause))
+  // The record's own licences, or the checked ones, whichever the page shows.
+  const licences = shown.fromCheck ? [] : shown.licences
+  const checkedLicences = shown.fromCheck ? shown.licences : []
   const uncheckedAccess = SOURCES_WITH_UNCHECKED_ACCESS.has(dataset.source) && !check?.access
 
   return (
@@ -158,8 +165,9 @@ function Details({ dataset }) {
                   {checkedLicences.map((licence, i) => <Licence key={i} licence={licence} />)}
                 </ul>
                 <CheckedByBcbn ariaLabel="Where does this licence come from?">
-                  {checkedFrom(check)} The record Lunaris collected from {dataset.source_name} did not include a
-                  licence.
+                  {checkedFrom(check)}{' '}
+                  {setAsideBecause
+                    || `The record Lunaris collected from ${dataset.source_name} did not include a licence.`}
                 </CheckedByBcbn>
               </div>
             )}

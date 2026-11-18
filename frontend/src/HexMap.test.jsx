@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // of the world on screen, [[west, south], [east, north]]. props is every
 // prop the map was last given (its mouse and touch handlers, whether a drag
 // pans it, its cursor), and sources the GeoJSON of each line it draws, by
-// source id (the box, "area-box"; the selected group's outline, "area-group").
+// source id (the area's shapes, "area-box"; the selected group's outline, "area-group").
 const mapState = vi.hoisted(() => ({
   layers: [], getTooltip: null, onMove: null, fitBounds: null, onClick: null, onLoad: null, easeTo: null,
   jumpTo: null, bounds: [[-140, 47], [-113, 61]], props: {}, sources: {}, loaded: true,
@@ -71,7 +71,9 @@ vi.mock('@deck.gl/geo-layers', () => ({
 import { cellToLatLng, latLngToCell } from 'h3-js'
 
 import { boxCells, groupOutline } from './area'
-import HexMap, { DRAW_HINT, DRAW_UNAVAILABLE, FADED_SHARE, outlineBounds, overviewLayerId } from './HexMap'
+import { DRAW_HINT, DRAW_UNAVAILABLE } from './AreaOfInterest'
+import { boxShapeOf, readAreaText } from './areaShapes'
+import HexMap, { FADED_SHARE, outlineBounds, overviewLayerId } from './HexMap'
 import { pickResolution, zoomShowingResolution } from './zoomTiers'
 
 // One overview hexagon per resolution, real H3 cells in BC.
@@ -372,7 +374,7 @@ describe('a year range', () => {
     expect(visibleLayers()).toEqual([])
   })
 
-  it('shows the year control under the scale toggle, then the Draw a box button', () => {
+  it('shows the year control under the scale toggle, then the area of interest button', () => {
     render(<HexMap overview={OVERVIEW} species={null} years={null} yearBounds={{ firstYear: 1784, lastYear: 2026 }} />)
     const controls = document.querySelector('.top-left-controls')
     expect([...controls.children].map((el) => el.className))
@@ -581,81 +583,123 @@ describe('the zoom for a resolution', () => {
   })
 })
 
-describe('drawing a box', () => {
+describe('an area of interest', () => {
   // A mouse event on the map at [lng, lat], as react-map-gl gives it.
   function at(lng, lat) {
     return { lngLat: { lng, lat }, preventDefault: () => {} }
   }
 
-  it('offers "Draw a box" on the overview and a rank map, greyed out with a reason on a species map', () => {
+  // Opens the "Create an area of interest" panel.
+  function openPanel() {
+    fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+  }
+
+  // Presses the panel's "Box" button (starting or cancelling a box).
+  function pressBox() {
+    fireEvent.click(screen.getByRole('button', { name: 'Box' }))
+  }
+
+  // The dashed lines the map draws: the area's shapes, then a box being
+  // dragged, each as its list of [lng, lat].
+  function dashed() {
+    return mapState.sources['area-box']?.features.map((feature) => feature.geometry.coordinates) ?? []
+  }
+
+  it('offers "Create an area of interest" on the overview and a rank map, greyed out with a reason on a species map', () => {
     stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
     const { rerender } = render(<HexMap overview={OVERVIEW} species={null} />)
-    expect(screen.getByRole('button', { name: 'Draw a box' }).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Create an area of interest' }).disabled).toBe(false)
     rerender(<HexMap overview={OVERVIEW} species={ROBIN} />)
-    const button = screen.getByRole('button', { name: 'Draw a box' })
+    const button = screen.getByRole('button', { name: 'Create an area of interest' })
     expect(button.disabled).toBe(true)
     expect(button.closest('[title]').getAttribute('title')).toBe(DRAW_UNAVAILABLE)
     expect(document.getElementById(button.getAttribute('aria-describedby')).textContent).toBe(DRAW_UNAVAILABLE)
+  })
+
+  it('opens and closes its panel, listing no shapes yet', () => {
+    render(<HexMap overview={OVERVIEW} species={null} />)
+    expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
+    openPanel()
+    const panel = screen.getByRole('region', { name: 'Area of interest' })
+    expect(panel.querySelector('strong').textContent).toBe('No shapes yet')
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Draw', 'Paste'])
+    expect(screen.getByRole('button', { name: 'Back' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Clear area' }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
+    // The main button opens and closes it too.
+    openPanel()
+    openPanel()
+    expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
   })
 
   it('stops the map panning, shows the hint and the crosshair, and hands on the box and the resolution', () => {
     const onAreaDrawn = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
     expect(mapState.props.dragPan).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    openPanel()
+    pressBox()
     expect(mapState.props.dragPan).toBe(false)
     expect(mapState.props.touchZoomRotate).toBe(false)
     expect(mapState.props.boxZoom).toBe(false)
     expect(mapState.props.cursor).toBe('crosshair')
     expect(screen.getByText(DRAW_HINT)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Box' }).getAttribute('aria-pressed')).toBe('true')
     act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
     act(() => mapState.props.onMouseMove(at(-120.4, 50.6)))
     // The box shows while it is dragged.
-    expect(mapState.sources['area-box'].geometry.coordinates[0]).toEqual([-120.4, 50.6])
+    expect(dashed()).toEqual([[[-120.4, 50.6], [-120.1, 50.6], [-120.1, 50.8], [-120.4, 50.8], [-120.4, 50.6]]])
     act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
     const resolution = pickResolution(4.5, null)
     expect(onAreaDrawn).toHaveBeenCalledWith({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, resolution)
     expect(mapState.props.dragPan).toBe(true)
     expect(screen.queryByText(DRAW_HINT)).toBeNull()
+    // The panel stays open, for the next shape.
+    expect(screen.getByRole('region', { name: 'Area of interest' })).toBeTruthy()
   })
 
   it('draws with one finger too', () => {
     const onAreaDrawn = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    openPanel()
+    pressBox()
     act(() => mapState.props.onTouchStart({ ...at(-120.6, 50.55), points: [{}] }))
     act(() => mapState.props.onTouchMove({ ...at(-120.1, 50.8), points: [{}] }))
     act(() => mapState.props.onTouchEnd({ points: [] }))
     expect(onAreaDrawn).toHaveBeenCalledWith({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 }, expect.any(Number))
   })
 
-  it('cancels with Esc or the button, drawing nothing', () => {
+  it('cancels with Esc, the Box button again, or closing the panel, drawing nothing', () => {
     const onAreaDrawn = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} onAreaDrawn={onAreaDrawn} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    openPanel()
+    pressBox()
     act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByText(DRAW_HINT)).toBeNull()
     expect(mapState.props.dragPan).toBe(true)
     act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel drawing' }))
+    pressBox()
+    pressBox()
     expect(screen.queryByText(DRAW_HINT)).toBeNull()
+    pressBox()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(mapState.props.dragPan).toBe(true)
     expect(onAreaDrawn).not.toHaveBeenCalled()
   })
 
   it('ends drawing when the map turns to another page (Back, a link, a panel), and not otherwise', () => {
     const props = { overview: OVERVIEW, species: null }
     const { rerender } = render(<HexMap {...props} />)
-    // Starts drawing with the button and checks it is on.
+    openPanel()
+    // Starts drawing with the Box button and checks it is on.
     function startDrawing() {
-      fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+      pressBox()
       expect(screen.getByText(DRAW_HINT)).toBeTruthy()
       expect(mapState.props.dragPan).toBe(false)
     }
-    // Checks drawing is off: the button, the hint and the map's dragging.
+    // Checks drawing is off: the hint and the map's dragging.
     function expectNotDrawing() {
-      expect(screen.getByRole('button', { name: 'Draw a box' })).toBeTruthy()
       expect(screen.queryByText(DRAW_HINT)).toBeNull()
       expect(mapState.props.dragPan).toBe(true)
     }
@@ -683,7 +727,8 @@ describe('drawing a box', () => {
   it('does not open a hexagon while drawing, nor when the mouse is let go', () => {
     const onCellClick = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} onCellClick={onCellClick} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+    openPanel()
+    pressBox()
     act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
     act(() => mapState.props.onMouseDown(at(-120.1, 50.8)))
     act(() => mapState.props.onMouseUp(at(-120.6, 50.55)))
@@ -691,10 +736,14 @@ describe('drawing a box', () => {
     expect(onCellClick).not.toHaveBeenCalled()
   })
 
-  // An area holding the overview's resolution 6 hexagon (8628c9b47ffffff)
-  // and none of the overview's other hexagons, with its outline.
-  const AREA = { box: { west: -130.4, south: 48.8, east: -130.25, north: 48.9 }, res: 6,
-    cells: ['8628c9b47ffffff'], outline: groupOutline(['8628c9b47ffffff']) }
+  // An area of one box holding the overview's resolution 6 hexagon
+  // (8628c9b47ffffff) and none of the overview's other hexagons, with its
+  // outline; and the same with a second box.
+  const AREA_BOX = { west: -130.4, south: 48.8, east: -130.25, north: 48.9 }
+  const AREA = { shapes: [boxShapeOf(AREA_BOX)], res: 6, cells: ['8628c9b47ffffff'],
+    outline: groupOutline(['8628c9b47ffffff']) }
+  const TWO = { ...AREA, shapes: [boxShapeOf(AREA_BOX), boxShapeOf({ west: -120.6, south: 50.55, east: -120.1,
+    north: 50.8 })] }
 
   // The fill colour a layer gives one of its rows.
   function fillOf(layerId, row) {
@@ -708,10 +757,14 @@ describe('drawing a box', () => {
     const elsewhere = { h3Cell: '862800b37ffffff', occurrences: 10, distinctSpecies: 5 }
     render(<HexMap overview={{ ...OVERVIEW, rows: { ...OVERVIEW.rows, 6: [...OVERVIEW.rows[6], elsewhere] } }}
       species={null} selectedArea={AREA} />)
-    // The selected hexagon, the resolution 7 one inside it and the
-    // resolution 4 and 5 ones that hold it keep their colour.
-    for (const r of [4, 5, 6, 7]) {
+    // The selected hexagon and the resolution 7 one inside it keep their
+    // colour; the resolution 4 and 5 ones that hold it are faded, as only a
+    // small part of each is in the area (whose outline shows where it ends).
+    for (const r of [6, 7]) {
       expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])).toEqual(usual[r])
+    }
+    for (const r of [4, 5]) {
+      expect(fillOf(overviewLayerId(r), OVERVIEW.rows[r][0])[3]).toBe(Math.round(usual[r][3] * FADED_SHARE))
     }
     // A hexagon outside the area keeps its colour at a fifth of its opacity.
     const faded = fillOf(overviewLayerId(6), elsewhere)
@@ -720,29 +773,34 @@ describe('drawing a box', () => {
     expect(FADED_SHARE).toBe(0.2)
     // deck.gl is told the colours changed.
     expect(mapState.layers.find((layer) => layer.id === overviewLayerId(6)).props.updateTriggers.getFillColor)
-      .toEqual(['species', '6:-130.4,48.8,-130.25,48.9'])
+      .toEqual(['species', '6:b:-130.4,48.8,-130.25,48.9'])
   })
 
-  it('draws one outline around the whole group and the dashed box, and no outline per hexagon', () => {
-    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} />)
-    expect(mapState.sources['area-group']).toBe(AREA.outline)
-    expect(mapState.sources['area-box'].geometry.coordinates).toEqual(
-      [[-130.4, 48.8], [-130.25, 48.8], [-130.25, 48.9], [-130.4, 48.9], [-130.4, 48.8]])
+  it('draws one outline around the whole group and every shape dashed, and no outline per hexagon', () => {
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={TWO} />)
+    expect(mapState.sources['area-group']).toBe(TWO.outline)
+    expect(dashed()).toEqual([
+      [[-130.4, 48.8], [-130.25, 48.8], [-130.25, 48.9], [-130.4, 48.9], [-130.4, 48.8]],
+      [[-120.6, 50.55], [-120.1, 50.55], [-120.1, 50.8], [-120.6, 50.8], [-120.6, 50.55]],
+    ])
     expect(mapState.layers.some((layer) => layer.id.startsWith('selected-area'))).toBe(false)
     expect(mapState.layers.every((layer) => layer.props.stroked === false || layer.props.filled !== false)).toBe(true)
   })
 
-  it('draws a new box anywhere while an area is selected: outside it, over part of it, or too small', () => {
+  it('draws a new box anywhere while an area is selected, showing it beside the area\'s shapes', () => {
     const onAreaDrawn = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} onAreaDrawn={onAreaDrawn} />)
+    openPanel()
     // Draws one box from corner to corner and returns what was handed on.
     function draw(from, to) {
-      fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
+      pressBox()
       act(() => mapState.props.onMouseDown(at(...from)))
       act(() => mapState.props.onMouseMove(at(...to)))
-      // The new box shows while it is dragged, instead of the old one.
-      expect(mapState.sources['area-box'].geometry.coordinates[2]).toEqual(to)
-      expect(mapState.sources['area-group']).toBeUndefined()
+      // The new box shows while it is dragged, after the area's own box,
+      // and the area's outline stays.
+      expect(dashed()).toHaveLength(2)
+      expect(dashed()[1][2]).toEqual(to)
+      expect(mapState.sources['area-group']).toBe(AREA.outline)
       act(() => mapState.props.onMouseUp(at(...to)))
       expect(mapState.props.dragPan).toBe(true)
       return onAreaDrawn.mock.calls.at(-1)[0]
@@ -751,18 +809,18 @@ describe('drawing a box', () => {
     expect(draw([-120.6, 50.55], [-120.1, 50.8])).toEqual({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 })
     // Over part of it.
     expect(draw([-130.3, 48.85], [-130.0, 49.1])).toEqual({ west: -130.3, south: 48.85, east: -130, north: 49.1 })
-    // Too small: still handed on, for App to keep the old area and say why.
+    // Too small: still handed on, for App to keep the area and say why.
     expect(draw([-125, 52], [-124.999, 52.001])).toEqual({ west: -125, south: 52, east: -124.999, north: 52.001 })
     expect(onAreaDrawn).toHaveBeenCalledTimes(3)
-    // Once drawing ends, the selected area shows again.
-    expect(mapState.sources['area-group']).toBe(AREA.outline)
+    // Once drawing ends, only the area's own box shows dashed.
+    expect(dashed()).toHaveLength(1)
   })
 
   it('fits the whole group in view when the page opens on an area', () => {
     // The box around Kamloops at resolution 6: 45 hexagons, reaching past it.
     const box = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
     const cells = boxCells(box, 6)
-    const kamloops = { box, res: 6, cells, outline: groupOutline(cells) }
+    const kamloops = { shapes: [boxShapeOf(box)], res: 6, cells, outline: groupOutline(cells) }
     mapState.fitBounds = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} selectedArea={kamloops} />)
     act(() => mapState.onLoad())
@@ -781,37 +839,88 @@ describe('drawing a box', () => {
     expect(mapState.sources['area-group']).toBeUndefined()
   })
 
-  it('offers Clear area while an area exists, and Show area while its panel is closed, beside Draw a box', () => {
-    const onClear = vi.fn()
+  it("lists the area's shapes, each with an x, and hands on x, Back and Clear area", () => {
+    const onRemoveShape = vi.fn()
+    const onRemoveLastShape = vi.fn()
+    const onClearArea = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={TWO} onRemoveShape={onRemoveShape}
+      onRemoveLastShape={onRemoveLastShape} onClearArea={onClearArea} />)
+    openPanel()
+    const panel = screen.getByRole('region', { name: 'Area of interest' })
+    expect(panel.querySelector('strong').textContent).toBe('2 shapes')
+    expect([...panel.querySelectorAll('.aoi-shapes li span')].map((item) => item.textContent))
+      .toEqual(['Shape 1: box', 'Shape 2: box'])
+    fireEvent.click(screen.getByRole('button', { name: 'Remove shape 2' }))
+    expect(onRemoveShape).toHaveBeenCalledWith(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(onRemoveLastShape).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Clear area' }))
+    expect(onClearArea).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers Show area while the area panel is closed, beside the main button, not while drawing', () => {
     const onShow = vi.fn()
     const { rerender } = render(<HexMap overview={OVERVIEW} species={null} />)
-    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
-    rerender(<HexMap overview={OVERVIEW} species={null} onClearArea={onClear} onShowArea={onShow} />)
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} onShowArea={onShow} />)
     const buttons = [...document.querySelectorAll('.draw-box-buttons button')].map((button) => button.textContent)
-    expect(buttons).toEqual(['Draw a box', 'Show area', 'Clear area'])
+    expect(buttons).toEqual(['Create an area of interest', 'Show area'])
     fireEvent.click(screen.getByRole('button', { name: 'Show area' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Clear area' }))
     expect(onShow).toHaveBeenCalledTimes(1)
-    expect(onClear).toHaveBeenCalledTimes(1)
-    // Not while drawing a new box.
-    fireEvent.click(screen.getByRole('button', { name: 'Draw a box' }))
-    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
+    openPanel()
+    pressBox()
     expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
   })
 
-  it('shows neither on a single species map, where the area is not shown', () => {
+  it('shows nothing of the area on a single species map', () => {
     stubHexes(() => ({ body: hexes('59PMB', 4, ['8428c9bffffffff'], [3]) }))
     render(<HexMap overview={OVERVIEW} species={ROBIN} onClearArea={vi.fn()} onShowArea={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: 'Clear area' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Show area' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
   })
 
-  it('shows the message about a box too small or too big, which its x dismisses', () => {
+  it('hands a paste on (the map\'s zoom plays no part), and shows why it was refused', () => {
+    const onAreaPasted = vi.fn(() => 'The polygon has a hole; holes are not supported yet.')
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPasted={onAreaPasted} />)
+    openPanel()
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'POLYGON((0 0, 1 0, 1 1, 0 0))' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(onAreaPasted).toHaveBeenCalledWith('POLYGON((0 0, 1 0, 1 1, 0 0))')
+    expect(screen.getByRole('alert').textContent).toBe('The polygon has a hole; holes are not supported yet.')
+  })
+
+  it('offers the hexagon size, Auto showing its choice, and hands a change on', () => {
+    const onAreaSizeChange = vi.fn()
+    const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 7, picked: false }}
+      onAreaSizeChange={onAreaSizeChange} />)
+    openPanel()
+    const choice = screen.getByRole('combobox', { name: 'Hexagon size' })
+    expect([...choice.options].map((option) => option.textContent))
+      .toEqual(['Auto (about 3 km)', 'About 52 km', 'About 20 km', 'About 7 km', 'About 3 km'])
+    expect(choice.value).toBe('auto')
+    fireEvent.change(choice, { target: { value: '5' } })
+    expect(onAreaSizeChange).toHaveBeenCalledWith(5)
+    rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, res: 5, picked: true }}
+      onAreaSizeChange={onAreaSizeChange} />)
+    expect(screen.getByRole('combobox', { name: 'Hexagon size' }).value).toBe('5')
+    expect(screen.getByRole('option', { name: 'Auto' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hexagon size' }), { target: { value: 'auto' } })
+    expect(onAreaSizeChange).toHaveBeenLastCalledWith(null)
+  })
+
+  it('draws a pasted polygon dashed, like a box', () => {
+    const polygon = readAreaText('p:-121,50,-119.2,50,-119,51,-120.4,51.2')[0]
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, shapes: [polygon] }} />)
+    expect(dashed()).toEqual([[[-121, 50], [-119.2, 50], [-119, 51], [-120.4, 51.2], [-121, 50]]])
+  })
+
+  it('shows the message about a shape refused in the panel, which its x dismisses', () => {
     const onDismiss = vi.fn()
-    render(<HexMap overview={OVERVIEW} species={null} areaMessage="This box is about 9.9 km², too small."
+    render(<HexMap overview={OVERVIEW} species={null} areaMessage="The box is about 9.9 km², too small."
       onDismissAreaMessage={onDismiss} />)
-    expect(screen.getByRole('alert').textContent).toContain('This box is about 9.9 km², too small.')
+    openPanel()
+    expect(screen.getByRole('alert').textContent).toContain('The box is about 9.9 km², too small.')
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss this message' }))
     expect(onDismiss).toHaveBeenCalled()
   })

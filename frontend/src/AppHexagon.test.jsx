@@ -66,13 +66,15 @@ vi.mock('./HexagonPanel', () => ({
   },
 }))
 vi.mock('./AreaPanel', () => ({
-  // A stand-in area panel: its box, resolution and map, its x, a species in
-  // its list, and a change to its list.
+  // A stand-in area panel: its shapes (as area text), resolution and map,
+  // its x, a species in its list, and a change to its list.
   default: function AreaPanel({ area, cellCount, rank, list, onListChange, onClose, onOpenSpecies }) {
     const map = rank ? `the map of ${rank.rank} ${rank.name}` : 'the overview'
+    const text = area.shapes.map(({ box, ring }) => (box ? `b:${[box.west, box.south, box.east, box.north].join(',')}`
+      : `p:${ring.flat().join(',')}`)).join(';')
     return (
       <div className="stand-in-area">
-        <p>Area {JSON.stringify(area.box)} at {area.res} ({cellCount} hexagons) on {map}</p>
+        <p>Area {text} at {area.res} ({cellCount} hexagons) on {map}</p>
         <button type="button" onClick={onClose}>Close the area</button>
         <button type="button" onClick={() => onOpenSpecies('CCCC')}>Open the bumble bee from the area</button>
         <button type="button" onClick={() => onListChange(PANEL_LIST)}>Filter the area's list</button>
@@ -106,6 +108,7 @@ vi.mock('./loadHexData', () => ({
 // Imported after the stand-ins above, which vitest puts in place first.
 import App from './App'
 import { boxCells } from './area'
+import { areaText as areaTextOfShapes, boxShapeOf, shapesCells } from './areaShapes'
 import { PANEL_FROM_CLICK, useLocationSearch } from './route'
 
 const CELL_A = '872800b30ffffff'
@@ -754,21 +757,30 @@ describe('the year range and the address', () => {
   })
 })
 
-describe('a box drawn on the map', () => {
-  // A box around Kamloops (45 hexagons at resolution 6), its address, and a
-  // box far too small to ask about.
+describe('an area of interest', () => {
+  // A box around Kamloops (45 hexagons at resolution 6, 249 at 7, the size
+  // Auto picks for it, as for the others below), one near Prince
+  // George (fully outside it), one over the east part of the Kamloops box,
+  // and a box far too small to ask about; the addresses of areas of them.
   const KAMLOOPS = { west: -120.6, south: 50.55, east: -120.1, north: 50.8 }
-  const KAMLOOPS_SEARCH = '?area=-120.6,50.55,-120.1,50.8&area_res=6'
+  const PRINCE_GEORGE = { west: -123.0, south: 53.8, east: -122.5, north: 54.0 }
+  const OVERLAPPING = { west: -120.3, south: 50.7, east: -119.8, north: 50.95 }
   const TINY = { west: -120.3, south: 50.6, east: -120.29, north: 50.61 }
+  const KAMLOOPS_TEXT = 'b:-120.6,50.55,-120.1,50.8'
+  const PRINCE_GEORGE_TEXT = 'b:-123,53.8,-122.5,54'
+  // Areas drawn or pasted are at Auto: no area_res in the address.
+  const KAMLOOPS_SEARCH = `?area=${KAMLOOPS_TEXT}`
+  const BOTH_SEARCH = `?area=${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`
+  const PRINCE_GEORGE_SEARCH = `?area=${PRINCE_GEORGE_TEXT}`
+  // How many hexagons the Kamloops box touches at the size Auto picks.
+  const KAMLOOPS_CELLS = boxCells(KAMLOOPS, 7).length
 
   // Draws a box on the map, at a resolution.
   function drawBox(box, res = 6) {
     act(() => seen.map.onAreaDrawn(box, res))
   }
 
-  // Draws a box while an area exists and waits for the address to be
-  // expectedSearch (the old area is first taken out of the history, which
-  // the page follows a moment later).
+  // Draws a box and waits for the address to be expectedSearch.
   async function drawBoxAndWait(box, expectedSearch, res = 6) {
     drawBox(box, res)
     await waitFor(() => expect(window.location.search).toBe(expectedSearch))
@@ -782,180 +794,157 @@ describe('a box drawn on the map', () => {
     return holder && !holder.hidden ? holder.querySelector('.stand-in-area p').textContent : null
   }
 
+  // The area text of the area the map shows, or null for none.
+  function mapAreaText() {
+    return seen.map.selectedArea ? areaTextOfShapes(seen.map.selectedArea.shapes) : null
+  }
+
   // Clicks the area panel's x and lets the page settle.
   async function closeAreaPanel() {
     fireEvent.click(screen.getByRole('button', { name: 'Close the area' }))
     await act(async () => {})
   }
 
-  // Presses the map's "Clear area" (or "Show area") and waits for the address.
-  async function pressMapButton(name, expectedSearch) {
-    act(() => (name === 'Clear area' ? seen.map.onClearArea() : seen.map.onShowArea()))
+  // Presses one of the map's area buttons ("Clear area", "Show area", the
+  // panel's "Back", or a shape's x with its place) and waits for the address.
+  async function pressMapButton(name, expectedSearch, place = null) {
+    act(() => {
+      if (name === 'Clear area') {
+        seen.map.onClearArea()
+      } else if (name === 'Show area') {
+        seen.map.onShowArea()
+      } else if (name === 'Back') {
+        seen.map.onRemoveLastShape()
+      } else {
+        seen.map.onRemoveShape(place)
+      }
+    })
     await waitFor(() => expect(window.location.search).toBe(expectedSearch))
     await act(async () => {})
   }
 
-  it('selects the area as a new address entry, with its panel and its hexagons on the map', async () => {
+  it('starts the area with the first box as a new address entry, with its panel and its hexagons on the map', async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
-    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     expect(calls()).toEqual({ added: 1, replaced: 0 })
     expect(window.history.state).toEqual({ areaDepth: 0, areaBefore: '' })
-    expect(areaText()).toBe(`Area ${JSON.stringify(KAMLOOPS)} at 6 (45 hexagons) on the overview`)
-    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(areaText()).toBe(`Area ${KAMLOOPS_TEXT} at 7 (${KAMLOOPS_CELLS} hexagons) on the overview`)
+    expect(seen.map.selectedArea.cells).toHaveLength(KAMLOOPS_CELLS)
+    expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([7, false])
     expect(seen.map.onClearArea).toBeTypeOf('function')
     expect(seen.map.onShowArea).toBeNull()
   })
 
-  it('replaces the area when another box is drawn, and the entry when its list changes', async () => {
+  it('adds each new box to the area as a new entry, which Back undoes', async () => {
+    await openAfter('?species=59PMB', '')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    expect(calls()).toEqual({ added: 2, replaced: 0 })
+    expect(history.goes).not.toHaveBeenCalled()
+    expect(window.history.state).toEqual({ areaDepth: 1, areaBefore: '' })
+    expect(mapAreaText()).toBe(`${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`)
+    expect(areaText()).toContain(`Area ${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT} at 7`)
+    const both = [boxShapeOf(KAMLOOPS), boxShapeOf(PRINCE_GEORGE)]
+    expect(seen.map.selectedArea.cells).toEqual(shapesCells(both, 7).cells)
+    // Back: the area with only the first box, then before it.
+    await pressBack(KAMLOOPS_SEARCH)
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    await pressBack('')
+    expect(seen.map.selectedArea).toBeNull()
+    await pressBack('?species=59PMB')
+  })
+
+  it("counts an overlapping box's hexagons once, whatever the map's zoom", async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH, 4)
+    // Drawn while the map shows another size: the zoom plays no part.
+    await drawBoxAndWait(OVERLAPPING, `?area=${KAMLOOPS_TEXT};b:-120.3,50.7,-119.8,50.95`, 5)
+    const joined = shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(OVERLAPPING)], 7).cells
+    expect(seen.map.selectedArea.cells).toEqual(joined)
+    expect(joined.length).toBeLessThan(KAMLOOPS_CELLS + boxCells(OVERLAPPING, 7).length)
+  })
+
+  it('keeps the area when a new box is refused, and says why in the API\'s words', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    const before = calls()
+    drawBox(TINY, 6)
     await act(async () => {})
-    await drawBoxAndWait({ ...KAMLOOPS, east: -120.0 }, '?area=-120.6,50.55,-120,50.8&area_res=7', 7)
-    fireEvent.click(screen.getByRole('button', { name: "Filter the area's list" }))
-    await act(async () => {})
-    expect(window.location.search).toBe('?area=-120.6,50.55,-120,50.8&area_res=7'
-      + '&area_q=bee&area_sort=english&area_status=red&area_status=none&area_page=2')
-    expect(calls()).toEqual({ added: 2, replaced: 1 })
+    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    expect(calls()).toEqual(before)
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    expect(seen.map.areaMessage).toMatch(
+      /^Shape 2 \(a box\) is about .* km², smaller than the minimum of 20\.6 km² for hexagons of about 5\.2 km² \(4 times their average area\)\. Draw a larger box\.$/)
+    // A box that is fine after it is added and clears the message.
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    expect(seen.map.areaMessage).toBeNull()
+  })
+
+  it('removes a shape with its x as a new entry, which Back undoes', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    await pressMapButton('x', PRINCE_GEORGE_SEARCH, 0)
+    expect(mapAreaText()).toBe(PRINCE_GEORGE_TEXT)
+    expect(calls()).toEqual({ added: 3, replaced: 0 })
+    expect(window.history.state).toEqual({ areaDepth: 2, areaBefore: '' })
+    await pressBack(BOTH_SEARCH)
+    expect(mapAreaText()).toBe(`${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`)
+  })
+
+  it('removes the last shape with Back as a new entry, which the browser\'s Back undoes', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    await pressMapButton('Back', KAMLOOPS_SEARCH)
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    expect(calls()).toEqual({ added: 3, replaced: 0 })
+    await pressBack(BOTH_SEARCH)
+    expect(mapAreaText()).toBe(`${KAMLOOPS_TEXT};${PRINCE_GEORGE_TEXT}`)
+  })
+
+  it('leaves no area when the only shape is removed, which Back undoes', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await pressMapButton('Back', '')
+    expect(seen.map.selectedArea).toBeNull()
+    expect(areaText()).toBeNull()
+    expect(window.history.state).toBeNull()
+    await pressBack(KAMLOOPS_SEARCH)
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    // A box drawn after the area was emptied starts a new area.
+    await pressMapButton('x', '', 0)
+    await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
     expect(window.history.state).toEqual({ areaDepth: 0, areaBefore: '' })
   })
 
-  describe('a second box', () => {
-    // A box near Prince George, fully outside the box around Kamloops; one
-    // over the east part of the Kamloops box and past it; their addresses.
-    const PRINCE_GEORGE = { west: -123.0, south: 53.8, east: -122.5, north: 54.0 }
-    const PRINCE_GEORGE_SEARCH = '?area=-123,53.8,-122.5,54&area_res=6'
-    const OVERLAPPING = { west: -120.3, south: 50.7, east: -119.8, north: 50.95 }
-    const OVERLAPPING_SEARCH = '?area=-120.3,50.7,-119.8,50.95&area_res=6'
+  it('clears an area of several shapes with Clear area, never letting any of it come back', async () => {
+    await openAfter('?species=59PMB', '')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    await pressMapButton('Back', KAMLOOPS_SEARCH)
+    await pressMapButton('Clear area', '')
+    // Back past the three entries holding the area, to the one before it.
+    expect(history.goes).toHaveBeenCalledWith(-3)
+    expect(seen.map.selectedArea).toBeNull()
+    expect(areaText()).toBeNull()
+    // Back then goes to what was there before the first box.
+    await pressBack('?species=59PMB')
+    expect(seen.map.selectedArea).toBeNull()
+  })
 
-    // Checks that the area shown, on the map and in its panel, is box.
-    function expectArea(box) {
-      expect(seen.map.selectedArea.box).toEqual(box)
-      expect(areaText()).toContain(`Area ${JSON.stringify(box)} at 6`)
-    }
-
-    it('replaces the area when drawn fully outside it, and Back returns to before the first box', async () => {
-      await openAfter('?species=59PMB', '')
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
-      expectArea(KAMLOOPS)
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      expectArea(PRINCE_GEORGE)
-      expect(window.history.state).toEqual({ areaDepth: 0, areaBefore: '' })
-      expect(history.goes).toHaveBeenCalledWith(-1)
-      // Back: what was there before the first box, never the first box.
-      await pressBack('')
-      expect(seen.map.selectedArea).toBeNull()
-      expect(areaText()).toBeNull()
-      await pressBack('?species=59PMB')
-    })
-
-    it('replaces the area when drawn over part of it', async () => {
-      await openAt('')
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      await drawBoxAndWait(OVERLAPPING, OVERLAPPING_SEARCH)
-      expectArea(OVERLAPPING)
-      expect(seen.map.selectedArea.cells).toHaveLength(boxCells(OVERLAPPING, 6).length)
-    })
-
-    it('keeps the area when the new box is too small, and says why', async () => {
-      await openAt('')
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      const before = calls()
-      drawBox(TINY, 6)
-      await act(async () => {})
-      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
-      expect(calls()).toEqual(before)
-      expect(history.goes).not.toHaveBeenCalled()
-      expectArea(KAMLOOPS)
-      expect(seen.map.areaMessage).toMatch(/^This box is about .* km², smaller than the minimum/)
-      // A valid box after it replaces the area and clears the message.
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      expectArea(PRINCE_GEORGE)
-      expect(seen.map.areaMessage).toBeNull()
-    })
-
-    it('leaves no entry holding the old box after a hexagon was opened over it', async () => {
-      await openAt('')
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      clickHexagon(CELL_A)
-      await act(async () => {})
-      expect(window.location.search).toBe(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}`)
-      // The new box closes the hexagon's panel and replaces the area.
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      expect(history.goes).toHaveBeenCalledWith(-2)
-      expect(panelText()).toBeNull()
-      expectArea(PRINCE_GEORGE)
-      // A hexagon over the new area, then its x: back to the new area.
-      clickHexagon(CELL_B)
-      await act(async () => {})
-      await closeWithX(PRINCE_GEORGE_SEARCH)
-      expectArea(PRINCE_GEORGE)
-      // Back: before the first box, not the old box with its panel.
-      await pressBack('')
-      expect(seen.map.selectedArea).toBeNull()
-      expect(areaText()).toBeNull()
-    })
-
-    it('after a hexagon, box A, a hexagon, box B: Back shows the first hexagon, outlined on the map', async () => {
-      await openAt('')
-      clickHexagon(CELL_A)
-      await act(async () => {})
-      expect(window.location.search).toBe(`?cell=${CELL_A}`)
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
-      clickHexagon(CELL_B)
-      await act(async () => {})
-      expect(window.location.search).toBe(`?cell=${CELL_B}&${KAMLOOPS_SEARCH.slice(1)}`)
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      expect(seen.map.selectedCell).toBeNull()
-      expectArea(PRINCE_GEORGE)
-      await pressBack(`?cell=${CELL_A}`)
-      // The panel and the map name the same hexagon, with no box.
-      expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
-      expect(seen.map.selectedCell).toBe(CELL_A)
-      expect(seen.map.selectedArea).toBeNull()
-      expect(areaText()).toBeNull()
-      // Its x then closes it, back to the plain map.
-      await closeWithX('')
-      expect(seen.map.selectedCell).toBeNull()
-      expect(panelText()).toBeNull()
-    })
-
-    it('after box A, a hexagon, box B: Back shows the plain map, with no panel and no hexagon', async () => {
-      await openAfter('?species=59PMB', '')
-      drawBox(KAMLOOPS)
-      await act(async () => {})
-      clickHexagon(CELL_B)
-      await act(async () => {})
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      await pressBack('')
-      expect(panelText()).toBeNull()
-      expect(seen.map.selectedCell).toBeNull()
-      expect(seen.map.selectedArea).toBeNull()
-      expect(areaText()).toBeNull()
-    })
-
-    it("replaces a shared link's area in place", async () => {
-      await openAt(KAMLOOPS_SEARCH)
-      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
-      expect(calls()).toEqual({ added: 0, replaced: 1 })
-      expect(history.goes).not.toHaveBeenCalled()
-      expect(window.history.state).toEqual({ areaDepth: 0 })
-      expectArea(PRINCE_GEORGE)
-    })
+  it('opens an old link (area=west,south,east,north&area_res) as one box at its size, kept as picked', async () => {
+    await openAt('?area=-120.6,50.55,-120.1,50.8&area_res=6')
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    expect(areaText()).toBe(`Area ${KAMLOOPS_TEXT} at 6 (45 hexagons) on the overview`)
+    expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, true])
+    await drawBoxAndWait(PRINCE_GEORGE, `${BOTH_SEARCH}&area_res=6`)
+    expect(window.history.state).toEqual({ areaDepth: 1 })
   })
 
   it('opens a clicked hexagon on top of the area panel, keeping the area; its x and Back return to the area', async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     clickHexagon(CELL_A)
     await act(async () => {})
     expect(window.location.search).toBe(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}`)
@@ -964,7 +953,7 @@ describe('a box drawn on the map', () => {
     expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
     expect(areaText()).toBeNull()
     expect(document.querySelector('.area-holder').hidden).toBe(true)
-    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.selectedArea.cells).toHaveLength(KAMLOOPS_CELLS)
     expect(seen.map.selectedCell).toBe(CELL_A)
     // Another hexagon replaces the entry, still over the area.
     clickHexagon(CELL_B)
@@ -981,16 +970,29 @@ describe('a box drawn on the map', () => {
     expect(areaText()).not.toBeNull()
   })
 
+  it('closes an open hexagon panel when a box is added, as a new entry Back undoes', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    clickHexagon(CELL_A)
+    await act(async () => {})
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
+    expect(panelText()).toBeNull()
+    expect(seen.map.selectedCell).toBeNull()
+    expect(areaText()).not.toBeNull()
+    await pressBack(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}`)
+    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
+    expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+  })
+
   it("closes only the panel with the area panel's x, keeping the area; Show area opens it again", async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     await closeAreaPanel()
     expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_panel=closed`)
     expect(calls()).toEqual({ added: 1, replaced: 1 })
     expect(history.backs).not.toHaveBeenCalled()
     expect(areaText()).toBeNull()
-    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.selectedArea.cells).toHaveLength(KAMLOOPS_CELLS)
     expect(seen.map.onShowArea).toBeTypeOf('function')
     await pressMapButton('Show area', KAMLOOPS_SEARCH)
     expect(areaText()).not.toBeNull()
@@ -1000,8 +1002,7 @@ describe('a box drawn on the map', () => {
 
   it('clears the area with Clear area: like Back for the box drawn in this visit', async () => {
     await openAfter('?species=59PMB', '')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     await pressMapButton('Clear area', '')
     expect(history.goes).toHaveBeenCalledWith(-1)
     expect(calls()).toEqual({ added: 1, replaced: 0 })
@@ -1013,7 +1014,7 @@ describe('a box drawn on the map', () => {
   it('clears a shared area in place, and keeps a hexagon panel open on top of it', async () => {
     await openAt(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}&area_q=bee`)
     expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
-    expect(seen.map.selectedArea.cells).toHaveLength(45)
+    expect(seen.map.selectedArea.cells).toHaveLength(KAMLOOPS_CELLS)
     await pressMapButton('Clear area', `?cell=${CELL_A}`)
     expect(history.backs).not.toHaveBeenCalled()
     expect(calls()).toEqual({ added: 0, replaced: 1 })
@@ -1023,25 +1024,18 @@ describe('a box drawn on the map', () => {
 
   it('keeps a cleared area gone when the hexagon panel opened over it is closed with its x', async () => {
     await openAt('')
-    expect(window.location.search).toBe('')
-    // 1. Draw a box: the area panel opens.
-    drawBox(KAMLOOPS)
-    await act(async () => {})
-    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
-    expect(areaText()).not.toBeNull()
-    // 2. Click a hexagon inside the area: its panel opens on top.
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    await drawBoxAndWait(PRINCE_GEORGE, BOTH_SEARCH)
     clickHexagon(CELL_A)
     await act(async () => {})
-    expect(window.location.search).toBe(`?cell=${CELL_A}&${KAMLOOPS_SEARCH.slice(1)}`)
-    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
-    // 3. Clear area: the box goes, the hexagon's panel stays.
+    expect(window.location.search).toBe(`?cell=${CELL_A}&${BOTH_SEARCH.slice(1)}`)
+    // Clear area: both boxes go, the hexagon's panel stays.
     await pressMapButton('Clear area', `?cell=${CELL_A}`)
-    expect(history.goes).toHaveBeenCalledWith(-2)
+    expect(history.goes).toHaveBeenCalledWith(-3)
     expect(window.history.state).toEqual(PANEL_FROM_CLICK)
     expect(seen.map.selectedArea).toBeNull()
-    expect(seen.map.onClearArea).toBeNull()
     expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
-    // 4. The panel's x: the plain overview, with no area and no hexagon.
+    // The panel's x: the plain overview, with no area and no hexagon.
     await closeWithX('')
     expect(panelText()).toBeNull()
     expect(areaText()).toBeNull()
@@ -1052,8 +1046,7 @@ describe('a box drawn on the map', () => {
 
   it('keeps a cleared area gone when Back is pressed after Clear area', async () => {
     await openAfter('?species=59PMB', '')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     clickHexagon(CELL_A)
     await act(async () => {})
     await pressMapButton('Clear area', `?cell=${CELL_A}`)
@@ -1069,8 +1062,7 @@ describe('a box drawn on the map', () => {
 
   it('keeps a cleared area gone after a species was opened from it and Back returned to it', async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     fireEvent.click(screen.getByRole('button', { name: 'Open the bumble bee from the area' }))
     await act(async () => {})
     await pressBack(KAMLOOPS_SEARCH)
@@ -1099,8 +1091,7 @@ describe('a box drawn on the map', () => {
 
   it('keeps a cleared area gone when a rank was opened over it, and closing the rank goes back', async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     fireEvent.click(screen.getByRole('button', { name: 'Pick the genus Turdus' }))
     await act(async () => {})
     expect(window.location.search).toBe(`${TURDUS_SEARCH}&${KAMLOOPS_SEARCH.slice(1)}`)
@@ -1116,52 +1107,113 @@ describe('a box drawn on the map', () => {
 
   it('clears a box drawn on a rank map like Back, returning to the rank alone', async () => {
     await openAfter('', TURDUS_SEARCH)
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, `${TURDUS_SEARCH}&${KAMLOOPS_SEARCH.slice(1)}`)
     await pressMapButton('Clear area', TURDUS_SEARCH)
     expect(history.goes).toHaveBeenCalledWith(-1)
     expect(calls()).toEqual({ added: 1, replaced: 0 })
     expect(seen.map.selectedArea).toBeNull()
   })
 
-  it('closes an open hexagon panel when the first box is drawn, as a new entry Back undoes', async () => {
-    await openAt('')
-    clickHexagon(CELL_A)
-    await act(async () => {})
-    drawBox(KAMLOOPS)
-    await act(async () => {})
-    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
-    expect(panelText()).toBeNull()
-    expect(areaText()).not.toBeNull()
-    expect(calls()).toEqual({ added: 2, replaced: 0 })
-    await pressBack(`?cell=${CELL_A}`)
-    expect(panelText()).toBe(`Panel of ${CELL_A} on the overview`)
-    expect(seen.map.selectedArea).toBeNull()
-  })
-
-  it('does not ask about a box too small or too big: the map says why instead', async () => {
+  it('refuses a box too small even at the smallest hexagons, whatever the zoom, and says why', async () => {
     await openAt('')
     drawBox(TINY, 4)
     await act(async () => {})
     expect(window.location.search).toBe('')
     expect(calls()).toEqual({ added: 0, replaced: 0 })
-    expect(seen.map.areaMessage).toMatch(/^This box is about .* km², smaller than the minimum of 7,081\.4 km²/)
-    drawBox({ west: -139.1, south: 48.2, east: -114, north: 60 }, 7)
-    await act(async () => {})
-    expect(seen.map.areaMessage).toMatch(/more than the 200,000 an area search can count/)
+    expect(seen.map.areaMessage).toMatch(/^The box is about .* km², smaller than the minimum of 20\.6 km² for hexagons of about 5\.2 km²/)
+    expect(seen.map.areaMessage).not.toContain('choose')
     act(() => seen.map.onDismissAreaMessage())
     expect(seen.map.areaMessage).toBeNull()
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     expect(seen.map.areaMessage).toBeNull()
-    expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+  })
+
+  describe('the hexagon size', () => {
+    // Most of BC: over 200,000 hexagons at the smallest size, 70,747 at the next.
+    const BC = { west: -139.1, south: 48.2, east: -114, north: 60 }
+    const BC_TEXT = 'b:-139.1,48.2,-114,60'
+
+    // Picks a size in the panel (a number, or null for Auto).
+    function pickSize(res) {
+      act(() => seen.map.onAreaSizeChange(res))
+    }
+
+    it('lets Auto choose again when shapes are added or removed', async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      expect(seen.map.selectedArea.res).toBe(7)
+      // Most of BC does not fit at the smallest size: the whole area moves up one.
+      await drawBoxAndWait(BC, `?area=${KAMLOOPS_TEXT};${BC_TEXT}`)
+      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, false])
+      expect(seen.map.selectedArea.cells).toEqual(shapesCells([boxShapeOf(KAMLOOPS), boxShapeOf(BC)], 6).cells)
+      // Without it, back to the smallest.
+      await pressMapButton('Back', KAMLOOPS_SEARCH)
+      expect(seen.map.selectedArea.res).toBe(7)
+    })
+
+    it('keeps a size picked as one history step, until Auto is chosen again or the area cleared', async () => {
+      await openAfter('?species=59PMB', '')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      pickSize(6)
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=6`))
+      await act(async () => {})
+      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([6, true])
+      expect(seen.map.selectedArea.cells).toHaveLength(45)
+      expect(calls()).toEqual({ added: 2, replaced: 0 })
+      // A box added keeps the size picked.
+      await drawBoxAndWait(PRINCE_GEORGE, `${BOTH_SEARCH}&area_res=6`)
+      expect(seen.map.selectedArea.res).toBe(6)
+      // The browser's Back undoes the box, then the size.
+      await pressBack(`${KAMLOOPS_SEARCH}&area_res=6`)
+      await pressBack(KAMLOOPS_SEARCH)
+      expect([seen.map.selectedArea.res, seen.map.selectedArea.picked]).toEqual([7, false])
+      // Picked again (the smallest, the same as Auto's choice but kept), then Auto again.
+      pickSize(7)
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=7`))
+      pickSize(null)
+      await waitFor(() => expect(window.location.search).toBe(KAMLOOPS_SEARCH))
+      await act(async () => {})
+      // After Clear area, the next box is at Auto again.
+      pickSize(6)
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=6`))
+      await pressMapButton('Clear area', '')
+      await drawBoxAndWait(PRINCE_GEORGE, PRINCE_GEORGE_SEARCH)
+    })
+
+    it('refuses a size, or a shape, that does not pass at the size picked, with a hint on the page', async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      const before = calls()
+      // Kamloops (about 979 km²) is under 4 hexagons of about 1,770 km².
+      pickSize(4)
+      await act(async () => {})
+      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+      expect(calls()).toEqual(before)
+      expect(seen.map.areaMessage).toBe('The box is about 979.4 km², smaller than the minimum of 7,081.4 km² for '
+        + 'hexagons of about 1,770.3 km² (4 times their average area). Draw a larger box. Or choose smaller hexagons.')
+      // A size that passes, then a box too small for it.
+      pickSize(6)
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=6`))
+      await act(async () => {})
+      expect(seen.map.areaMessage).toBeNull()
+      drawBox(TINY)
+      await act(async () => {})
+      expect(seen.map.areaMessage).toMatch(/^Shape 2 \(a box\) is about .* smaller than the minimum of 144\.5 km² .*Draw a larger box\. Or choose smaller hexagons\.$/)
+      // A box too big at the smallest size: the API's own words already say
+      // to use larger hexagons, so no hint is added.
+      pickSize(7)
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=7`))
+      await act(async () => {})
+      drawBox(BC)
+      await act(async () => {})
+      expect(seen.map.areaMessage).toMatch(/^Shape 2 \(a box\) touches about 4\d\d,\d\d\d hexagons of about 5\.2 km², more than the 200,000 an area search can count\. Draw a smaller box or use larger hexagons\.$/)
+      expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=7`)
+    })
   })
 
   it("keeps a rank map's rank, listing only its species, over the rank card", async () => {
     await openAt(TURDUS_SEARCH)
-    drawBox(KAMLOOPS)
-    await act(async () => {})
-    expect(window.location.search).toBe(`${TURDUS_SEARCH}&area=-120.6,50.55,-120.1,50.8&area_res=6`)
+    await drawBoxAndWait(KAMLOOPS, `${TURDUS_SEARCH}&${KAMLOOPS_SEARCH.slice(1)}`)
     expect(areaText()).toContain('on the map of genus Turdus')
     expect(document.querySelector('.card-holder:not(.area-holder)').hidden).toBe(true)
     // With the area panel closed, the rank card shows again under the area.
@@ -1172,8 +1224,7 @@ describe('a box drawn on the map', () => {
 
   it('keeps the area while a species map is open, without showing it, and brings it back with the overview', async () => {
     await openAt('')
-    drawBox(KAMLOOPS)
-    await act(async () => {})
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
     fireEvent.click(screen.getByRole('button', { name: 'Open the bumble bee from the area' }))
     await act(async () => {})
     expect(window.location.search).toBe(`?species=CCCC&${KAMLOOPS_SEARCH.slice(1)}`)
@@ -1192,5 +1243,76 @@ describe('a box drawn on the map', () => {
     await act(async () => {})
     expect(window.location.search).toBe(KAMLOOPS_SEARCH)
     expect(areaText()).not.toBeNull()
+  })
+
+  describe('a paste', () => {
+    // Two polygons near Kamloops and Prince George, as WKT, and the area
+    // text they become.
+    const TWO_POLYGONS = 'MULTIPOLYGON(((-121 50, -119.2 50, -119 51, -120.4 51.2, -121 50)), '
+      + '((-123.5 53.5, -122 53.5, -122 54.5, -123.5 54.5)))'
+    const TWO_TEXT = 'p:-121,50,-119.2,50,-119,51,-120.4,51.2;p:-123.5,53.5,-122,53.5,-122,54.5,-123.5,54.5'
+
+    // Pastes text in the panel, and returns what the map is told (null when
+    // the shapes were added, else why not).
+    function paste(text) {
+      let problem
+      act(() => {
+        problem = seen.map.onAreaPasted(text)
+      })
+      return problem
+    }
+
+    it('adds every pasted shape as one entry, at Auto; Back takes the whole paste away', async () => {
+      await openAt('')
+      expect(paste(TWO_POLYGONS)).toBeNull()
+      await waitFor(() => expect(window.location.search).toBe(`?area=${TWO_TEXT}`))
+      await act(async () => {})
+      expect(calls()).toEqual({ added: 1, replaced: 0 })
+      expect(seen.map.selectedArea.shapes.map((shape) => shape.isBox)).toEqual([false, false])
+      expect(areaText()).toBe(`Area ${TWO_TEXT} at 7 (${seen.map.selectedArea.cells.length} hexagons) on the overview`)
+      await pressBack('')
+      expect(seen.map.selectedArea).toBeNull()
+    })
+
+    it("adds to an area after its shapes, and the panel's Back removes one shape", async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      expect(paste(TWO_POLYGONS)).toBeNull()
+      const all = `?area=${KAMLOOPS_TEXT};${TWO_TEXT}`
+      await waitFor(() => expect(window.location.search).toBe(all))
+      await act(async () => {})
+      expect(calls()).toEqual({ added: 2, replaced: 0 })
+      await pressMapButton('Back', `?area=${KAMLOOPS_TEXT};p:-121,50,-119.2,50,-119,51,-120.4,51.2`)
+      await pressBack(all)
+      // The browser's Back after the paste returns to the box alone.
+      await pressBack(KAMLOOPS_SEARCH)
+      expect(mapAreaText()).toBe(KAMLOOPS_TEXT)
+    })
+
+    it('adds nothing when any part is refused, and says why', async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      const before = calls()
+      const withHole = 'MULTIPOLYGON(((-121 50, -119.2 50, -119 51, -121 50)), ((-123.5 53.5, -122 53.5, -122 54.5, '
+        + '-123.5 53.5), (-123 53.8, -122.5 53.8, -122.5 54, -123 53.8)))'
+      expect(paste(withHole)).toBe('Shape 3 (a polygon) has a hole; holes are not supported yet. Paste its outer '
+        + 'edge only.')
+      await act(async () => {})
+      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+      expect(calls()).toEqual(before)
+      expect(paste('POINT(-121 50)')).toBe('Only polygons can be added; this is a POINT.')
+      expect(window.location.search).toBe(KAMLOOPS_SEARCH)
+    })
+  })
+
+  it('keeps the list options of the area when its list changes, in place', async () => {
+    await openAt('')
+    await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+    fireEvent.click(screen.getByRole('button', { name: "Filter the area's list" }))
+    await act(async () => {})
+    expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}`
+      + '&area_q=bee&area_sort=english&area_status=red&area_status=none&area_page=2')
+    expect(calls()).toEqual({ added: 1, replaced: 1 })
+    expect(window.history.state).toEqual({ areaDepth: 0, areaBefore: '' })
   })
 })

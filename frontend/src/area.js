@@ -1,10 +1,11 @@
-// The area search's rules on the front end: a box drawn on the map, which
-// hexagons it selects, and whether it is too small or too big to ask the API
-// about (backend/api/area.py, whose rules these copy; a back end test runs
-// this file with node to check they still agree).
+// The area search's rules on the front end for a box: the box between two
+// corners of a drag, its area, the hexagons it selects, and how the map
+// outlines and fades them (backend/api/area.py, whose rules these copy; a
+// back end test runs this file with node to check they still agree). An
+// area of several shapes, its checks and its messages are in areaShapes.js.
 
 import {
-  POLYGON_TO_CELLS_FLAGS, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
+  POLYGON_TO_CELLS_FLAGS, cellToChildrenSize, cellToParent, cellsToMultiPolygon, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
 } from 'h3-js'
 
 // The smallest box, in average hexagons of the resolution it is drawn at:
@@ -44,9 +45,11 @@ export function boxFromCorners([lng1, lat1], [lng2, lat2]) {
   }
 }
 
-// Turns degrees into radians.
+// Turns degrees into radians the way Python's math.radians does (times
+// pi / 180), so a box's area matches the API's box_area_km2 as closely as
+// the two sine functions allow.
 function radians(degrees) {
-  return (degrees * Math.PI) / 180
+  return degrees * (Math.PI / 180)
 }
 
 // A box's area in km² on H3's sphere: the radius squared, times the width in
@@ -64,38 +67,6 @@ export function averageHexagonKm2(res) {
 // The smallest box allowed at a resolution, in km².
 export function minimumAreaKm2(res) {
   return MIN_AREA_HEXAGONS * averageHexagonKm2(res)
-}
-
-// Writes a number the way the messages do: with commas, and decimals
-// figures after the point.
-function written(value, decimals) {
-  return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
-}
-
-// The message for a box that touches more hexagons (count, about) of a
-// resolution than an area search can count. Like every message here it
-// gives the hexagons' size, never H3's resolution number.
-function tooBigText(count, res) {
-  return `This box touches about ${written(count, 0)} hexagons of about ${written(averageHexagonKm2(res), 1)} km², `
-    + `more than the ${written(MAX_AREA_HEXAGONS, 0)} an area search can count. Draw a smaller box, or zoom out `
-    + 'first for larger hexagons.'
-}
-
-// What is wrong with a box at a resolution before any hexagon is found, or
-// null when nothing is: too small (under MIN_AREA_HEXAGONS average hexagons),
-// or so big that it must touch more than MAX_AREA_HEXAGONS hexagons. The
-// same checks, in the same order, as check_box_size in backend/api/area.py,
-// written for the map's visitors.
-export function boxSizeProblem(box, res) {
-  const area = boxAreaKm2(box)
-  const smallest = minimumAreaKm2(res)
-  if (area < smallest) {
-    return `This box is about ${written(area, 1)} km², smaller than the minimum of ${written(smallest, 1)} km² `
-      + `for hexagons of this size (${MIN_AREA_HEXAGONS} hexagons of about ${written(averageHexagonKm2(res), 1)} km²). `
-      + 'Draw a larger box, or zoom in first for smaller hexagons.'
-  }
-  const estimate = area / averageHexagonKm2(res)
-  return estimate > MAX_AREA_HEXAGONS ? tooBigText(estimate, res) : null
 }
 
 // Every hexagon at resolution res that overlaps the box, even by a corner,
@@ -120,13 +91,18 @@ export function groupOutline(cells) {
 }
 
 // A test of whether a hexagon the map shows is in the selected group (cells,
-// at resolution res), whatever resolution the map shows now: at the same
-// resolution, the hexagon itself is in the group; at a finer one, the
-// larger hexagon it lies in is; at a coarser one, it holds a hexagon of the
-// group. Returns a function of a hexagon's id.
+// at resolution res), whatever resolution the map shows now, so the map
+// keeps bright only what the area counts: at the same resolution, the
+// hexagon itself is in the group; at a finer one, the larger hexagon it
+// lies in is; at a coarser one (the area's hexagons are smaller than the
+// map's, which happens since the area's size no longer follows the zoom),
+// every one of its smaller hexagons at res is in the group, so a large
+// hexagon only partly in the area is faded, and the area's outline shows
+// where it really ends. Returns a function of a hexagon's id.
 export function selectionTest(cells, res) {
   const chosen = new Set(cells)
-  // The group's hexagons at each coarser resolution, worked out when needed.
+  // How many of the group's hexagons lie in each larger hexagon, for each
+  // coarser resolution, worked out when needed.
   const coarser = new Map()
   return (cell) => {
     const cellRes = getResolution(cell)
@@ -137,21 +113,13 @@ export function selectionTest(cells, res) {
       return chosen.has(cellToParent(cell, res))
     }
     if (!coarser.has(cellRes)) {
-      coarser.set(cellRes, new Set(cells.map((one) => cellToParent(one, cellRes))))
+      const counts = new Map()
+      for (const one of cells) {
+        const parent = cellToParent(one, cellRes)
+        counts.set(parent, (counts.get(parent) ?? 0) + 1)
+      }
+      coarser.set(cellRes, counts)
     }
-    return coarser.get(cellRes).has(cell)
+    return coarser.get(cellRes).get(cell) === cellToChildrenSize(cell, res)
   }
-}
-
-// What is wrong with a box at a resolution, or null: boxSizeProblem first
-// (which needs no hexagons, so a huge box costs nothing), then the real
-// number of hexagons it touches against the most allowed, as the API checks
-// both.
-export function areaProblem(box, res) {
-  const problem = boxSizeProblem(box, res)
-  if (problem) {
-    return problem
-  }
-  const count = boxCells(box, res).length
-  return count > MAX_AREA_HEXAGONS ? tooBigText(count, res) : null
 }

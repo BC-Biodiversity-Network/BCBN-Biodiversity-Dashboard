@@ -1252,6 +1252,54 @@ describe('an area of interest', () => {
     expect(areaText()).not.toBeNull()
   })
 
+  describe('a polygon drawn', () => {
+    // A triangle near Kamloops (about 1,460 km²), as the map hands it on,
+    // and a tiny one (about 0.5 km²).
+    const TRIANGLE = [[-120.6, 50.5], [-120, 50.5], [-120.3, 50.9]]
+    const TRIANGLE_TEXT = 'p:-120.6,50.5,-120,50.5,-120.3,50.9'
+    const TINY_TRIANGLE = [[-120.3, 50.6], [-120.29, 50.6], [-120.295, 50.605]]
+
+    // Finishes a polygon on the map, and returns what the map is told
+    // (null when it was added, else why not).
+    function finish(ring) {
+      let problem
+      act(() => {
+        problem = seen.map.onAreaPolygon(ring)
+      })
+      return problem
+    }
+
+    it('joins the area as one shape and one entry, at Auto; Back takes it away', async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      const before = calls()
+      expect(finish(TRIANGLE)).toBeNull()
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH};${TRIANGLE_TEXT}`))
+      await act(async () => {})
+      expect(calls()).toEqual({ added: before.added + 1, replaced: before.replaced })
+      expect(seen.map.selectedArea.shapes.map((shape) => shape.isBox)).toEqual([true, false])
+      expect(seen.map.selectedArea.shapes[1].ring).toEqual(TRIANGLE)
+      expect(seen.map.selectedArea.res).toBe(6)
+      await pressBack(KAMLOOPS_SEARCH)
+      expect(seen.map.selectedArea.shapes).toHaveLength(1)
+    })
+
+    it("is refused with the API's words, as any shape, leaving the area as it was", async () => {
+      await openAt('')
+      await drawBoxAndWait(KAMLOOPS, KAMLOOPS_SEARCH)
+      const before = calls()
+      // Too small even for about 3 km.
+      expect(finish(TINY_TRIANGLE)).toMatch(/^Shape 2 \(a polygon\) is about 0\.\d km², smaller than the minimum of 20\.6 km²/)
+      // Too small for a size picked: with the hint.
+      act(() => seen.map.onAreaSizeChange(6))
+      await waitFor(() => expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=6`))
+      expect(finish(TINY_TRIANGLE)).toMatch(/Draw a larger polygon\. Or choose smaller hexagons\.$/)
+      expect(window.location.search).toBe(`${KAMLOOPS_SEARCH}&area_res=6`)
+      expect(calls().added).toBe(before.added + 1)
+      expect(seen.map.areaMessage).toBeNull()
+    })
+  })
+
   describe('a paste', () => {
     // Two polygons near Kamloops and Prince George, as WKT, and the area
     // text they become.

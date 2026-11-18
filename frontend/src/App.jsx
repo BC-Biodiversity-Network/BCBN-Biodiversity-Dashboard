@@ -358,6 +358,26 @@ export default function App({
     }
   }
 
+  /**
+   * Adds a polygon drawn on the map (ring, its [lng, lat] points, already
+   * rounded) to the area as one shape and one new entry, or starts the area
+   * with it, with the same checks and messages as every other shape (the
+   * API's, then the area's size: Auto or a size picked). Returns null, or
+   * why it was refused, which the panel shows while the polygon is still
+   * being drawn, so it can be fixed.
+   */
+  function addPolygon(ring) {
+    const shapes = [...(keptArea?.shapes ?? []), { ring, isBox: false, box: null }]
+    const res = keptArea?.res ?? null
+    const problem = areaTextProblem(writeAreaText(shapes)) ?? sizeProblem(shapes, res)
+    if (problem) {
+      return problem
+    }
+    setAreaMessage(null)
+    moveToShapes(shapes, res)
+    return null
+  }
+
   // Adds the shapes of a text pasted in the panel's Paste tab (WKT or
   // GeoJSON, see areaPaste.js) to the area, all at once as one new entry, so
   // the back button takes the whole paste away; or adds none and returns
@@ -524,6 +544,7 @@ export default function App({
           selectedArea={mapArea}
           onAreaDrawn={drawArea}
           onAreaPasted={pasteArea}
+          onAreaPolygon={addPolygon}
           onAreaSizeChange={changeAreaSize}
           onRemoveShape={removeShape}
           onRemoveLastShape={() => removeShape((keptArea?.shapes.length ?? 0) - 1)}

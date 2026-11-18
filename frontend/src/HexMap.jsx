@@ -13,6 +13,7 @@ import {
   SHAPE_OUTLINE, areaId, areaLegendNote, hexagonSizeText, lockedResolution, shapesBounds,
 } from './areaLayers'
 import AreaOfInterest from './AreaOfInterest'
+import { drawingFeatures, useAreaPolygon } from './areaPolygon'
 import { COLOUR_SCHEMES, HEXAGON_OUTLINE, OVERVIEW_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import { getSpeciesTooltip, getTooltip } from './hexTooltip'
 import Legend from './Legend'
@@ -412,7 +413,12 @@ function apiStatus(hexes, what) {
 // go calls onAreaDrawn(box, res) with the box (see boxFromCorners in
 // area.js), which adds it to the area (res, the level the map shows then,
 // plays no part any more: the area's hexagon size is its own, Auto or
-// picked in the panel, onAreaSizeChange(res or null)). selectedArea is the area ({ shapes, res, cells }, or null):
+// picked in the panel, onAreaSizeChange(res or null)). Its "Polygon" button
+// starts a polygon (see areaPolygon.js): each click adds a point, dragging
+// still pans, the points and edges show with a line to the mouse, and a
+// click on the first point, Enter, a double-click or "Finish" calls
+// onAreaPolygon(ring), which adds it to the area and returns null, or why
+// it was refused (drawing then goes on). selectedArea is the area ({ shapes, res, cells }, or null):
 // while there is one, the whole map shows hexagons of the area's size at
 // every zoom (see areaLayers.js), every hexagon outside it is faded, and
 // each shape is outlined (SHAPE_OUTLINE). areaMessage (or
@@ -427,7 +433,7 @@ export default function HexMap({
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
   selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
   onClearArea = null, onShowArea = null, onRemoveShape = () => {}, onRemoveLastShape = () => {},
-  onAreaPasted = () => null, onAreaSizeChange = () => {},
+  onAreaPasted = () => null, onAreaSizeChange = () => {}, onAreaPolygon = () => null,
 }) {
   const mapRef = useRef(null)
   // The size the zoom chooses, the size an area locks the map to (null for
@@ -459,6 +465,12 @@ export default function HexMap({
   const [drawing, setDrawing] = useState(false)
   const [drag, setDrag] = useState(null)
   const lastDrawn = useRef(0)
+  // The polygon being drawn (see areaPolygon.js).
+  const polygon = useAreaPolygon({
+    shapes: selectedArea?.shapes ?? [], onFinish: finishPolygon,
+    project: (lngLat) => mapRef.current.project(lngLat),
+  })
+  const drawingAny = drawing || polygon.active
   // Whether the "Create an area of interest" panel is open.
   const [areaPanelOpen, setAreaPanelOpen] = useState(false)
   // While an area is selected: which hexagons are in it (see
@@ -613,10 +625,11 @@ export default function HexMap({
   }
 
   // Opens the panel of the hexagon under a click, on either map; not while
-  // drawing a box, nor just after one is drawn (letting go of the mouse).
+  // drawing a box or a polygon, nor just after one is drawn (letting go of
+  // the mouse, or the click that closes a polygon).
   function handleClick(info) {
     const cell = info.object?.h3Cell
-    if (cell && !drawing && Date.now() - lastDrawn.current > CLICK_AFTER_DRAW_MS) {
+    if (cell && !drawingAny && Date.now() - lastDrawn.current > CLICK_AFTER_DRAW_MS) {
       onCellClick(cell)
     }
   }
@@ -642,10 +655,36 @@ export default function HexMap({
     }
   }
 
-  // Stops drawing without a box.
+  // Stops drawing without a box, and drops a polygon being drawn.
   function stopDrawing() {
     setDrawing(false)
     setDrag(null)
+    polygon.cancel()
+  }
+
+  /**
+   * Hands a finished polygon (ring, [lng, lat] points) on to be added to
+   * the area; returns null, or why it was refused (see onAreaPolygon).
+   */
+  function finishPolygon(ring) {
+    const problem = onAreaPolygon(ring)
+    if (!problem) {
+      lastDrawn.current = Date.now()
+    }
+    return problem
+  }
+
+  /** A click on the map: a point for the polygon being drawn. */
+  function clickMap(event) {
+    polygon.click([event.lngLat.lng, event.lngLat.lat], event.point)
+  }
+
+  /** The mouse over the map: stretches a box, or follows a polygon. */
+  function moveOverMap(event) {
+    stretchBox(event)
+    if (polygon.active && event.lngLat) {
+      polygon.move([event.lngLat.lng, event.lngLat.lat])
+    }
   }
 
   // The [lng, lat] under a mouse or touch event, or null for a touch with
@@ -778,6 +817,7 @@ export default function HexMap({
           <YearFilter years={years} bounds={yearBounds} onChange={onYearsChange} />
           <AreaOfInterest open={areaPanelOpen} onOpenChange={openAreaPanel}
             shapes={species ? [] : selectedArea?.shapes ?? []} drawing={drawing} onDrawBox={toggleDrawing}
+            polygon={species ? null : polygon}
             onPaste={onAreaPasted}
             size={selectedArea ? { res: selectedArea.res, picked: selectedArea.picked } : null}
             onSizeChange={onAreaSizeChange}
@@ -802,18 +842,21 @@ export default function HexMap({
         dragRotate={!drawing}
         touchZoomRotate={!drawing}
         touchPitch={!drawing}
-        doubleClickZoom={!drawing}
+        // While drawing a polygon, a double-click finishes it.
+        doubleClickZoom={!drawingAny}
         boxZoom={!drawing}
-        cursor={drawing ? 'crosshair' : undefined}
+        cursor={drawingAny ? 'crosshair' : undefined}
+        onClick={clickMap}
+        onDblClick={polygon.active ? polygon.finish : undefined}
         onMouseDown={startBox}
-        onMouseMove={stretchBox}
+        onMouseMove={moveOverMap}
         onMouseUp={finishBox}
         onTouchStart={startBox}
         onTouchMove={stretchBox}
         onTouchEnd={finishBox}
       >
-        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawing ? noTooltip : tooltipFor}
-          onClick={handleClick} getCursor={drawing ? crosshairCursor : dragCursor} />
+        <DeckGLOverlay layers={layers} interleaved={true} getTooltip={drawingAny ? noTooltip : tooltipFor}
+          onClick={handleClick} getCursor={drawingAny ? crosshairCursor : dragCursor} />
         {/* Each of the area's shapes outlined (and the box being dragged),
             the area's only outline: added again (a new key) whenever the
             area changes, so it always sits above the hexagons, last. */}
@@ -826,6 +869,24 @@ export default function HexMap({
               paint={{ 'line-color': SHAPE_OUTLINE.light, 'line-width': SHAPE_OUTLINE.lightWidth }} />
             <Layer id="area-box-line" type="line"
               paint={{ 'line-color': SHAPE_OUTLINE.dark, 'line-width': SHAPE_OUTLINE.darkWidth }} />
+          </Source>
+        )}
+        {/* The polygon being drawn, last: its edges and the line to the
+            mouse (dashed) on a white edge, and its points, the first larger,
+            as clicking it closes the polygon. */}
+        {polygon.active && (
+          <Source id="area-polygon" type="geojson" data={drawingFeatures(polygon.points, polygon.mouse)}>
+            <Layer id="area-polygon-edge" type="line" filter={['!=', ['get', 'kind'], 'point']}
+              paint={{ 'line-color': SHAPE_OUTLINE.light, 'line-width': SHAPE_OUTLINE.lightWidth }} />
+            <Layer id="area-polygon-line" type="line" filter={['==', ['get', 'kind'], 'edges']}
+              paint={{ 'line-color': SHAPE_OUTLINE.dark, 'line-width': SHAPE_OUTLINE.darkWidth }} />
+            <Layer id="area-polygon-next" type="line" filter={['==', ['get', 'kind'], 'next']}
+              paint={{ 'line-color': SHAPE_OUTLINE.dark, 'line-width': 1.5, 'line-dasharray': [2, 2] }} />
+            <Layer id="area-polygon-points" type="circle" filter={['==', ['get', 'kind'], 'point']}
+              paint={{
+                'circle-radius': ['case', ['get', 'first'], 6, 4], 'circle-color': SHAPE_OUTLINE.light,
+                'circle-stroke-color': SHAPE_OUTLINE.dark, 'circle-stroke-width': 2,
+              }} />
           </Source>
         )}
       </Map>

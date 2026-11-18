@@ -2010,6 +2010,16 @@ body {
   resize: vertical;
 }
 
+/* While a polygon is being drawn: "Finish" (filled blue), "Undo point" and
+   "Cancel", for touch screens with no keyboard or double-click. */
+.aoi-pane .aoi-polygon-row {
+  margin-top: 6px;
+}
+
+.aoi-polygon-row .aoi-button {
+  text-align: center;
+}
+
 .aoi-paste-row {
   align-items: center;
   margin-top: 6px;

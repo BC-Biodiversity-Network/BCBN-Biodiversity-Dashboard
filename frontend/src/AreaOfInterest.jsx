@@ -1,14 +1,15 @@
 import { useState } from 'react'
 
 import { PASTE_EXAMPLE, PASTE_HELP } from './areaPaste'
+import { POLYGON_HINT, pointsLeftText } from './areaPolygon'
 import { AREA_SIZES, sizeKm, sizeLabel } from './areaSize'
 
 // The "Create an area of interest" button and its small panel, with the
 // map's other controls at the top left (as in Lucia's approved mockup,
 // Results/Claude outputs/area_of_interest_mockup.html). The panel lists the
 // area's shapes, each with an x that removes it, and has tabs for the ways
-// to add a shape: "Draw" with "Box" ("Polygon" comes later) and "Paste"
-// (WKT or GeoJSON, see areaPaste.js), then "Back" (removes the last shape)
+// to add a shape: "Draw" with "Box" and "Polygon" (see areaPolygon.js) and
+// "Paste" (WKT or GeoJSON, see areaPaste.js), then "Back" (removes the last shape)
 // and "Clear area" (removes them all). Every shape added joins the same area.
 
 // What the button says on a single species' map, where an area is not
@@ -18,8 +19,18 @@ export const DRAW_UNAVAILABLE = "Creating an area of interest is not available o
 // The hint shown while a box is being drawn.
 export const DRAW_HINT = 'Press and drag on the map to draw a box. Esc to cancel.'
 
-// The line under the tabs when nothing is being drawn.
-export const BOX_HELP = 'Box: press and drag on the map. Each shape you add joins the same area.'
+// The line under the tabs when nothing is being drawn (as in the mockup).
+export const DRAW_HELP = 'Box: press and drag on the map. Polygon: click to add points, then click the first point '
+  + 'or press Finish. Each shape you add joins the same area.'
+
+/**
+ * The hint while a polygon is being drawn: POLYGON_HINT, and how many
+ * points are left when few are (left, see pointsLeftText).
+ */
+export function polygonHint(left) {
+  const note = pointsLeftText(left)
+  return note ? `${POLYGON_HINT} ${note}` : POLYGON_HINT
+}
 
 // What the "Hexagon size" choice says for Auto: the size it chose, "Auto
 // (about 7 km)", or "Auto" alone before there is a size.
@@ -45,7 +56,9 @@ export function shapeLabel(shape, index) {
 // onOpenChange(open) opens or closes it (closing it also stops drawing,
 // which the map does). shapes is the area's shapes (see areaShapes.js; empty
 // for no area). drawing is true while a box is being drawn, and onDrawBox
-// starts or cancels it. size is the area's hexagon size, { res, picked }
+// starts or cancels it. polygon is the polygon being drawn (useAreaPolygon
+// in areaPolygon.js: active, message, left, start, finish, undo, cancel);
+// starting a box, a polygon, another tab or Clear area cancels it. size is the area's hexagon size, { res, picked }
 // (res the size used, picked whether the visitor picked it rather than
 // Auto), or null for no area; onSizeChange(res) picks a size, or Auto with
 // null. onPaste(text) adds the shapes of a pasted text and
@@ -57,8 +70,9 @@ export function shapeLabel(shape, index) {
 // the main one, which opens the area panel again when it was closed.
 export default function AreaOfInterest({
   open, onOpenChange, shapes, drawing, onDrawBox, onPaste = () => null, onRemoveShape, onBack, onClear, unavailable,
-  message, onDismissMessage, onShow = null, size = null, onSizeChange = () => {},
+  message, onDismissMessage, onShow = null, size = null, onSizeChange = () => {}, polygon = null,
 }) {
+  const polygonActive = Boolean(polygon?.active)
   const hasShapes = shapes.length > 0
   // The tab shown ("draw" or "paste"), the text in the Paste tab's box, and
   // why the last paste was not added (or null).
@@ -66,12 +80,40 @@ export default function AreaOfInterest({
   const [pasted, setPasted] = useState('')
   const [pasteProblem, setPasteProblem] = useState(null)
 
-  // Shows a tab; leaving Draw while a box is being drawn stops drawing.
+  // Shows a tab; leaving Draw stops drawing a box or a polygon.
   function showTab(name) {
-    if (name !== 'draw' && drawing) {
-      onDrawBox()
+    if (name !== 'draw') {
+      if (drawing) {
+        onDrawBox()
+      }
+      polygon?.cancel()
     }
     setTab(name)
+  }
+
+  /** "Box": cancels a polygon being drawn, then starts or cancels a box. */
+  function pressBox() {
+    polygon?.cancel()
+    onDrawBox()
+  }
+
+  /** "Polygon": stops a box being drawn, then starts or cancels a polygon. */
+  function pressPolygon() {
+    if (drawing) {
+      onDrawBox()
+    }
+    if (polygonActive) {
+      polygon.cancel()
+    } else {
+      onDismissMessage()
+      polygon.start()
+    }
+  }
+
+  /** "Clear area": cancels a polygon being drawn too. */
+  function clearArea() {
+    polygon?.cancel()
+    onClear()
   }
 
   // Adds the pasted shapes ("Add"): the text box empties when they are
@@ -145,11 +187,33 @@ export default function AreaOfInterest({
             <div className="aoi-pane" role="tabpanel" id="aoi-pane-draw" aria-labelledby="aoi-tab-draw">
               <div className="aoi-row">
                 <button type="button" className={drawing ? 'aoi-button on' : 'aoi-button'} aria-pressed={drawing}
-                  onClick={onDrawBox}>
+                  onClick={pressBox}>
                   Box
                 </button>
+                {polygon && (
+                  <button type="button" className={polygonActive ? 'aoi-button on' : 'aoi-button'}
+                    aria-pressed={polygonActive} onClick={pressPolygon}>
+                    Polygon
+                  </button>
+                )}
               </div>
-              <p className="aoi-small" role={drawing ? 'status' : undefined}>{drawing ? DRAW_HINT : BOX_HELP}</p>
+              {polygonActive ? (
+                <>
+                  <p className="aoi-small" role="status">{polygonHint(polygon.left)}</p>
+                  {polygon.message && <p className="aoi-error" role="alert">{polygon.message}</p>}
+                  {/* For touch screens, which have no keyboard or double-click. */}
+                  <div className="aoi-row aoi-polygon-row">
+                    <button type="button" className="aoi-button aoi-add" onClick={polygon.finish}>Finish</button>
+                    <button type="button" className="aoi-button" onClick={polygon.undo}
+                      disabled={polygon.points.length === 0}>
+                      Undo point
+                    </button>
+                    <button type="button" className="aoi-button" onClick={polygon.cancel}>Cancel</button>
+                  </div>
+                </>
+              ) : (
+                <p className="aoi-small" role={drawing ? 'status' : undefined}>{drawing ? DRAW_HINT : DRAW_HELP}</p>
+              )}
             </div>
           )}
           {tab === 'paste' && (
@@ -170,7 +234,7 @@ export default function AreaOfInterest({
               <p className="aoi-small">{PASTE_HELP}</p>
             </div>
           )}
-          {message && !drawing && (
+          {message && !drawing && !polygonActive && (
             <p className="draw-box-message aoi-message" role="alert">
               <span>{message}</span>
               <button type="button" className="draw-box-message-close" onClick={onDismissMessage}
@@ -181,7 +245,7 @@ export default function AreaOfInterest({
           )}
           <div className="aoi-row">
             <button type="button" className="aoi-button" disabled={!hasShapes} onClick={onBack}>Back</button>
-            <button type="button" className="aoi-button" disabled={!hasShapes} onClick={onClear}>Clear area</button>
+            <button type="button" className="aoi-button" disabled={!hasShapes} onClick={clearArea}>Clear area</button>
           </div>
         </section>
       )}

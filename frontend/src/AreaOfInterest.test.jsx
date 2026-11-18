@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import AreaOfInterest, { BOX_HELP, DRAW_HINT, shapeCountText, shapeLabel } from './AreaOfInterest'
+import AreaOfInterest, { DRAW_HELP, DRAW_HINT, shapeCountText, shapeLabel } from './AreaOfInterest'
 import { PASTE_EXAMPLE, PASTE_HELP } from './areaPaste'
 import { boxShapeOf, readAreaText } from './areaShapes'
 
@@ -40,7 +40,7 @@ describe('the area of interest panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Box' }))
     expect([handlers.onBack, handlers.onClear, handlers.onDrawBox].map((mock) => mock.mock.calls.length))
       .toEqual([1, 1, 1])
-    expect(screen.getByText(BOX_HELP)).toBeTruthy()
+    expect(screen.getByText(DRAW_HELP)).toBeTruthy()
   })
 
   it('has the Draw and Paste tabs, and Back and Clear area off with no shapes', () => {

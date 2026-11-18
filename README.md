@@ -1693,8 +1693,9 @@ overview and on a rank map; on a single species' map it is greyed out,
 saying on hover that it is not available there yet. It opens a small panel
 (`frontend/src/AreaOfInterest.jsx`, as in the mockup Lucia approved on
 2026-11-17): "No shapes yet", "1 shape" or "N shapes" at the top, the list
-of shapes ("Shape 1: box", ...) each with an x that removes it, the "Draw"
-tab with a "Box" button (the "Paste" tab and "Polygon" come later), then
+of shapes ("Shape 1: box", "Shape 2: polygon (6 points)", ...) each with an
+x that removes it, the "Draw" tab with "Box" and "Polygon" buttons and the
+"Paste" tab, then
 "Back" (removes the last shape) and "Clear area" (removes them all), and
 "Close". Every shape drawn or pasted joins the same area.
 
@@ -1731,7 +1732,43 @@ to draw a box. Esc to cancel." shows; dragging with the mouse or one finger
 draws the box, Esc, "Box" again or closing the panel cancels, and so does
 any change of page (Back or Forward, a link, another hexagon, area, species
 or rank), so the map never stays in drawing mode on a page it was not
-started on. Whenever the address names a hexagon, the map shows it as it
+started on.
+
+"Polygon" (`frontend/src/areaPolygon.js`; added 2026-11-17) draws a
+polygon point by point. The hint "Click to add points. Click the first
+point, press Enter or double-click to finish. Backspace removes the last
+point, Esc cancels." shows, the cursor is a crosshair and the hover box is
+hidden, but dragging still pans the map (MapLibre gives no click for a
+drag, so a drag adds no point); only double-click zoom is off. Each click
+adds a point, rounded to 4 decimals as a box's corners are (a click that
+rounds to the last point adds nothing, which is what a double-click's two
+clicks do); the map draws the points (the first larger), the edges so far
+and a dashed line from the last point to the mouse, as a MapLibre source
+(`area-polygon`) added after the shapes' outline. A click within
+`CLOSE_PIXELS` (10) pixels of the first point closes the polygon; this is
+checked before `pointWouldCross`, which counts the first point as touching
+the first edge. Enter, a double-click and the panel's "Finish" button (for
+touch screens, beside "Undo point" and "Cancel") close it too. A point that
+would make two edges cross or touch is not added ("That point would make
+two edges cross, so it was not added."), closing is refused when the
+closing edge would cross ("Closing the polygon here would make two edges
+cross. Remove the last point (Backspace) or add another."), and a polygon
+needs at least 3 different points ("A polygon needs at least 3 different
+points."). When 20 points or fewer are left before the area's 250-point
+limit (a box counts as 4), the hint adds "N points left before the area's
+limit of 250."; at the limit a point is not added ("The area can have at
+most 250 points (a box counts as 4), so no more can be added. Finish the
+polygon or remove a point."). Backspace or "Undo point" removes the last
+point and Esc or "Cancel" drops the polygon, neither changing the area or
+the history; the keys are left alone while typing in a field. A finished
+polygon goes through the same checks and messages as every other shape
+(`addPolygon` in `App.jsx`: the API's checks, then Auto or the size
+picked); if refused, drawing goes on with the reason in the panel, so it
+can be fixed. Once added it is one shape (`p:...` in the area text) and
+one history entry, outlined like a box. "Box", the "Paste" tab, closing
+the panel, "Clear area" and any change of page cancel it.
+
+Whenever the address names a hexagon, the map shows it as it
 was when clicked: it moves to the hexagon when it is off screen and zooms
 to hexagons of its size when the map shows another size (`HexMap.jsx`),
 so the panel and the outline on the map always agree. A box's

@@ -30,6 +30,8 @@ vi.mock('react-map-gl/maplibre', async () => {
       }),
       easeTo: (...args) => mapState.easeTo(...args),
       jumpTo: (...args) => mapState.jumpTo(...args),
+      // 100 pixels to a degree, north up.
+      project: ([lng, lat]) => ({ x: lng * 100, y: -lat * 100 }),
     }))
     mapState.onMove = props.onMove
     mapState.onLoad = props.onLoad
@@ -76,7 +78,8 @@ import { cellToLatLng, latLngToCell } from 'h3-js'
 
 import { boxCells } from './area'
 import { SHAPE_OUTLINE, shapesBounds } from './areaLayers'
-import { DRAW_HINT, DRAW_UNAVAILABLE } from './AreaOfInterest'
+import { DRAW_HELP, DRAW_HINT, DRAW_UNAVAILABLE, polygonHint } from './AreaOfInterest'
+import { CROSSING_POINT, POLYGON_HINT } from './areaPolygon'
 import { boxShapeOf, readAreaText } from './areaShapes'
 import { COLOUR_SCHEMES, hexagonColour, outlineOpacity } from './colours'
 import HexMap, { FADED_SHARE, overviewLayerId } from './HexMap'
@@ -1081,5 +1084,191 @@ describe("the map locked to the area's size", () => {
     expect(urls()).toEqual(['/api/species/59PMB/hexes?res=4'])
     expect(sizeLabel()).toBe('Hexagons ~52 km')
     expect(legendNote()).toBeNull()
+  })
+})
+
+describe('drawing a polygon', () => {
+  // Three points of a triangle near Kamloops, and one that would make an
+  // edge cross the first.
+  const A = [-120.6, 50.5]
+  const B = [-120.0, 50.5]
+  const C = [-120.3, 50.9]
+  const AREA = { shapes: [boxShapeOf({ west: -125, south: 54, east: -124, north: 54.5 })], res: 6, cells: [] }
+
+  // Opens the panel and starts a polygon.
+  function startPolygon() {
+    fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Polygon' }))
+  }
+
+  // A click on the map at [lng, lat], as react-map-gl gives it.
+  function clickAt([lng, lat]) {
+    act(() => mapState.props.onClick({ lngLat: { lng, lat }, point: { x: lng * 100, y: -lat * 100 } }))
+  }
+
+  // The points of the polygon being drawn, from what the map draws.
+  function drawnPoints() {
+    return (mapState.sources['area-polygon']?.features ?? [])
+      .filter((feature) => feature.properties.kind === 'point').map((feature) => feature.geometry.coordinates)
+  }
+
+  // Presses a key on the page.
+  function press(key) {
+    fireEvent.keyDown(window, { key })
+  }
+
+  it('offers Polygon beside Box, with its hint, still panning by drag and not zooming on a double-click', () => {
+    render(<HexMap overview={OVERVIEW} species={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+    expect(screen.getByText(DRAW_HELP)).toBeTruthy()
+    const polygonButton = screen.getByRole('button', { name: 'Polygon' })
+    expect(polygonButton.previousElementSibling.textContent).toBe('Box')
+    fireEvent.click(polygonButton)
+    expect(screen.getByRole('button', { name: 'Polygon' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('status').textContent).toBe(POLYGON_HINT)
+    expect(POLYGON_HINT).toBe('Click to add points. Click the first point, press Enter or double-click to finish. '
+      + 'Backspace removes the last point, Esc cancels.')
+    expect(mapState.props).toMatchObject({ dragPan: true, doubleClickZoom: false, cursor: 'crosshair' })
+    expect(['Finish', 'Undo point', 'Cancel'].every((name) => screen.getByRole('button', { name }))).toBe(true)
+  })
+
+  it('shows the points, the edges and the line to the mouse, and closes on the first point', () => {
+    const onAreaPolygon = vi.fn(() => null)
+    const onCellClick = vi.fn()
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPolygon={onAreaPolygon} onCellClick={onCellClick} />)
+    startPolygon()
+    clickAt(A)
+    clickAt(B)
+    act(() => mapState.props.onMouseMove({ lngLat: { lng: -120.2, lat: 50.8 } }))
+    expect(drawnPoints()).toEqual([A, B])
+    const kinds = mapState.sources['area-polygon'].features.map((feature) => feature.properties.kind)
+    expect(kinds).toEqual(['edges', 'next', 'point', 'point'])
+    expect(Object.keys(mapState.mapLayers).filter((id) => id.startsWith('area-polygon')))
+      .toEqual(['area-polygon-edge', 'area-polygon-line', 'area-polygon-next', 'area-polygon-points'])
+    // A hexagon under a click does not open while drawing.
+    act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
+    expect(onCellClick).not.toHaveBeenCalled()
+    clickAt(C)
+    clickAt([-120.57, 50.52])
+    expect(onAreaPolygon).toHaveBeenCalledTimes(1)
+    expect(onAreaPolygon).toHaveBeenCalledWith([A, B, C])
+    expect(mapState.sources['area-polygon']).toBeUndefined()
+    expect(mapState.props.doubleClickZoom).toBe(true)
+    // The click that closed it does not open a hexagon either.
+    act(() => mapState.onClick({ object: OVERVIEW.rows[4][0] }))
+    expect(onCellClick).not.toHaveBeenCalled()
+  })
+
+  it('finishes with a double-click, Enter and the Finish button', () => {
+    const onAreaPolygon = vi.fn(() => null)
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPolygon={onAreaPolygon} />)
+    for (const finish of [
+      () => act(() => mapState.props.onDblClick()),
+      () => press('Enter'),
+      () => fireEvent.click(screen.getByRole('button', { name: 'Finish' })),
+    ]) {
+      if (!screen.queryByRole('region', { name: 'Area of interest' })) {
+        fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Polygon' }))
+      clickAt(A)
+      clickAt(B)
+      clickAt(C)
+      // A double-click's two clicks land on the last point: no point added.
+      clickAt(C)
+      finish()
+      expect(onAreaPolygon).toHaveBeenLastCalledWith([A, B, C])
+      expect(screen.getByRole('button', { name: 'Polygon' }).getAttribute('aria-pressed')).toBe('false')
+    }
+    expect(onAreaPolygon).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses a crossing point and too few points, with a short message', () => {
+    const onAreaPolygon = vi.fn(() => null)
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPolygon={onAreaPolygon} />)
+    startPolygon()
+    clickAt(A)
+    clickAt(B)
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    expect(screen.getByRole('alert').textContent).toBe('A polygon needs at least 3 different points.')
+    clickAt(C)
+    clickAt([-120.3, 50.3])
+    expect(screen.getByRole('alert').textContent).toBe(CROSSING_POINT)
+    expect(drawnPoints()).toEqual([A, B, C])
+    expect(onAreaPolygon).not.toHaveBeenCalled()
+  })
+
+  it('removes the last point with Backspace or Undo point, and cancels with Esc, leaving the area alone', () => {
+    const onAreaPolygon = vi.fn(() => null)
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} onAreaPolygon={onAreaPolygon} />)
+    startPolygon()
+    clickAt(A)
+    clickAt(B)
+    clickAt(C)
+    press('Backspace')
+    expect(drawnPoints()).toEqual([A, B])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo point' }))
+    expect(drawnPoints()).toEqual([A])
+    press('Escape')
+    expect(mapState.sources['area-polygon']).toBeUndefined()
+    expect(screen.queryByRole('button', { name: 'Finish' })).toBeNull()
+    expect(onAreaPolygon).not.toHaveBeenCalled()
+  })
+
+  it('keeps drawing with the API\'s words when the shape is refused', () => {
+    const refusal = 'The polygon is about 9.9 km², smaller than the minimum of 144.5 km² for hexagons of about 36.1 km² '
+      + '(4 times their average area). Draw a larger polygon.'
+    render(<HexMap overview={OVERVIEW} species={null} onAreaPolygon={() => refusal} />)
+    startPolygon()
+    clickAt(A)
+    clickAt(B)
+    clickAt(C)
+    press('Enter')
+    expect(screen.getByRole('alert').textContent).toBe(refusal)
+    expect(drawnPoints()).toEqual([A, B, C])
+  })
+
+  it('cancels when switching to Box or Paste, closing the panel, Clear area, or leaving the page', () => {
+    const onClearArea = vi.fn()
+    const props = { overview: OVERVIEW, species: null, selectedArea: AREA, onClearArea }
+    const { rerender } = render(<HexMap {...props} />)
+    // Starts a polygon of one point and checks it shows.
+    function oneDrawn() {
+      fireEvent.click(screen.getByRole('button', { name: 'Polygon' }))
+      clickAt(A)
+      expect(drawnPoints()).toEqual([A])
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+    oneDrawn()
+    fireEvent.click(screen.getByRole('button', { name: 'Box' }))
+    expect(drawnPoints()).toEqual([])
+    expect(screen.getByText(DRAW_HINT)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Box' }))
+    oneDrawn()
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste' }))
+    expect(drawnPoints()).toEqual([])
+    fireEvent.click(screen.getByRole('tab', { name: 'Draw' }))
+    oneDrawn()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(drawnPoints()).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Create an area of interest' }))
+    oneDrawn()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear area' }))
+    expect(drawnPoints()).toEqual([])
+    expect(onClearArea).toHaveBeenCalledTimes(1)
+    oneDrawn()
+    rerender(<HexMap {...props} rank={{ rank: 'genus', name: 'Turdus', path: [], id: 1 }} rankId="genus-turdus" />)
+    expect(drawnPoints()).toEqual([])
+  })
+
+  it('says how many points are left when few are', () => {
+    // 60 boxes: 240 points, so 10 are left.
+    const boxes = Array.from({ length: 60 }, (_, i) => boxShapeOf({ west: -125 + i * 0.01, south: 50, east: -124.995 + i * 0.01, north: 50.005 }))
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, shapes: boxes }} />)
+    startPolygon()
+    expect(screen.getByRole('status').textContent).toBe(polygonHint(10))
+    clickAt(A)
+    expect(screen.getByRole('status').textContent)
+      .toBe(`${POLYGON_HINT} 9 points left before the area's limit of 250.`)
   })
 })

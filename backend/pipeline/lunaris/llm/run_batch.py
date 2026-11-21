@@ -23,8 +23,9 @@ What it does:
      "--flash-attn off", and stops (exit 1) before any record if not.
   4. Skips every record that already has a valid answer in
      results/batch_NNNN.jsonl, so rerunning a batch only does what is missing.
-  5. For each remaining record, rebuilds the prompt, checks its fingerprint
-     matches the one made on the Mac, asks the model, checks the answer fits
+  5. For each remaining record, rebuilds the prompt with the run's prompt
+     variant (run.json's prompt_variant, v6 when missing; see
+     prompt_variants.py), checks its fingerprint matches the one made on the Mac, asks the model, checks the answer fits
      the schema, and appends it to the results file at once. A failure goes
      to errors/batch_NNNN.jsonl instead and is tried again next time.
 
@@ -82,7 +83,8 @@ from ollama_client import (  # noqa: E402
     runner_flash_attn,
     wait_for_server,
 )
-from prompt_v6 import PROMPT_VERSION, build_prompt, check_answer, prompt_sha1  # noqa: E402
+from prompt_v6 import PROMPT_VERSION, check_answer, prompt_sha1  # noqa: E402
+from prompt_variants import DEFAULT_VARIANT, build_prompt_for, variant_of_run  # noqa: E402
 import vllm_client  # noqa: E402
 from run_files import (  # noqa: E402
     append_line,
@@ -187,16 +189,17 @@ def flash_attention_problem(server_log, expected):
     return None
 
 
-def ask_one(record, ask):
+def ask_one(record, ask, variant=DEFAULT_VARIANT):
     """
     Build one record's prompt, check it, and ask the model.
 
     Runs in a worker thread. ask is the function that sends one prompt to the
-    server (Ollama or vLLM). Returns the record, the result in ask_ollama's
+    server (Ollama or vLLM); variant is the run's prompt variant (v6 unless
+    run.json names another). Returns the record, the result in ask_ollama's
     shape ({"answer": ...} or {"error": ...}) and how many seconds the call
     took. A prompt whose fingerprint differs from the batch file is not sent.
     """
-    prompt = build_prompt(record)
+    prompt = build_prompt_for(record, variant)
     if prompt_sha1(prompt) != record["prompt_sha1"]:
         return record, {"error": "prompt differs from the one made on the Mac"}, 0.0
     started = time.monotonic()
@@ -257,10 +260,15 @@ def main():
     url = normalise_url(args.ollama_url)
     run = load_run(run_dir)
     model = run["model"]
+    try:
+        variant = variant_of_run(run)
+    except ValueError as error:
+        print(f"ERROR: {error}. Nothing was asked.")
+        return 1
     records = read_inputs(run_dir, number)
     name = batch_name(number)
     print(f"{name} of run {run_dir.name}: {len(records):,} records, model {model}, "
-          f"prompt v{PROMPT_VERSION}, {args.backend}, {args.workers} worker(s), "
+          f"prompt v{PROMPT_VERSION} (variant {variant}), {args.backend}, {args.workers} worker(s), "
           f"context {args.num_ctx:,}" + (f", {args.num_thread} threads" if args.num_thread else ""))
 
     lock = lock_path(run_dir, number)
@@ -376,7 +384,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
             record = next(queue, None)
             if record is None:
                 return
-            running.add(pool.submit(ask_one, record, ask))
+            running.add(pool.submit(ask_one, record, ask, variant_of_run(run)))
 
     try:
         top_up()

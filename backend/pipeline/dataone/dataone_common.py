@@ -6,8 +6,14 @@ by DOI, UUID and title. They were first written in the third DataONE probe
 (exploration/dataone/probe_dataone_3.py, not committed) and are copied here
 unchanged, so the pipeline does not depend on exploration code. The probe
 keeps its own copies.
+
+norm_for_similarity and title_similarity compare the titles of a DataONE
+record and the Lunaris record it matched by DOI or UUID (match_lunaris.py
+and exploration/dataone/check_lunaris_match.py). They were first written
+in check_lunaris_match.py on 2026-11-20 and moved here unchanged.
 """
 
+import difflib
 import re
 
 # A DOI anywhere in a text: "10.", a registrant code of 4 to 9 digits, "/",
@@ -45,3 +51,27 @@ def norm_title(value):
 def strip_lang(title):
     """Drop a trailing language tag such as '@en' that some sources add to titles."""
     return re.sub(r"@[a-z]{2}$", "", str(title or ""))
+
+
+def norm_for_similarity(text):
+    """
+    Normalise a text before comparing it: lower case, drop a trailing "@xx"
+    (or "@xx-yy") language tag, turn punctuation into spaces, collapse
+    whitespace. Returns "" for a missing value.
+    """
+    if not isinstance(text, str):
+        return ""
+    text = " ".join(text.lower().split())
+    text = re.sub(r"@[a-z]{2}(-[a-z]{2})?$", "", text)
+    text = re.sub(r"[^\w\s]|_", " ", text)
+    return " ".join(text.split())
+
+
+def title_similarity(a, b):
+    """
+    Return difflib's similarity ratio (0 to 1) of two texts that have
+    already been through norm_for_similarity; NaN if either is empty.
+    """
+    if not a or not b:
+        return float("nan")
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()

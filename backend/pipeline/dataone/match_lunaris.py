@@ -48,6 +48,21 @@ DataONE record with to_filter2 true:
   lunaris_filter2_summary         over the DOI and UUID matches (over the
                                   title matches for title_only): yes, no or
                                   mixed; empty for none
+  title_similarity                the best title similarity between the
+                                  record and its Lunaris matches: over the
+                                  DOI and UUID matches only (a title match
+                                  always has the same title, so it would
+                                  hide a wrong DOI match), over the title
+                                  matches for title_only, empty for none.
+                                  Both titles go through
+                                  dataone_common.norm_for_similarity and
+                                  the score is dataone_common.title_similarity
+  reuse_lunaris                   True when the record may reuse the Lunaris
+                                  filter 2 result instead of going to
+                                  filter 2: a DOI or UUID match with
+                                  title_similarity of 0.9 or more (rule
+                                  approved by Lucia on 2026-11-20). Every
+                                  other record goes to filter 2
 The script checks with git check-ignore that git ignores the file, and
 stops if it exists unless --replace.
 
@@ -69,7 +84,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(BACKEND, "pipeline", "lunaris"))
 from check_harvest import source_of  # noqa: E402
 from classify_multibox_records import HARVEST, SECONDS_PER_RECORD, VERSIONS, check_ignored  # noqa: E402
-from dataone_common import RW_STYLE, UUID_RE, norm_doi, norm_title, strip_lang  # noqa: E402
+from dataone_common import (RW_STYLE, UUID_RE, norm_doi, norm_for_similarity, norm_title,  # noqa: E402
+                             strip_lang, title_similarity)
 
 GROUPS = os.path.join(HARVEST, "dataone_groups.parquet")
 OUT = os.path.join(HARVEST, "dataone_lunaris_match.parquet")
@@ -78,6 +94,7 @@ LUNARIS_RESULTS = os.path.join(BACKEND, "data", "lunaris_bc_filter", "filter3_fi
 MIN_TITLE = 25          # shorter titles ("Water quality") are too generic to match
 STRONG = ("doi", "uuid")
 EXAMPLES = 3
+REUSE_MIN_SIMILARITY = 0.9  # a DOI or UUID match reuses Lunaris only from this title similarity up
 
 LIST_COLUMNS = ["lunaris_ids", "lunaris_match_by", "lunaris_sources", "lunaris_filter2", "lunaris_filter2_runs",
                 "lunaris_final_class", "lunaris_frontend_group"]
@@ -197,6 +214,18 @@ def summary_of(decisions):
     return distinct.pop() if len(distinct) == 1 else "mixed"
 
 
+def best_similarity(title, lunaris_titles):
+    """
+    Return the best title similarity between a DataONE title and a list of
+    Lunaris titles, after norm_for_similarity; NaN when the list is empty
+    or every comparison has an empty title.
+    """
+    mine = norm_for_similarity(title)
+    scores = [title_similarity(mine, norm_for_similarity(t)) for t in lunaris_titles]
+    scores = [x for x in scores if x == x]
+    return max(scores) if scores else float("nan")
+
+
 def match_all(records, lunaris):
     """Return the output table: one row per DataONE record, with every Lunaris match and its results."""
     keys = build_keys(lunaris)
@@ -216,6 +245,9 @@ def match_all(records, lunaris):
         counted = [d for i, d in zip(ids, row["lunaris_filter2"])
                    if (found[i] & set(STRONG)) or match_type == "title_only"]
         row["lunaris_filter2_summary"] = summary_of(counted)
+        compared = [i for i in ids if (found[i] & set(STRONG)) or match_type == "title_only"]
+        row["title_similarity"] = best_similarity(record["title"], [lunaris.at[i, "title"] for i in compared])
+        row["reuse_lunaris"] = bool(match_type in STRONG and row["title_similarity"] >= REUSE_MIN_SIMILARITY)
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -224,7 +256,8 @@ def write(result):
     """Write the match table to OUT, through a temporary file."""
     schema = pa.schema([(c, pa.string()) for c in ["id", "datasource", "group", "match_type"]]
                        + [(c, pa.list_(pa.string())) for c in LIST_COLUMNS]
-                       + [("lunaris_filter2_summary", pa.string())])
+                       + [("lunaris_filter2_summary", pa.string()), ("title_similarity", pa.float64()),
+                          ("reuse_lunaris", pa.bool_())])
     table = pa.Table.from_pandas(result[schema.names], schema=schema, preserve_index=False)
     pq.write_table(table, OUT + ".tmp", compression="zstd")
     os.replace(OUT + ".tmp", OUT)
@@ -281,9 +314,16 @@ def report(result, records, lunaris):
               f"filter2 {lunaris.at[i, 'filter2']} | {str(lunaris.at[i, 'title'])[:100]}"
               + (f"   (+{len(r['lunaris_ids']) - 1} more)" if len(r["lunaris_ids"]) > 1 else ""))
 
-    skipped = int(result["match_type"].isin(STRONG).sum())
+    strong = result[result["match_type"].isin(STRONG)]
+    below = strong[~strong["reuse_lunaris"]]
+    print(f"\nTITLE CHECK OF THE DOI OR UUID MATCHES (reuse Lunaris from {REUSE_MIN_SIMILARITY} up)")
+    print(pd.crosstab(strong["match_type"], strong["reuse_lunaris"], margins=True).to_string())
+    print(f"   not reused: {len(below):,} records; their Lunaris filter 2 summary: "
+          f"{below['lunaris_filter2_summary'].value_counts().to_dict()}; by datasource: "
+          f"{below['datasource'].value_counts().to_dict()}")
+    skipped = int(result["reuse_lunaris"].sum())
     left = len(result) - skipped
-    print(f"\nFILTER 2: {len(result):,} records now; skipping the {skipped:,} DOI or UUID matches leaves {left:,}, "
+    print(f"\nFILTER 2: {len(result):,} records now; skipping the {skipped:,} that reuse Lunaris leaves {left:,}, "
           f"{left * SECONDS_PER_RECORD / 3600:.1f} slice-hours at {SECONDS_PER_RECORD} s per record")
 
 

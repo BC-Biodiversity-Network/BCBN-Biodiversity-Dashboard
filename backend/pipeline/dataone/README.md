@@ -121,3 +121,41 @@ box sits in the document.
   `originals/parse_log.csv`.
 - **Check:** it prints how many documents have as many boxes as
   `geohash_9` values.
+
+## Matching against Lunaris
+
+`match_lunaris.py` matches every DataONE record that goes to filter 2
+(`to_filter2` true in `dataone_groups.parquet`) against the Lunaris
+harvest, so the Lunaris filter 2 result can be reused instead of running
+the LLM again on the same dataset. It reads only, and writes
+`dataone_lunaris_match.parquet` next to the groups file:
+
+    ../.venv/bin/python pipeline/dataone/match_lunaris.py --replace
+
+Records are matched by DOI, then UUID, then title. `match_type` is the
+first that found anything (`doi`, `uuid`, `title_only` or `none`). A title
+match is only reported; it is never used to skip the LLM.
+
+**When a record reuses Lunaris** (rule approved by Lucia on 2026-11-20):
+only when it matches Lunaris by DOI or UUID **and** its title is similar
+enough to the Lunaris record's title. Then `reuse_lunaris` is True and the
+record does not go to filter 2. Every other record goes to filter 2,
+including DOI or UUID matches whose titles differ.
+
+- `title_similarity` is the best score between the record's title and the
+  titles of its DOI or UUID matches. Both titles are normalised first
+  (lower case, a trailing language tag such as `@en` dropped, punctuation
+  turned into spaces, whitespace collapsed; `dataone_common.norm_for_similarity`).
+  The score is difflib's ratio, 0 to 1 (`dataone_common.title_similarity`).
+  Title matches are left out of the score, since a title match always has
+  the same title and would hide a wrong DOI match.
+- `reuse_lunaris` is True when `match_type` is `doi` or `uuid` and
+  `title_similarity` is 0.9 or more.
+
+On the 2026-11-18 harvest, 25,675 records match by DOI or UUID. 25,089 of
+them reuse Lunaris, and 586 go to filter 2 because their titles are below
+0.9. Those 586 are mostly French titles (HAKAI_IYS), Dryad's "Data from:"
+prefix, and revised versions under the same DOI (Borealis). The pairs
+were compared with `exploration/dataone/check_lunaris_match.py`, which
+also writes a sample of them for review by hand. This leaves 248,983
+records for filter 2.

@@ -27,7 +27,10 @@ What it does:
      variant (run.json's prompt_variant, v6 when missing; see
      prompt_variants.py), checks its fingerprint matches the one made on the Mac, asks the model, checks the answer fits
      the schema, and appends it to the results file at once. A failure goes
-     to errors/batch_NNNN.jsonl instead and is tried again next time.
+     to errors/batch_NNNN.jsonl instead and is tried again next time. With
+     Ollama, an answer whose prompt Ollama cut silently (input_tokens equal
+     to num_ctx // 2 + 2, see cut_by_ollama) is such a failure, of kind
+     context_full.
 
 With Ollama the request is the same as run_trial.py's: the shared
 ask_ollama, with temperature 0, thinking off, the answer schema, and a 16,384
@@ -189,6 +192,36 @@ def flash_attention_problem(server_log, expected):
     return None
 
 
+def cut_by_ollama(input_tokens, num_ctx):
+    """
+    Return True if Ollama's token count shows it cut the prompt silently.
+
+    Ollama 0.40 does not refuse a prompt longer than the context: it cuts it
+    to half the context plus 2 tokens (8,194 at num_ctx 16,384), keeping the
+    end, so the instructions at the start are lost and the model answers
+    something else. Seen in the DataONE full runs of 2026-11-21 (260
+    records) and the Lunaris runs (3). ask_ollama's own check (a count close
+    to num_ctx) does not catch it. A prompt that is really exactly this
+    long is also caught; it is then simply asked again with a larger
+    context, where it fits.
+    """
+    return input_tokens is not None and input_tokens == num_ctx // 2 + 2
+
+
+def ask_ollama_checked(url, model, prompt, num_ctx, timeout, num_thread):
+    """
+    Ask Ollama as ask_ollama does, but return an answer whose prompt Ollama
+    cut (cut_by_ollama) as a context_full error instead, so it goes to the
+    errors file and the NUM_CTX=65536 second pass asks it again. The message
+    starts with the words run_files.error_kind reads as context_full.
+    """
+    result = ask_ollama(url, model, prompt, num_ctx=num_ctx, timeout=timeout, num_thread=num_thread)
+    if "answer" in result and cut_by_ollama(result.get("input_tokens"), num_ctx):
+        return {"error": f"the prompt filled the whole context: Ollama cut it to {result['input_tokens']} "
+                         f"tokens (half of {num_ctx}) and dropped its start, raise --num-ctx"}
+    return result
+
+
 def ask_one(record, ask, variant=DEFAULT_VARIANT):
     """
     Build one record's prompt, check it, and ask the model.
@@ -347,8 +380,7 @@ def run_one_batch(args, run_dir, number, run, model, records, url):
         """Send one prompt to this run's server."""
         if vllm:
             return vllm_client.ask_vllm(url, model, prompt, timeout=args.timeout)
-        return ask_ollama(url, model, prompt, num_ctx=args.num_ctx, timeout=args.timeout,
-                          num_thread=args.num_thread)
+        return ask_ollama_checked(url, model, prompt, args.num_ctx, args.timeout, args.num_thread)
 
     # Every answer in a run must come from the same weights. If this batch
     # already holds answers from another digest, stop instead of mixing them.

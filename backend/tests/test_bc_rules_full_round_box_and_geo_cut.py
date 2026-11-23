@@ -180,11 +180,12 @@ def test_answers_one_token_either_side_are_kept(monkeypatch, tokens):
     assert result["answer"] == PASS2_ANSWER and result["input_tokens"] == tokens
 
 
-def test_a_cut_pass_1_answer_is_tried_once_more_and_saved_as_an_error(monkeypatch):
+def test_a_cut_pass_1_answer_is_asked_once_and_saved_as_an_error(monkeypatch):
+    # Asking a cut prompt again at the same context size would only cut it again.
     fake_server(monkeypatch, PASS1_ANSWER, 8194)
     result = geo_filter_run.ask_with_retry(lambda text: ask(geo_prompt_v3.RESPONSE_SCHEMA), "a prompt",
                                            lambda r: geo_pass1_trial.finish_answer(r, "Examplia"))
-    assert result["attempts"] == 2 and error_kind(result["error"]) == "context_full"
+    assert result["attempts"] == 1 and error_kind(result["error"]) == "context_full"
     assert "places" not in result
 
 

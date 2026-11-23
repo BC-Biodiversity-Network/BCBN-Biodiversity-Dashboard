@@ -115,7 +115,10 @@ def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOU
     A call that times out or fails is tried once more. If the server cannot be
     reached at all, OllamaUnreachable is raised to stop the run. If the prompt
     filled the whole context, Ollama may have cut it, so the answer is
-    returned as an error rather than trusted.
+    returned as an error rather than trusted. A reply that is not valid JSON
+    is returned as an error that keeps Ollama's token counts (input_tokens,
+    and output_tokens when given), so the caller can still tell a prompt
+    Ollama cut (run_batch.ask_ollama_checked).
     """
     body = chat_request_body(model, prompt, num_ctx, num_thread, schema)
     request = urllib.request.Request(
@@ -154,7 +157,14 @@ def ask_ollama(url, model, prompt, num_ctx=OLLAMA_NUM_CTX, timeout=OLLAMA_TIMEOU
     try:
         answer = json.loads(content)
     except json.JSONDecodeError as error:
-        return {"error": f"reply was not valid JSON: {error}"}
+        # Keep the token counts with the error: a prompt Ollama cut often
+        # ends in broken JSON, and only the input count shows the cut.
+        failure = {"error": f"reply was not valid JSON: {error}"}
+        if input_tokens is not None:
+            failure["input_tokens"] = input_tokens
+        if reply.get("eval_count") is not None:
+            failure["output_tokens"] = reply["eval_count"]
+        return failure
     return {
         "answer": answer,
         "input_tokens": input_tokens,

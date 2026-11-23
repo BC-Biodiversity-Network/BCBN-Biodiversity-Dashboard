@@ -41,7 +41,8 @@ job can split a long run):
      succeeds.
 A failed answer (an error, bad JSON, or an answer that does not fit the
 schema) is asked once more at once (ask_ollama itself also tries a timed-out
-call once more). Every result is appended to a progress file as soon as it
+call once more), except a context_full error: the same prompt would be cut
+again at the same NUM_CTX, so it is kept for a run with a larger one. Every result is appended to a progress file as soon as it
 comes, so a job that stops loses nothing, and the next job skips what is
 done. Failures are also written to logs/failures_partK.txt.
 
@@ -287,9 +288,11 @@ def latest_results(folder, stem):
 def ask_with_retry(ask, prompt_text, finish):
     """
     Ask one prompt and check the answer (finish), and if that fails, ask
-    once more at once. Return the result, with attempts (1 or 2), the first
-    error when a second attempt was needed, and seconds for the attempt
-    kept. OllamaUnreachable is not caught: a server that is gone stops the run.
+    once more at once, unless the failure is context_full (the prompt does
+    not fit this NUM_CTX, so asking again only costs time). Return the
+    result, with attempts (1 or 2), the first error when a second attempt
+    was needed, and seconds for the attempt kept. OllamaUnreachable is not
+    caught: a server that is gone stops the run.
     """
     first_error = None
     for attempt in (1, 2):
@@ -301,6 +304,9 @@ def ask_with_retry(ask, prompt_text, finish):
         if first_error:
             result["first_error"] = first_error
         if "answer" in result:
+            return result
+        # A prompt that does not fit is cut again at the same context size.
+        if error_kind(result["error"]) == "context_full":
             return result
         first_error = first_error or result["error"]
     return result
@@ -327,8 +333,12 @@ def look_up(lookup, places):
     return results, round(time.monotonic() - started, 3)
 
 
-def build_pass2(record, shape, places, lookups, variant=geo_prompt_variants.DEFAULT_GEO_VARIANT):
-    """Return a record's pass 2 prompt (version C4) in the run's geography prompt variant."""
+def build_pass2(record, shape, places, lookups, variant):
+    """
+    Return a record's pass 2 prompt (version C4) in the run's geography
+    prompt variant. The variant has no default, so a caller that forgets it
+    fails at once instead of quietly building the Lunaris prompt.
+    """
     return geo_prompt_variants.build_pass2_prompt(record, shape, places, lookups, variant)
 
 
@@ -422,8 +432,10 @@ class Run:
             done2 = pass2.get(n, {})
             if n in need1 or n in need_lookup or "answer" not in done2:
                 need2.append(n)
+            # Rebuild the prompt in the run's own variant, as it was asked; in
+            # any other variant it never matches, and every record looks unasked.
             elif done2.get("prompt_sha1") != prompt_sha1(
-                    build_pass2(self.record(n), self.shape, places, lookups[n]["results"])):
+                    build_pass2(self.record(n), self.shape, places, lookups[n]["results"], self.variant)):
                 need2.append(n)
         return need1, need_lookup, need2
 

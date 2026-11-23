@@ -585,7 +585,9 @@ The job needs no harvest, rules file or pyarrow: `geo_filter_prepare.py`
 fingerprint of every pass 1 prompt, and the job checks each prompt against
 it before asking anything. Results are saved record by record, so a job can
 be resubmitted at any time and only the missing records are asked; a failed
-answer is asked once more at once and logged in `logs/failures_part0.txt`.
+answer is asked once more at once and logged in `logs/failures_part0.txt`
+(except a prompt too long for the context, context_full, which would only be
+cut again: it is asked once and waits for a resubmit with `NUM_CTX=65536`).
 
 On Fir everything lives under `$B/bcf`:
 

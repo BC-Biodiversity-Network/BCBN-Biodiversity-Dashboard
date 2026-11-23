@@ -22,7 +22,10 @@ A run chooses its variant with geo_prompt_variant in its input folder's
 input.json; a folder without it is lunaris, so every old input folder
 works as before. geo_filter_run.py builds every prompt with the input's
 variant and writes the variant and both instructions' fingerprints to the
-run's run.json.
+run's run.json. The two prompt builders (build_pass1_prompt and
+build_pass2_prompt) have no default variant: every caller names it, so a
+caller that forgets fails at once instead of quietly building the Lunaris
+prompt.
 """
 
 import geo_pass2_places as places_part
@@ -81,19 +84,19 @@ def fingerprints(variant=DEFAULT_GEO_VARIANT):
             "pass2_instructions_sha1": prompt_sha1(pass2_instructions(variant))}
 
 
-def build_pass1_prompt(record, shape, variant=DEFAULT_GEO_VARIANT):
+def build_pass1_prompt(record, shape, variant):
     """
-    Return a record's pass 1 prompt in a variant. For lunaris this is
-    exactly geo_prompt_v3.build_prompt(record, shape).
+    Return a record's pass 1 prompt in a variant (required, no default).
+    For lunaris this is exactly geo_prompt_v3.build_prompt(record, shape).
     """
     if check_variant(variant) == "lunaris":
         return pass1_prompt.build_prompt(record, shape)
     return pass1_instructions(variant) + "\n\n" + dataone_record_text(record, shape)
 
 
-def build_pass2_prompt(record, shape, places, lookups, variant=DEFAULT_GEO_VARIANT):
+def build_pass2_prompt(record, shape, places, lookups, variant):
     """
-    Return a record's pass 2 prompt in a variant: the instructions, the
+    Return a record's pass 2 prompt in a variant (required, no default): the instructions, the
     record (box notes also giving the share outside BC), then the Place
     list. For lunaris this is exactly geo_pass2_prompt_c4.build_prompt.
     """

@@ -98,8 +98,8 @@ def test_the_dataone_instructions_differ_only_by_canadian():
 
 
 def test_the_lunaris_variant_builds_exactly_the_lunaris_prompts(shape):
-    assert gv.build_pass1_prompt(LUNARIS_RECORD, shape) == geo_prompt_v3.build_prompt(LUNARIS_RECORD, shape)
-    assert gv.build_pass2_prompt(LUNARIS_RECORD, shape, PLACES, LOOKUPS) == \
+    assert gv.build_pass1_prompt(LUNARIS_RECORD, shape, "lunaris") == geo_prompt_v3.build_prompt(LUNARIS_RECORD, shape)
+    assert gv.build_pass2_prompt(LUNARIS_RECORD, shape, PLACES, LOOKUPS, "lunaris") == \
         geo_pass2_prompt_c4.build_prompt(LUNARIS_RECORD, shape, PLACES, LOOKUPS)
 
 
@@ -155,7 +155,8 @@ def test_the_saved_lunaris_prompts_rebuild_byte_for_byte(shape, inputs, run):
         assert prompt_sha1(text1) == item["pass1_sha1"]
         saved2 = run / "pass2" / "prompts" / name
         if saved2.exists():
-            assert gv.build_pass2_prompt(item["record"], shape, places[number], lookups[number]) == \
+            assert gv.build_pass2_prompt(item["record"], shape, places[number], lookups[number],
+                                         gv.variant_of_input({})) == \
                 saved2.read_text(encoding="utf-8")
             checked += 1
     assert checked > 0.9 * len(records)

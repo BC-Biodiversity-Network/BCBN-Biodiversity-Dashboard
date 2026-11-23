@@ -211,6 +211,11 @@ def repair_box(west, south, east, north):
         western half, as in a box over the Bering Sea), which is split into
         two rectangles, one each side of the line; or west and east swapped,
         which are put back.
+      - West exactly 180 and east exactly -180: read as crossing the 180
+        degree line, both halves would have no width, which cannot be what
+        was meant; the box is read as going all the way round, from -180
+        to 180 (DataONE has such boxes for worldwide data, and for bands of
+        latitude such as 51.5 to 66.5 north).
       - Latitudes are kept within 85 degrees north or south, where the
         equal-area projection still works.
 
@@ -224,6 +229,8 @@ def repair_box(west, south, east, north):
     if west == east or south >= north:
         return []
     if west > east:
+        if west == 180.0 and east == -180.0:
+            return [make_box(-180.0, south, 180.0, north)]
         if west > 0 > east:
             return [make_box(west, south, 180.0, north), make_box(-180.0, south, east, north)]
         west, east = east, west
@@ -243,7 +250,8 @@ def measure_box(lunaris_box, shape):
     box is repaired first (see repair_box). A box wholly beyond 85 degrees
     north or south (around a pole) is far from BC; it is returned as
     (0, 0, 0) without measuring, because the equal-area projection does not
-    reach that far.
+    reach that far. A box whose area comes out as zero once projected is
+    treated like a box with no area (None), so nothing divides by zero.
     """
     south, north = sorted((lunaris_box["s"], lunaris_box["n"]))
     if south >= 85.0 or north <= -85.0:
@@ -255,6 +263,8 @@ def measure_box(lunaris_box, shape):
     # degree along them keeps their shape when the box is projected.
     box_shape = transform(shape.to_equal_area, shapely.segmentize(shapely.union_all(pieces), 1.0))
     box_area = box_shape.area
+    if box_area == 0:
+        return None
     in_bc = box_shape.intersection(shape.outline_equal_area).area
     return in_bc / box_area, in_bc / shape.area, box_area / shape.area
 

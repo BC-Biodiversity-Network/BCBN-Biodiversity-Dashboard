@@ -208,17 +208,21 @@ def cut_by_ollama(input_tokens, num_ctx):
     return input_tokens is not None and input_tokens == num_ctx // 2 + 2
 
 
-def ask_ollama_checked(url, model, prompt, num_ctx, timeout, num_thread):
+def ask_ollama_checked(url, model, prompt, num_ctx, timeout, num_thread, schema=None):
     """
     Ask Ollama as ask_ollama does, but return an answer whose prompt Ollama
     cut (cut_by_ollama) as a context_full error instead, so it goes to the
     errors file and the NUM_CTX=65536 second pass asks it again. The message
-    starts with the words run_files.error_kind reads as context_full.
+    starts with the words run_files.error_kind reads as context_full; the
+    error keeps Ollama's input_tokens. schema is ask_ollama's (None means
+    prompt v6's answer schema). Also used by geo_filter_run.py, the BC
+    filter's two passes, which give their own schemas.
     """
-    result = ask_ollama(url, model, prompt, num_ctx=num_ctx, timeout=timeout, num_thread=num_thread)
+    result = ask_ollama(url, model, prompt, num_ctx=num_ctx, timeout=timeout, num_thread=num_thread, schema=schema)
     if "answer" in result and cut_by_ollama(result.get("input_tokens"), num_ctx):
         return {"error": f"the prompt filled the whole context: Ollama cut it to {result['input_tokens']} "
-                         f"tokens (half of {num_ctx}) and dropped its start, raise --num-ctx"}
+                         f"tokens (half of {num_ctx}) and dropped its start, raise --num-ctx",
+                "input_tokens": result["input_tokens"]}
     return result
 
 

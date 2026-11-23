@@ -13,7 +13,12 @@ geo_pass1_trial.finish_answer for pass 1, geonames_lookup.GeoNamesLookup
 for the lookup, geo_pass2_prompt_c4.build_prompt and
 geo_pass2_trial.finish_answer for pass 2. The request is the shared
 ask_ollama's (temperature 0, thinking off, the answer schema, a 16,384-token
-context), with Ollama's num_thread option on Fir, as in the v6 run.
+context), with Ollama's num_thread option on Fir, as in the v6 run. Both
+passes ask through run_batch.ask_ollama_checked, as the v6 run does: an
+answer whose prompt Ollama cut without saying so (input_tokens equal to
+num_ctx // 2 + 2, run_batch.cut_by_ollama) becomes a context_full error
+instead of an answer, and is asked again on the next run, with a larger
+NUM_CTX if need be.
 
 The input folder comes from geo_filter_prepare.py: sample.csv and
 records.jsonl.gz, each record with the fingerprint of its pass 1 prompt as
@@ -119,7 +124,6 @@ from ollama_client import (  # noqa: E402
     OLLAMA_NUM_CTX,
     OLLAMA_TIMEOUT,
     OllamaUnreachable,
-    ask_ollama,
     gpu_share,
     model_digest,
     prepare_ollama,
@@ -127,7 +131,7 @@ from ollama_client import (  # noqa: E402
     wait_for_server,
 )
 from prompt_v6 import prompt_sha1  # noqa: E402
-from run_batch import CONSECUTIVE_SERVER_FAILURES, LockHeld, normalise_url, take_lock  # noqa: E402
+from run_batch import CONSECUTIVE_SERVER_FAILURES, LockHeld, ask_ollama_checked, normalise_url, take_lock  # noqa: E402
 from run_files import append_line, error_kind, now_utc, read_jsonl, repair_jsonl_tail  # noqa: E402
 
 # Error kinds (run_files.error_kind) that point at the server rather than one record.
@@ -700,9 +704,9 @@ def main():
                               f"EXCLUDE={host.split('.')[0]}")
 
         def ask(text, schema):
-            """Send one prompt with its answer schema to this run's Ollama."""
-            return ask_ollama(url, args.model, text, num_ctx=args.num_ctx, timeout=args.timeout,
-                              num_thread=args.num_thread, schema=schema)
+            """Send one prompt with its answer schema to this run's Ollama; a prompt Ollama cut is a context_full error."""
+            return ask_ollama_checked(url, args.model, text, args.num_ctx, args.timeout, args.num_thread,
+                                      schema=schema)
 
         extra = {"model": args.model, "model_digest": digest}
         try:

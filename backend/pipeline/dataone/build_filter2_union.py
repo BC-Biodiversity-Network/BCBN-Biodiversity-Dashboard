@@ -22,6 +22,7 @@ Inputs (backend/, all git-ignored):
   data/dataone/filter2_runs/fir_dataone_cut_rerun_2026_11_23_qwen3.6-35b-a3b_nofa/
       the reruns of the cut prompts with a larger context (made by
       prepare_cut_rerun.py), once merged and copied back; optional
+  pipeline/dataone/filter2_hand_decisions.csv  the hand decisions (in git)
 
 Checks before anything is written (the script stops if one fails):
   - each run folder's run.json names the expected model, prompt variant
@@ -73,6 +74,19 @@ keep_source:
                 is listed in failed_both.csv for a decision.
   lunaris       reuses the Lunaris filter 2 decision (reuse_lunaris true);
                 keep_union is that decision, the model columns are empty.
+  hand          decided by hand in filter2_hand_decisions.csv: keep_union
+                is the file's kept (yes or no), whatever the models said;
+                hand_reason is its reason and before_hand the keep_source
+                the record had before (failed, 4b_only and so on).
+
+The hand decisions are applied last, over the whole union, as Lunaris
+applies pipeline/lunaris/filter2_hand_decisions.csv
+(compare_filter2_35b.keep_set): a hand yes is kept and a hand no is left
+out, whatever either model said. The file has the same columns and is
+read by the same function (compare_filter2_35b.read_hand_decisions, which
+stops on a repeated id or a kept other than yes or no). The script stops if
+the file names a record that is not in the union. A record that failed in
+both models and has a hand decision is no longer failed.
 
 Outputs (data/dataone/filter2_results/, ignored by git; the script stops
 if a file is already there unless --replace is given):
@@ -104,6 +118,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(BACKEND, "pipeline", "lunaris"))
 sys.path.insert(0, os.path.join(BACKEND, "pipeline", "lunaris", "llm"))
 from build_label_set import VIEW  # noqa: E402
+from compare_filter2_35b import read_hand_decisions  # noqa: E402
 from filter2_common import FILTER2_RUNS, TEST_RUNS, find_trial, id_pattern, read_trial  # noqa: E402
 from filter3_checks import excel_safe  # noqa: E402
 from match_lunaris import LUNARIS_HARVEST, REUSE_MIN_SIMILARITY, STRONG, dataone_dois  # noqa: E402
@@ -125,6 +140,7 @@ RERUN_DIRS = {"4b": os.path.join(FILTER2_RUNS, "fir_dataone_cut_rerun_2026_11_23
 MODELS = {"4b": "qwen3.5:4b", "35b": "qwen3.6:35b-a3b"}
 FLASH_ATTENTION = {"35b": "off"}    # the 4b run left it to Ollama (auto), as the Lunaris 4b run did
 PROMPT_VARIANT = "v6_dataone"
+HAND_CSV = os.path.join(HERE, "filter2_hand_decisions.csv")
 OUT_DIR = os.path.join(BACKEND, "data", "dataone", "filter2_results")
 OUT_UNION = os.path.join(OUT_DIR, "filter2_union.parquet")
 OUT_FAILED = os.path.join(OUT_DIR, "failed_both.csv")
@@ -142,7 +158,7 @@ ABSTRACT_START = 300
 GROUP_NAMES = {"no_box": "no box", "touches_bc_partly": "partial overlap", "west_gt_east": "west > east",
                "inside_bc": "inside BC", "touches_bc_all_inside": "inside BC (all boxes)",
                "sign_check": "sign_check", "send_to_llm": "multi-box, sent to LLM"}
-SOURCES = ["both", "4b_only", "35b_only", "neither", "failed", "lunaris"]
+SOURCES = ["both", "4b_only", "35b_only", "neither", "failed", "lunaris", "hand"]
 
 pd.set_option("display.width", 250)
 pd.set_option("display.max_colwidth", 70)
@@ -428,10 +444,39 @@ def build_union(answers, groups, multibox, match, no_text):
         union[column] = union[column].fillna("")
     columns = ["id", "datasource", "group", "multibox", "answer_4b", "rule_4b", "failure_4b", "answer_35b",
                "rule_35b", "failure_35b", "keep_4b", "keep_35b", "keep_union", "keep_source", "reuse_lunaris",
-               "match_type", "title_similarity", "lunaris_decision", "cut_4b", "rerun_4b", "cut_35b", "rerun_35b"]
+               "match_type", "title_similarity", "lunaris_decision", "cut_4b", "rerun_4b", "cut_35b", "rerun_35b",
+               "hand_reason", "before_hand"]
+    # Filled in by apply_hand.
+    union["hand_reason"] = ""
+    union["before_hand"] = ""
     for column in ("cut_4b", "rerun_4b", "cut_35b", "rerun_35b"):
         union[column] = union[column].fillna(False).astype(bool)
     return union[columns]
+
+
+# --- Hand decisions -----------------------------------------------------------
+
+def apply_hand(union, hand):
+    """
+    Return a copy of the union with the hand decisions applied: for each
+    record in hand (read_hand_decisions' table, indexed by record id),
+    keep_union becomes its kept, keep_source "hand", hand_reason its reason
+    and before_hand the keep_source it had. The model columns are left as
+    the models answered. Stops if a hand decision names a record that is
+    not in the union.
+    """
+    out = union.copy()
+    unknown = sorted(set(hand.index) - set(out["id"]))
+    if unknown:
+        stop(f"{len(unknown)} hand decisions in {os.path.relpath(HAND_CSV, BACKEND)} name records that are not "
+             f"in the union, for example {unknown[:3]}")
+    rows = out["id"].isin(hand.index)
+    decided = out.loc[rows, "id"]
+    out.loc[rows, "before_hand"] = out.loc[rows, "keep_source"]
+    out.loc[rows, "keep_union"] = decided.map(hand["kept"]).map({"yes": True, "no": False}).astype("boolean")
+    out.loc[rows, "keep_source"] = "hand"
+    out.loc[rows, "hand_reason"] = decided.map(hand["reason"])
+    return out
 
 
 # --- Writing ----------------------------------------------------------------
@@ -477,15 +522,21 @@ def next_step(failure_4b, failure_35b):
 
 
 def failed_both(union):
-    """Return the records that failed in both models, with title, abstract start, link and what to do next."""
+    """
+    Return the records that failed in both models and have no hand
+    decision, with title, abstract start, link and what to do next. With
+    none, an empty table with the same columns (written as a header only).
+    """
+    columns = ["id", "datasource", "group", "failure_4b", "failure_35b", "next_step", "title", "abstract_start", "link"]
     failed = union[union["keep_source"] == "failed"].copy()
+    if failed.empty:
+        return pd.DataFrame(columns=columns)
     texts = read_texts(failed["id"])
     failed["title"] = failed["id"].map(lambda i: one_line(texts.at[i, "title"]))
     failed["abstract_start"] = failed["id"].map(lambda i: one_line(texts.at[i, "abstract"], ABSTRACT_START))
     failed["link"] = VIEW + failed["id"].map(lambda i: quote(i, safe=""))
     failed["next_step"] = [next_step(f4, f35) for f4, f35 in zip(failed["failure_4b"], failed["failure_35b"])]
-    return failed[["id", "datasource", "group", "failure_4b", "failure_35b", "next_step", "title",
-                   "abstract_start", "link"]]
+    return failed[columns]
 
 
 def write_outputs(union, failed, low, replace):
@@ -510,16 +561,24 @@ def report_counts(union, facts):
     for name, f in facts.items():
         print(f"   {name}: {f['file']}\n       model {f['model']}, digest {f['digest'][:12]}; answered {f['answered']:,}, "
               f"bad answers {f['bad answers']}, prompts cut by Ollama {f['prompt_cut']}")
-    run = union[union["keep_source"] != "lunaris"]
-    lunaris = union[union["keep_source"] == "lunaris"]
+    # The models' own result: before_hand for a record decided by hand.
+    model_source = union["before_hand"].where(union["keep_source"] == "hand", union["keep_source"])
+    run = union[model_source != "lunaris"].assign(model_source=model_source)
+    lunaris = union[model_source == "lunaris"]
+    hand = run[run["keep_source"] == "hand"]
     rows = [("kept by 4b", int(run["keep_4b"].sum())), ("kept by 35b", int(run["keep_35b"].sum())),
-            ("kept by both", int((run["keep_source"] == "both").sum())),
-            ("kept by 4b only", int((run["keep_source"] == "4b_only").sum())),
-            ("kept by 35b only", int((run["keep_source"] == "35b_only").sum())),
-            ("kept by neither", int((run["keep_source"] == "neither").sum())),
-            ("failed in both", int((run["keep_source"] == "failed").sum())),
-            ("  of them: prompt cut in at least one", int(((run["keep_source"] == "failed") & (
+            ("kept by both", int((run["model_source"] == "both").sum())),
+            ("kept by 4b only", int((run["model_source"] == "4b_only").sum())),
+            ("kept by 35b only", int((run["model_source"] == "35b_only").sum())),
+            ("kept by neither", int((run["model_source"] == "neither").sum())),
+            ("failed in both", int((run["model_source"] == "failed").sum())),
+            ("  of them: prompt cut in at least one", int(((run["model_source"] == "failed") & (
                 (run["failure_4b"] == "prompt_cut") | (run["failure_35b"] == "prompt_cut"))).sum())),
+            ("decided by hand: kept", int(hand["keep_union"].sum())),
+            ("decided by hand: not kept", int((~hand["keep_union"].astype(bool)).sum())),
+            ("  of them: failed in both before", int((hand["before_hand"] == "failed").sum())),
+            ("  of them: overriding a model yes", int(hand["before_hand"].isin(["both", "4b_only", "35b_only"]).sum())),
+            ("failed in both, no hand decision", int((run["keep_source"] == "failed").sum())),
             ("failed in 4b only (35b answer used)", int(((run["answer_4b"] == "failed") & (run["answer_35b"] != "failed")).sum())),
             ("failed in 35b only (4b answer used)", int(((run["answer_35b"] == "failed") & (run["answer_4b"] != "failed")).sum())),
             ("union kept, filter 2 records", int(run["keep_union"].sum())),
@@ -556,7 +615,7 @@ def report_groups(union):
     """Print the union's kept records by group (with multi-box split out) and by datasource (top 15)."""
     kept = union[union["keep_union"].fillna(False)].copy()
     kept["group_name"] = kept["group"].map(GROUP_NAMES).fillna(kept["group"])
-    kept["from"] = (kept["keep_source"] == "lunaris").map({True: "lunaris", False: "filter2"})
+    kept["from"] = kept["reuse_lunaris"].map({True: "lunaris", False: "filter2"})
     table = pd.crosstab([kept["group_name"], kept["multibox"].map({True: "multi-box", False: "one box or none"})],
                         kept["from"], margins=True, margins_name="total")
     all_records = union.assign(group_name=union["group"].map(GROUP_NAMES))
@@ -583,9 +642,9 @@ def report_test_runs(union):
         test[name] = frame.set_index("record_id")["verdict"]
     ids = sorted(test["4b"].index)
     full = union.set_index("id").reindex(ids)
-    in_run = full["keep_source"].notna() & (full["keep_source"] != "lunaris")
+    in_run = full["keep_source"].notna() & ~full["reuse_lunaris"].fillna(False).astype(bool)
     print(f"\n3. RUN TO RUN: THE {len(ids)} LABEL SET RECORDS ({int(in_run.sum())} in the full runs, "
-          f"{int((full['keep_source'] == 'lunaris').sum())} reuse Lunaris)")
+          f"{int(full['reuse_lunaris'].fillna(False).astype(bool).sum())} reuse Lunaris)")
     full = full[in_run]
     test_union = ((test["4b"] == "yes") | (test["35b"] == "yes")).map({True: "yes", False: "no"}).reindex(full.index)
     full_union = full["keep_union"].map({True: "yes", False: "no"})
@@ -670,7 +729,7 @@ def report_pangaea_pairs(union):
     pairs = by_doi[by_doi["dois"].isin(pair_dois)].pivot(index="dois", columns="pattern", values="id")
     pairs = pairs.drop_duplicates()
     answer = union.set_index("id")
-    in_run = answer.index[answer["keep_source"] != "lunaris"]
+    in_run = answer.index[~answer["reuse_lunaris"]]
     both = pairs[pairs["hex32"].isin(in_run) & pairs["sha256"].isin(in_run)]
     hex_keep = answer.loc[both["hex32"], "keep_union"].to_numpy()
     sha_keep = answer.loc[both["sha256"], "keep_union"].to_numpy()
@@ -689,6 +748,7 @@ def main():
     """Read and check both full runs and any reruns, build the union, write it and print the report."""
     parser = argparse.ArgumentParser(description="Build DataONE filter 2's union keep set.")
     parser.add_argument("--replace", action="store_true", help="write over earlier outputs")
+    parser.add_argument("--hand", default=HAND_CSV, help="the hand decisions (filter2_hand_decisions.csv)")
     args = parser.parse_args()
     answers, facts, reruns = {}, {}, {}
     for name in RUN_DIRS:
@@ -702,6 +762,7 @@ def main():
         answers[name] = apply_rerun(answers[name], rerun)
     groups, multibox, match, no_text = read_context()
     union = build_union(answers, groups, multibox, match, no_text)
+    union = apply_hand(union, read_hand_decisions(args.hand))
     failed = failed_both(union)
     report_counts(union, facts)
     report_reruns(union, reruns)

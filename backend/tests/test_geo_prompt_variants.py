@@ -263,6 +263,19 @@ def test_several_boxes_list_those_touching_bc_and_sum_up_the_rest(shape):
     assert notes_are_ours(text)
 
 
+def test_several_boxes_none_touching_bc_say_so_and_keep_the_summary(shape):
+    boxes = [box(10.0, 12.0, 45.0, 46.0), box(20.0, 22.0, 40.0, 41.0), box(-124.0, -124.0, 44.0, 44.0)]
+    lines = gt.dataone_record_text(dataone(boxes=boxes), shape).splitlines()
+    note = gt.DATAONE_NOTE + "the record has 3 different boxes and points; none of them touches British Columbia."
+    assert note in lines
+    assert not any("listed below in full" in line for line in lines)
+    assert not any(line.startswith(("Bounding box", "Point")) for line in lines)
+    summary = lines[lines.index(note) + 1]
+    assert summary == (gt.DATAONE_NOTE + "the other 3 boxes and points do not touch British Columbia; together they "
+                       "lie within westBoundLongitude -124.0, eastBoundLongitude 22.0, southBoundLatitude 40.0, "
+                       "northBoundLatitude 46.0 (the smallest box around all their numbers as recorded).")
+
+
 # --- The pass 2 box rule and the answer checks ---------------------------
 
 PASS2_UNCLEAR = {"reason": "Unclear.", "evidence": ["Fish counts"], "in_bc": "unclear", "other_canada": "no",

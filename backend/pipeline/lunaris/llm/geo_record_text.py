@@ -505,9 +505,13 @@ def dataone_record_text(record, shape, box_outside=False):
                      "eastBoundLongitude are longitudes (negative means west of Greenwich); southBoundLatitude and "
                      "northBoundLatitude are latitudes (negative means south of the equator). A point is one "
                      "longitude and one latitude.")
-    if len(boxes) > 1:
+    if len(boxes) > 1 and listed:
         lines.append(DATAONE_NOTE + f"the record has {len(boxes)} different boxes and points; the {len(listed)} "
                      "that touch British Columbia are listed below in full.")
+    elif len(boxes) > 1:
+        # None touches BC (Lucia, 2026-11-23): say so plainly; the summary note below gives their extent.
+        lines.append(DATAONE_NOTE + f"the record has {len(boxes)} different boxes and points; none of them touches "
+                     "British Columbia.")
     areas = [b for b in listed if not is_point_box(b)]
     points = [b for b in listed if is_point_box(b)]
     for number, box in enumerate(areas, start=1):

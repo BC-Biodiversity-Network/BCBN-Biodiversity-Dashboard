@@ -256,7 +256,18 @@ def measure_box(lunaris_box, shape):
     south, north = sorted((lunaris_box["s"], lunaris_box["n"]))
     if south >= 85.0 or north <= -85.0:
         return 0.0, 0.0, 0.0
-    pieces = repair_box(lunaris_box["w"], lunaris_box["s"], lunaris_box["e"], lunaris_box["n"])
+    return measure_pieces(repair_box(lunaris_box["w"], lunaris_box["s"], lunaris_box["e"], lunaris_box["n"]), shape)
+
+
+def measure_pieces(pieces, shape):
+    """
+    Measure a box given as shapely rectangles in longitude and latitude (as
+    repair_box returns them) against BC, and return (share, cover, size) as
+    measure_box does, or None when there are no pieces or their area comes
+    out as zero once projected. measure_box uses it for the repaired box;
+    the DataONE record text uses it to measure a box under each of its
+    readings (geo_record_text.py).
+    """
     if not pieces:
         return None
     # Box edges follow lines of longitude and latitude. Adding a point every

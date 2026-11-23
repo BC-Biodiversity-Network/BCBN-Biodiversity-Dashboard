@@ -22,7 +22,11 @@ NUM_CTX if need be.
 
 The input folder comes from geo_filter_prepare.py: sample.csv and
 records.jsonl.gz, each record with the fingerprint of its pass 1 prompt as
-the Mac built it. Each pass 1 prompt is rebuilt here and checked against
+the Mac built it. Its input.json may name a geography prompt variant
+(geo_prompt_variant; geo_prompt_variants.py): lunaris, the default and what
+every Lunaris input is, or dataone. Both passes' prompts are built in that
+variant, and run.json records it with the sha1 of each pass's instructions;
+a run folder never mixes variants. Each pass 1 prompt is rebuilt here and checked against
 that fingerprint before anything is asked; if one differs, nothing is asked.
 
 How it works through the records, for its part of them (--part K of
@@ -119,6 +123,7 @@ import geo_pass1_trial  # noqa: E402
 import geo_pass2_prompt_c4 as pass2_prompt  # noqa: E402
 import geo_pass2_trial  # noqa: E402
 import geo_prompt_v3 as pass1_prompt  # noqa: E402
+import geo_prompt_variants  # noqa: E402
 import geonames_lookup  # noqa: E402
 from ollama_client import (  # noqa: E402
     OLLAMA_NUM_CTX,
@@ -172,6 +177,23 @@ def read_input(folder, limit=None):
         sample = sample.loc[sample.index < limit]
         records = {n: records[n] for n in sample.index}
     return sample, records
+
+
+def read_variant(folder):
+    """
+    Return the geography prompt variant an input folder asks for: the
+    geo_prompt_variant in its input.json (geo_prompt_variants.py), lunaris
+    when the file or the field is missing, as for every Lunaris input.
+    """
+    path = os.path.join(folder, "input.json")
+    about = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            about = json.load(handle)
+    try:
+        return geo_prompt_variants.variant_of_input(about)
+    except ValueError as error:
+        raise Stop(1, f"{path}: {error}")
 
 
 def part_numbers(numbers, part, parts):
@@ -305,9 +327,9 @@ def look_up(lookup, places):
     return results, round(time.monotonic() - started, 3)
 
 
-def build_pass2(record, shape, places, lookups):
-    """Return a record's pass 2 prompt (version C4)."""
-    return pass2_prompt.build_prompt(record, shape, places, lookups)
+def build_pass2(record, shape, places, lookups, variant=geo_prompt_variants.DEFAULT_GEO_VARIANT):
+    """Return a record's pass 2 prompt (version C4) in the run's geography prompt variant."""
+    return geo_prompt_variants.build_pass2_prompt(record, shape, places, lookups, variant)
 
 
 # --- The run -------------------------------------------------------------
@@ -315,13 +337,16 @@ def build_pass2(record, shape, places, lookups):
 class Run:
     """
     One job's work on one run folder: the records of its part, the
-    progress so far, and where to write. lookup is the GeoNames lookup.
+    progress so far, and where to write. lookup is the GeoNames lookup;
+    variant is the input's geography prompt variant (read_variant).
     """
 
-    def __init__(self, out, sample, records, numbers, shape, lookup, part):
+    def __init__(self, out, sample, records, numbers, shape, lookup, part,
+                 variant=geo_prompt_variants.DEFAULT_GEO_VARIANT):
         """Keep the run's inputs and work out the paths of this part's files."""
         self.out, self.sample, self.records, self.numbers = out, sample, records, numbers
         self.shape, self.lookup, self.part = shape, lookup, part
+        self.variant = geo_prompt_variants.check_variant(variant)
         self.pass1_dir = os.path.join(out, "pass1")
         self.pass2_dir = os.path.join(out, "pass2")
         for folder in (os.path.join(self.pass1_dir, "prompts"), os.path.join(self.pass2_dir, "prompts"),
@@ -351,7 +376,7 @@ class Run:
         """
         prompts, differ = {}, []
         for number in self.numbers:
-            text = pass1_prompt.build_prompt(self.record(number), self.shape)
+            text = geo_prompt_variants.build_pass1_prompt(self.record(number), self.shape, self.variant)
             write_text(os.path.join(self.pass1_dir, "prompts", prompt_name(number)), text)
             if prompt_sha1(text) != self.records[number]["pass1_sha1"]:
                 differ.append(number)
@@ -457,10 +482,11 @@ class Run:
                 result = {"error": NO_PASS1, "attempts": 0}
                 self.save(self.pass2_progress, "pass2", number, result, extra)
                 continue
-            text = build_pass2(self.record(number), self.shape, places, lookups[number]["results"])
+            text = build_pass2(self.record(number), self.shape, places, lookups[number]["results"], self.variant)
             write_text(os.path.join(self.pass2_dir, "prompts", prompt_name(number)), text)
             result = ask_with_retry(lambda t: ask(t, pass2_prompt.RESPONSE_SCHEMA), text,
-                                    lambda r: geo_pass2_trial.finish_answer(r, self.record(number), self.shape, text))
+                                    lambda r: geo_pass2_trial.finish_answer(r, self.record(number), self.shape, text,
+                                                                            self.variant))
             self.save(self.pass2_progress, "pass2", number, result, dict(extra, prompt_sha1=prompt_sha1(text)))
             counts["pass2_asked"] += 1
             counts["pass2_failed"] += "error" in result
@@ -555,7 +581,7 @@ def compare_with_reference(run, prompts1, reference1, reference2):
             missing2 += 1
             continue
         results, _ = look_up(run.lookup, places)
-        text = build_pass2(run.record(number), run.shape, places, results)
+        text = build_pass2(run.record(number), run.shape, places, results, run.variant)
         with open(path, encoding="utf-8") as handle:
             if handle.read() == text:
                 same2 += 1
@@ -586,10 +612,13 @@ def check_runner_flash_attn(server_log, expected):
 
 # --- Main ----------------------------------------------------------------
 
-def check_run_json(out, model, digest, version, args):
+def check_run_json(out, model, digest, version, args, variant=geo_prompt_variants.DEFAULT_GEO_VARIANT):
     """
-    Write run.json on a folder's first run. On later runs, stop (exit 1) if
-    it names another model or digest, so a folder never mixes weights.
+    Write run.json on a folder's first run, with the geography prompt
+    variant and both instructions' fingerprints. On later runs, stop (exit
+    1) if it names another model or digest, so a folder never mixes
+    weights, or another variant (a run.json without one is lunaris), so a
+    folder never mixes prompts.
     """
     path = os.path.join(out, "run.json")
     if os.path.exists(path):
@@ -598,11 +627,14 @@ def check_run_json(out, model, digest, version, args):
         if about["model"] != model or about["model_digest"] != digest:
             raise Stop(1, f"{out} holds answers from {about['model']} (digest {about['model_digest'][:12]}), "
                           f"not {model} (digest {digest[:12]}); use a new run folder")
+        earlier = about.get("geo_prompt_variant", geo_prompt_variants.DEFAULT_GEO_VARIANT)
+        if earlier != variant:
+            raise Stop(1, f"{out} holds answers to the {earlier} prompts, not {variant}; use a new run folder")
         return
     about = {"model": model, "model_digest": digest, "ollama_version": version, "input": args.input,
              "num_ctx": args.num_ctx, "num_thread": args.num_thread, "pass1_prompt":
              f"v{pass1_prompt.GEO_PROMPT_VERSION}", "pass2_prompt": pass2_prompt.GEO_PASS2_VERSION,
-             "created": now_utc()}
+             **geo_prompt_variants.fingerprints(variant), "created": now_utc()}
     write_text(path, json.dumps(about, indent=2) + "\n")
 
 
@@ -646,16 +678,17 @@ def main():
     code, counts, run = 0, {}, None
     try:
         sample, records = read_input(args.input, args.limit)
+        variant = read_variant(args.input)
         numbers = part_numbers(list(sample.index), args.part, args.parts)
         print(f"run {args.out}: {len(sample)} records, part {args.part} of {args.parts} has {len(numbers)}; "
-              f"model {args.model}")
+              f"model {args.model}; geography prompt variant {variant}")
         shape = load_bc_shape(args.bc_boundary)
         lookup = geonames_lookup.GeoNamesLookup(args.table, geonames_lookup.DEFAULT_HAND, args.codes,
                                                 args.lookup_memory, args.lookup_threads)
         for entry in lookup.missing_hand_ids:
             print(f"warning: hand-added {entry['name']!r} points to GeoNames id {entry['geonames_id']}, "
                   f"which is not in the table")
-        run = Run(args.out, sample, records, numbers, shape, lookup, args.part)
+        run = Run(args.out, sample, records, numbers, shape, lookup, args.part, variant)
         prompts1 = run.pass1_prompts()
         print(f"pass 1 prompts: {len(prompts1)} rebuilt, all identical to the Mac's fingerprints")
 
@@ -676,7 +709,7 @@ def main():
                           f"first, only after Lucia approves (fir/README.md, step 8B). This job never downloads.")
         print(f"Ollama {version} at {url}, {args.model} digest {digest[:12]}")
         job.update(ollama_version=version, model_digest=digest)
-        check_run_json(args.out, args.model, digest, version, args)
+        check_run_json(args.out, args.model, digest, version, args, variant)
         if not args.allow_cpu:
             failed_code, message = prepare_ollama(url, args.model, args.num_ctx, args.num_thread,
                                                   args.server_log, load_timeout=args.load_timeout)

@@ -57,6 +57,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import geo_pass2_prompt_c4  # noqa: E402
+import geo_prompt_variants  # noqa: E402
 from bc_filter_rules import load_bc_shape, measure_box  # noqa: E402
 from geo_pass1_trial import read_harvest  # noqa: E402
 from geo_pass2_classes import CLASSES, decide  # noqa: E402
@@ -116,7 +117,7 @@ def add_decision(result, shares):
     result["decision"] = decide(result["answer"], shares)
 
 
-def finish_answer(result, record, shape, prompt_text):
+def finish_answer(result, record, shape, prompt_text, variant=geo_prompt_variants.DEFAULT_GEO_VARIANT):
     """
     Check one pass 2 result the way every pass 2 run does, and return it: an
     answer that does not fit the schema becomes an error (keeping seconds
@@ -124,7 +125,10 @@ def finish_answer(result, record, shape, prompt_text):
     decision (add_decision), the evidence check against the prompt and the
     consistency flags. The checks and flags never change the answer or the
     class. A result that is already an error is returned as it is. Shared
-    with geo_filter_run.py.
+    with geo_filter_run.py. variant is the run's geography prompt variant
+    (geo_prompt_variants.py): it decides how the boxes' shares are worked
+    out and where the record part of the prompt starts; lunaris, the
+    default, is as before.
     """
     if "answer" not in result:
         return result
@@ -133,8 +137,8 @@ def finish_answer(result, record, shape, prompt_text):
     if problem:
         return {"error": f"answer does not fit the schema: {problem}",
                 "seconds": result.get("seconds"), "input_tokens": result.get("input_tokens")}
-    add_decision(result, box_shares(record, shape))
-    result["evidence_check"] = prompt.evidence_check(result["answer"], prompt_text)
+    add_decision(result, geo_prompt_variants.box_shares(record, shape, variant, lunaris_shares=box_shares))
+    result["evidence_check"] = geo_prompt_variants.evidence_check(result["answer"], prompt_text, variant)
     result["consistency_flags"] = prompt.consistency_flags(result["answer"])
     return result
 

@@ -45,14 +45,99 @@ fail_setup() {
     exit 6
 }
 
+# How many times stage_copy tries one copy before the job stops.
+STAGE_COPY_TRIES=3
+
 # Copy one folder to the node's disk within the time limit, and say how
 # big it was and how long it took. Arguments: what it is, from, to.
+#
+# The copy is "cp -RP --preserve=timestamps":
+#   -R   the whole folder, with everything in it;
+#   -P   a symbolic link is copied as a link, as cp -a did (Ollama's
+#        libraries use links);
+#   --preserve=timestamps   keep the files' times (Python's .pyc caches
+#        then stay valid), and nothing else.
+# It no longer uses cp -a, which also tries to keep ownership, permission
+# lists (ACLs) and extended attributes. Keeping the permissions is the step
+# that failed on some nodes ("cp: preserving permissions for ...: Numerical
+# result out of range", 2026-11-24, jobs 5552195 and 5553367, and twice in
+# the filter 2 run): cp reads and writes the files' ACLs then. Without it,
+# each new file gets the source's permission bits less the job's umask, so
+# an executable file (the Ollama program) stays executable.
+#
+# Each try copies into a new, empty folder (to.try1, to.try2, ...); the
+# first one that works is renamed to "to", so the callers' paths do not
+# change. A failed try is left where it is: it is on the node's temporary
+# disk, which Slurm empties after the job. Each failed try prints one line
+# with cp's message; after STAGE_COPY_TRIES failures the job stops (exit 6).
+# The time limit applies to each try. Last, the copy must hold as many files
+# (and links) and as many executable files as the source.
 stage_copy() {
-    local started=$SECONDS
+    local started=$SECONDS try target errors code note=""
     [[ -d "$2" ]] || fail_setup "$1 not found at $2"
-    timeout "$STAGE_TIMEOUT" cp -a "$2" "$3" \
-        || fail_setup "copying $1 from $2 failed or took over ${STAGE_TIMEOUT} s (shared filesystem trouble?)"
-    echo "staged   $1: $(du -sh "$3" 2>/dev/null | cut -f1) in $((SECONDS - started)) s"
+    [[ ! -e "$3" ]] || fail_setup "cannot copy $1 to $3: it is already there"
+    for ((try = 1; try <= STAGE_COPY_TRIES; try++)); do
+        target="$3.try$try"
+        errors="$3.try$try.cp_errors.txt"
+        mkdir "$target" || fail_setup "cannot create $target"
+        # "$2/." copies what is in the folder into the new, empty one.
+        timeout "$STAGE_TIMEOUT" cp -RP --preserve=timestamps "$2/." "$target" 2>"$errors" && code=0 || code=$?
+        if [[ $code -eq 0 ]]; then
+            mv "$target" "$3" || fail_setup "cannot rename $target to $3"
+            check_copy "$1" "$2" "$3"
+            ((try == 1)) || note=" (try $try of $STAGE_COPY_TRIES)"
+            echo "staged   $1: $(du -sh "$3" 2>/dev/null | cut -f1) in $((SECONDS - started)) s$note"
+            return 0
+        fi
+        echo "copy     $1, try $try of $STAGE_COPY_TRIES failed: $(copy_error "$code" "$errors")"
+    done
+    fail_setup "copying $1 from $2 failed $STAGE_COPY_TRIES times or took over ${STAGE_TIMEOUT} s (shared filesystem trouble?)"
+}
+
+# Print one line saying why a copy try failed: the time limit, or cp's first
+# message and how many more lines it wrote. Arguments: cp's exit code, the
+# file holding its messages.
+copy_error() {
+    local first lines
+    if [[ $1 -eq 124 ]]; then
+        echo "took over ${STAGE_TIMEOUT} s"
+        return 0
+    fi
+    first=$(head -n 1 "$2" 2>/dev/null || true)
+    lines=$(wc -l < "$2" 2>/dev/null || echo 0)
+    lines=$((lines))
+    if ((lines > 1)); then
+        echo "exit $1: ${first:-cp gave no message} (and $((lines - 1)) more lines in $2)"
+    else
+        echo "exit $1: ${first:-cp gave no message}"
+    fi
+}
+
+# Print how many files and links a folder holds (everything but folders),
+# or, with a second argument "exec", only the regular files its owner may
+# run. Arguments: the folder, optionally "exec".
+count_files() {
+    if [[ "${2:-}" == exec ]]; then
+        timeout "$STAGE_TIMEOUT" find "$1/" -type f -perm -100 | wc -l
+    else
+        timeout "$STAGE_TIMEOUT" find "$1/" ! -type d | wc -l
+    fi
+}
+
+# Stop the job (exit 6) unless a copy holds as many files and links, and as
+# many executable files, as its source. Arguments: what it is, from, to.
+check_copy() {
+    local source_files copy_files source_exec copy_exec
+    source_files=$(count_files "$2") || fail_setup "could not count the files of $1 in $2"
+    copy_files=$(count_files "$3") || fail_setup "could not count the files of $1 in $3"
+    source_exec=$(count_files "$2" exec) || fail_setup "could not count the executable files of $1 in $2"
+    copy_exec=$(count_files "$3" exec) || fail_setup "could not count the executable files of $1 in $3"
+    if ((source_files != copy_files)); then
+        fail_setup "the copy of $1 in $3 has $((copy_files)) files, but $2 has $((source_files))"
+    fi
+    if ((source_exec != copy_exec)); then
+        fail_setup "the copy of $1 in $3 has $((copy_exec)) executable files, but $2 has $((source_exec))"
+    fi
 }
 
 # Copy the code and set up Python on the node's disk. Afterwards CODE_DIR

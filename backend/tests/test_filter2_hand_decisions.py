@@ -49,13 +49,17 @@ def hand_table(rows):
 
 # --- The file ----------------------------------------------------------------
 
-def test_the_file_has_the_lunaris_columns_and_the_seven_decisions():
+def test_the_file_has_the_lunaris_columns_and_the_ten_decisions():
     lunaris = pd.read_csv(LUNARIS_HAND, dtype=str, keep_default_na=False)
     hand = read_hand_decisions(str(DATAONE_HAND))
     assert list(hand.columns) == list(lunaris.columns)
-    assert len(hand) == 7
-    assert hand["kept"].value_counts().to_dict() == {"no": 5, "yes": 2}
-    assert (hand["decided_by"] == DECIDED_BY).all() and (hand["decided_on"] == "2026-11-23").all()
+    # The 7 of 2026-11-23, then 3 left out on 2026-11-24 (from the global sample of filter 3's checks).
+    assert len(hand) == 10
+    assert hand["kept"].value_counts().to_dict() == {"no": 8, "yes": 2}
+    first, later = hand.iloc[:7], hand.iloc[7:]
+    assert (first["decided_by"] == DECIDED_BY).all() and (first["decided_on"] == "2026-11-23").all()
+    assert (later["decided_by"] == "Claude's reading, approved by Lucia, 2026-11-24").all()
+    assert (later["decided_on"] == "2026-11-24").all() and (later["kept"] == "no").all()
     assert (hand["reason"] != "").all() and (hand["quote_from_record"] != "").all()
 
 

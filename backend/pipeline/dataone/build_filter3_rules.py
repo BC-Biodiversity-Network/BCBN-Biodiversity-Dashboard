@@ -7,7 +7,8 @@ geography LLM, with Lucia's decisions of 2026-11-23. Nothing here asks a
 model anything; every input is only read.
 
 Which records: every record with keep_union true in
-data/dataone/filter2_results/filter2_union.parquet (78,740).
+data/dataone/filter2_results/filter2_union.parquet (78,737; 78,740 until
+3 more filter 2 hand decisions of 2026-11-24).
 
 How each is routed:
   lunaris  a record that reuses the Lunaris filter 2 result (reuse_lunaris)
@@ -79,7 +80,8 @@ LABELS = [("first label set", os.path.join(RESULTS, "dataone_label_set_2026-11-1
           ("BC set, strict 50", os.path.join(RESULTS, "dataone_bc_label_set_2026-11-23_strict",
                                              "claude_bc_labels_strict50.csv"), "bc_class")]
 
-EXPECTED_KEPT = 78_740
+# The records filter 2 keeps: 78,740, less the 3 it left out by hand on 2026-11-24.
+EXPECTED_KEPT = 78_737
 # Groups that go to the LLM whatever the rules say (decision a).
 ALWAYS_LLM = ("west_gt_east", "sign_check", "send_to_llm")
 ROUTES = ["rule", "lunaris", "llm"]

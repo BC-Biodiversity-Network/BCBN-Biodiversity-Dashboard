@@ -305,7 +305,9 @@ def test_the_hand_decisions_file_is_readable_and_has_the_filter_2_layout():
     hand = f3.read_hand()
     filter2 = pd.read_csv(BACKEND / "pipeline" / "dataone" / "filter2_hand_decisions.csv", nrows=0)
     assert list(hand.columns) == [("final_class" if c == "kept" else c) for c in filter2.columns]
-    assert len(hand) == 16 and hand["record_id"].is_unique
+    # 16 failures of the full run, plus sha256:ba74b97d... (2026-11-24, check G) and 2 records
+    # of the global sample (2026-11-24, check B).
+    assert len(hand) == 19 and hand["record_id"].is_unique
     assert set(hand["final_class"]) <= set(lunaris_final.FRONTEND_GROUP)
 
 

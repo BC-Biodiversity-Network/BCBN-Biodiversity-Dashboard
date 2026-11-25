@@ -8,11 +8,13 @@ anything; every input is only read.
 
 What goes in:
   data/dataone/filter3/filter3_rules.parquet  (build_filter3_rules.py) the
-      route of each of the 78,740 kept records: lunaris (6,883), rule
-      (1,336) or llm (70,521)
+      route of each of the 78,737 kept records: lunaris (6,883), rule
+      (1,336) or llm (70,518)
   data/dataone/filter3_runs/dataone_needs_llm_qwen3.6-35b-a3b_nofa/  the
       full LLM run (job 5559473), copied back from Fir: run.json and the
-      merged pass1/answers.jsonl and pass2/answers.jsonl
+      merged pass1/answers.jsonl and pass2/answers.jsonl. It holds 70,521
+      records: the llm route, and 3 records filter 2 left out by hand after
+      the run (2026-11-24), which are left out here (check_run)
   data/dataone/filter3_input/dataone_needs_llm/  the run's input records,
       to work the boxes' shares in BC out again
   data/dataone/filter2_results/filter2_union.parquet  filter 2's answers,
@@ -67,8 +69,8 @@ group as its Lunaris copy; the script stops if one does not.
 
 The checks before anything is written (the script stops if one fails):
 every kept record (plus the added ones) appears exactly once, every class
-is a filter 3 class and none is empty, and the run's records are exactly
-the llm route's.
+is a filter 3 class and none is empty, and the run holds every llm-route
+record (any other record it holds must be one filter 2 no longer keeps).
 
 The scores, with score() of pipeline/lunaris/filter3_checks.py, as the
 2026-11-23 report scored the label test: for each label set and route,
@@ -132,7 +134,8 @@ OUT = os.path.join(OUT_DIR, "filter3_final.parquet")
 RESULTS = os.path.expanduser("~/Desktop/BCBN/Results/dataone_filter3_final_2026-11-24")
 NOV23_SCORES = os.path.expanduser("~/Desktop/BCBN/Results/dataone_filter3_test_2026-11-23/filter3_test_scores.csv")
 
-EXPECTED_KEPT = 78_740
+# The records filter 2 keeps: 78,740, less the 3 it left out by hand on 2026-11-24.
+EXPECTED_KEPT = 78_737
 EXPECTED_DISAGREEMENTS = 7
 VARIANT = "dataone"
 # The words that go with a record added by the either-yes rule (Lucia, 2026-11-24).
@@ -201,13 +204,26 @@ def read_lunaris_table(path=LUNARIS_FILTER3):
 
 # --- The LLM route -----------------------------------------------------------------
 
-def check_run(about, pass1, pass2, llm_ids):
-    """Stop unless the run was asked in the dataone variant and holds exactly the llm route's records."""
+def check_run(about, pass1, pass2, llm_ids, kept_ids):
+    """
+    Stop unless the run was asked in the dataone variant and holds every
+    llm-route record. The run may also hold records filter 2 no longer
+    keeps (a filter 2 hand decision made after the run); they are left
+    out of the table and returned, sorted. Stop if a record the run holds
+    is still kept but no longer on the llm route.
+    """
     if about.get("geo_prompt_variant") != VARIANT:
         stop(f"the run's prompt variant is {about.get('geo_prompt_variant')}, not {VARIANT}")
-    if set(pass1) != set(llm_ids) or set(pass2) != set(llm_ids):
-        stop(f"the run has {len(pass1)} pass 1 and {len(pass2)} pass 2 records, and the llm route "
-             f"{len(llm_ids)}; they are not the same records")
+    if set(pass1) != set(pass2):
+        stop(f"the run has {len(pass1)} pass 1 and {len(pass2)} pass 2 records, not the same ones")
+    missing = set(llm_ids) - set(pass2)
+    if missing:
+        stop(f"{len(missing)} llm-route records are not in the run, for example {sorted(missing)[:3]}")
+    extra = set(pass2) - set(llm_ids)
+    moved = sorted(extra & set(kept_ids))
+    if moved:
+        stop(f"{len(moved)} records of the run are kept but not on the llm route, for example {moved[:3]}")
+    return sorted(extra)
 
 
 def same_shares(saved, measured):
@@ -635,7 +651,8 @@ def main():
         stop(f"filter3_rules.parquet holds {len(rules):,} records, not {EXPECTED_KEPT:,}")
     pass1, pass2, about = lunaris_final.read_run(RUN)
     llm_ids = list(rules.index[rules["route"] == "llm"])
-    check_run(about, pass1, pass2, llm_ids)
+    dropped_by_filter2 = check_run(about, pass1, pass2, llm_ids, rules.index)
+    print(f"in the run but no longer kept by filter 2 (left out): {len(dropped_by_filter2)} {dropped_by_filter2}")
     _, records = read_input(INPUT)
     decisions = llm_decisions(pass2, records, load_bc_shape(args.bc_boundary))
     llm = {i: llm_row(pass1[i], pass2[i], decisions.get(i, (None, None))[1]) for i in llm_ids}

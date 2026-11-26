@@ -71,7 +71,11 @@ CSV field in double quotes (a quote mark inside written twice) starting
 with "# ", so a spreadsheet such as Excel shows each line whole in column A
 rather than split at its commas: what the file is and the export date (Vancouver time),
 how the list was made (only the options used), the sources, and how to read
-it in R. Then the column names and the rows. Anything a visitor typed that
+it in R. When the hexagons of a hexagon or area download touch a First
+Nations reserve, line 2 ends with a reminder naming the reserves
+(RESERVE_NOTE, at most RESERVE_NOTE_MAX_NAMES names, then how many more;
+see reserves.py); it stays on line 2. Then the column names
+and the rows. Anything a visitor typed that
 goes into those 4 lines has its line breaks turned into spaces, so it can
 never add a line. The BOM sits at the start of the first of those lines,
 which read.csv(file, skip = 4) skips, so R (and Python, skipping 4 lines
@@ -194,6 +198,23 @@ SPECIES_SORT_LABELS = {"most_records": "most records first", "fewest_records": "
 
 # How long a part of a file name made from a search can be.
 FILE_PART_LENGTH = 40
+
+# The reserve reminder added to the end of header line 2 of a hexagon or
+# area download when its hexagons touch a First Nations reserve
+# (reserves.py). {names} is every reserve name, joined with ", ". The same
+# words as the panels' reminder (ReserveReminder in
+# frontend/src/HexagonPanel.jsx), then where to read more. Placeholder
+# wording (Evan, 2026-11-10) for the steering committee: it asks users to
+# think about how the data were collected and about Indigenous data
+# governance, and does not send them to contact a Nation.
+RESERVE_NOTE = (" This area includes First Nations reserve land ({names}). Some of these records may have been "
+                "collected on reserve land. Consider how the data were collected, and follow Indigenous data "
+                "governance principles such as OCAP and CARE. See the Indigenous data page of the site.")
+
+# The most reserve names the note lists. Past this, the note gives the first
+# ones (in the same sorted order) and then how many more there are. The API
+# answers (reserve_names) always hold every name.
+RESERVE_NOTE_MAX_NAMES = 10
 
 
 def export_date(now=None):
@@ -454,11 +475,35 @@ def export_hexagon(data, date, cell, q=None, statuses=None, sort=None, year_from
     parts += species_options_text(answer)
     parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for hexagon {answer['cell']}, exported {date}",
-              "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
+              list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_hexagon",
                      [answer["cell"], answer["rank"]["name"] if answer["rank"] else None, years_part(answer)],
                      date)
     return name, csv_text(header, HEXAGON_COLUMNS, rows)
+
+
+def reserve_names_text(names):
+    """Return the names for the note: every name joined with ", " when
+    there are at most RESERVE_NOTE_MAX_NAMES, else the first
+    RESERVE_NOTE_MAX_NAMES and then "and 1 more reserve" or "and N more
+    reserves"."""
+    shown = [one_line(name) for name in names[:RESERVE_NOTE_MAX_NAMES]]
+    extra = len(names) - len(shown)
+    if extra > 0:
+        shown.append(f"and {extra:,} more {'reserve' if extra == 1 else 'reserves'}")
+    return ", ".join(shown)
+
+
+def list_line(parts, names):
+    """Return header line 2 of a hexagon or area download: "List: " and
+    the parts, then, when names (the reserves its hexagons touch, sorted)
+    is not empty, a full stop and RESERVE_NOTE naming them (at most
+    RESERVE_NOTE_MAX_NAMES; see reserve_names_text). It stays one line, so
+    the file keeps exactly 4 header lines."""
+    line = "List: " + "; ".join(parts)
+    if names:
+        line += "." + RESERVE_NOTE.format(names=reserve_names_text(names))
+    return line
 
 
 def km2_text(value):
@@ -547,7 +592,7 @@ def export_area(data, date, shapes, res, q=None, statuses=None, sort=None,
     parts += species_options_text(answer)
     parts.append(records_column_text(data.meta, "for this list's area and years"))
     header = [f"BCBN species list for an area, exported {date}",
-              "List: " + "; ".join(parts), species_source_line(data.meta), R_LINE]
+              list_line(parts, answer["reserve_names"]), species_source_line(data.meta), R_LINE]
     name = file_name("species_area", [answer["rank"]["name"] if answer["rank"] else None, years_part(answer)], date)
     if answer["csv_link_once"]:
         # The area's link and how to use it, before the line for R, which

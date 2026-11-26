@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { RESERVES_SHOWN_BY_DEFAULT } from './reserves'
 import { AreaProblem, areaText, readAreaText } from './areaShapes.js'
 
 // Which page is shown, and the Datasets page's state, kept in the address
@@ -49,6 +50,10 @@ import { AreaProblem, areaText, readAreaText } from './areaShapes.js'
 //                                     an open end), on any species map
 //                                     address, so a shared link or the back
 //                                     button keeps the years
+//   ...&reserves=off                  the reserve layer switched off (or
+//                                     reserves=on, if the default is ever
+//                                     off), kept the same way as the years
+//   ?view=indigenous                  the Indigenous data page
 //   ?view=datasets&q=eagle&sort=oldest&catalogue=catalogue.data.gov.bc.ca
 //       &year_from=2010&year_to=2020&organism=salmon&access=open&mappable=1
 //       &species=<key>&wider=1&page=2&dataset=<id>  the Datasets page
@@ -59,9 +64,47 @@ import { AreaProblem, areaText, readAreaText } from './areaShapes.js'
 // than paths such as /datasets so the built site works on any static host,
 // with no rewrite rules.
 
-// Which page a query string asks for: 'datasets' or 'species'.
+// The pages other than the species map, by their view= value.
+const OTHER_VIEWS = ['datasets', 'indigenous']
+
+// Which page a query string asks for: 'datasets', 'indigenous' or 'species'.
 export function readView(search) {
-  return new URLSearchParams(search).get('view') === 'datasets' ? 'datasets' : 'species'
+  const view = new URLSearchParams(search).get('view')
+  return OTHER_VIEWS.includes(view) ? view : 'species'
+}
+
+// The address of the Indigenous data page.
+export const INDIGENOUS_PAGE_SEARCH = '?view=indigenous'
+
+// Whether the reserve layer is shown on the species map, from a query
+// string: reserves=off or reserves=on, else RESERVES_SHOWN_BY_DEFAULT.
+export function readReservesShown(search) {
+  const value = new URLSearchParams(search).get('reserves')
+  if (value === 'off') {
+    return false
+  }
+  if (value === 'on') {
+    return true
+  }
+  return RESERVES_SHOWN_BY_DEFAULT
+}
+
+// Adds the reserve layer's setting to a query string's parameters, only
+// when it differs from the default, so the plain map's address stays plain.
+function addReserves(params, shown) {
+  if (shown !== RESERVES_SHOWN_BY_DEFAULT) {
+    params.set('reserves', shown ? 'on' : 'off')
+  }
+}
+
+// A species map query string with the reserve setting replaced (shown,
+// true or false), everything else kept as it is.
+export function withReserves(search, shown) {
+  const params = new URLSearchParams(search)
+  params.delete('reserves')
+  addReserves(params, shown)
+  const text = params.toString().replace(/%2C/gi, ',')
+  return text ? `?${text}` : '?'
 }
 
 // The species whose card is open on the species map, from a query string:
@@ -368,12 +411,13 @@ export function withYears(search, years) {
 // rank card's, the hexagon panel's and the area panel's species lists (see
 // readList), left out when null or the defaults; areaPanelOpen false keeps
 // the area with its panel closed. years is the year range of the map (null
-// for all years). The area is written as its area text (areaText), with
-// its commas, colons and semicolons left as they are, and every comma
-// elsewhere too, so the address stays readable.
+// for all years), and reservesShown whether the reserve layer is on (see
+// readReservesShown). The area is written as its area text (areaText),
+// with its commas, colons and semicolons left as they are, and every
+// comma elsewhere too, so the address stays readable.
 export function mapSearch({
   species = null, rank = null, cell = null, area = null, rankList = null, cellList = null, areaList = null,
-  areaPanelOpen = true, years = null,
+  areaPanelOpen = true, years = null, reservesShown = RESERVES_SHOWN_BY_DEFAULT,
 } = {}) {
   const params = new URLSearchParams()
   if (species) {
@@ -402,6 +446,7 @@ export function mapSearch({
     }
   }
   addYears(params, years)
+  addReserves(params, reservesShown)
   // The area text only holds digits, ".", "-", ",", ":", ";", "b" and "p",
   // none of which needs writing as %XX in a query string.
   const text = params.toString().replace(/%2C/gi, ',')

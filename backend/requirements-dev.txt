@@ -1,0 +1,21 @@
+# What the back-end tests need on top of the API: everything in
+# requirements-api.txt, plus pytest, httpx (which the API tests' TestClient
+# needs) and the packages they pull in, at the exact versions they were
+# tested with. The server only needs requirements-api.txt.
+#
+# Tested with Python 3.14.7. The code needs Python 3.10 or newer, but the
+# pinned starlette in requirements-api.txt needs 3.11 or newer.
+-r requirements-api.txt
+
+pytest==9.1.1
+httpx==0.28.1
+
+# Pulled in by pytest
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0
+
+# Pulled in by httpx (anyio, idna and h11 are already in requirements-api.txt)
+certifi==2026.7.22
+httpcore==1.0.9

@@ -15,8 +15,9 @@ species API in one terminal and the map in another.
 
 ### Requirements
 
-- Python 3.10 or newer. macOS's built-in `/usr/bin/python3` is 3.9 and fails
-  when the API starts; install a newer one (for example
+- Python 3.11 or newer, because the pinned version of starlette (in
+  `backend/requirements-api.txt`) needs 3.11. macOS's built-in
+  `/usr/bin/python3` is 3.9 and fails; install a newer one (for example
   `brew install python@3.12`).
 - Node 20.19+ or 22.12+ (needed by Vite 8), with npm.
 - Internet access while using the site: the basemap (OpenFreeMap) and the
@@ -69,7 +70,8 @@ cd backend
 ../.venv/bin/python -m uvicorn api.main:app --reload --port 8000
 ```
 
-Any Python 3.10 or newer works in place of `python3.12`. The first two lines
+Any Python 3.11 or newer works in place of `python3.12` (the pinned starlette
+needs 3.11). The first two lines
 are only needed once. The API must be started from `backend/`. `--reload`
 restarts it when a file changes, so it can be left out if you are not editing
 the code.
@@ -114,7 +116,7 @@ All are optional environment variables:
 
 - The API stops with `TypeError: unsupported operand type(s) for |`: the
   venv was made with Python 3.9. Delete `.venv` and make it again with Python
-  3.10 or newer.
+  3.11 or newer (the pinned starlette needs 3.11).
 - `npm ci` warns about install scripts for `fsevents`. This is harmless.
 - On Windows the venv paths are `.venv\Scripts\python` and
   `.venv\Scripts\pip` instead of `.venv/bin/...`, so from `backend\` the API
@@ -832,8 +834,10 @@ Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `op
 Species search and the species cards come from a small API in `backend/api/`
 (FastAPI and DuckDB). How to install and start it, the five data files it
 reads and where they come from, and its settings are in "Running the website
-locally" near the top. Its tests run from `backend/` with
-`../.venv/bin/python -m pytest`.
+locally" near the top. Its tests need pytest, which the server does not, so
+install `backend/requirements-dev.txt` (the API's list plus pytest and httpx) first,
+from the top of the repo: `.venv/bin/pip install -r backend/requirements-dev.txt`.
+Then run them from `backend/` with `../.venv/bin/python -m pytest`.
 
 At start-up the API checks that every file is there with the columns it
 reads, that the cards have one Catalogue of Life release and the statuses

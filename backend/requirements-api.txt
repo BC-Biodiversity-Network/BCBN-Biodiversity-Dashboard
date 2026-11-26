@@ -1,8 +1,34 @@
-# The species API (backend/api/) and its tests. duckdb and h3 are also used
-# by the pipeline; the others are only for the API. h3 (version 4 or later)
-# draws a hexagon's outline for the GBIF links in the hexagon CSV download.
-duckdb
-h3>=4
-fastapi
-uvicorn
-pytest
+# What the species API (backend/api/) needs to run, and nothing else: the
+# four packages it uses and the packages they pull in, at the exact versions
+# it was tested with. For the tests, install requirements-dev.txt instead.
+#
+# Tested with Python 3.14.7. The API code needs Python 3.10 or newer, but
+# starlette 1.8.0 below needs 3.11 or newer, so this exact list installs on
+# Python 3.11 or newer.
+#
+# duckdb and h3 are also used by the pipeline. h3 (version 4 or later) draws
+# a hexagon's outline for the GBIF links in the CSV downloads.
+
+# Used by the API
+duckdb==1.5.5
+h3==4.5.0
+fastapi==0.143.1
+uvicorn==0.54.0
+
+# Pulled in by fastapi
+starlette==1.8.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+annotated-types==0.8.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+annotated-doc==0.0.5
+opentelemetry-api==1.45.1
+
+# Pulled in by starlette
+anyio==4.15.1
+idna==3.19
+
+# Pulled in by uvicorn
+click==8.5.0
+h11==0.16.0

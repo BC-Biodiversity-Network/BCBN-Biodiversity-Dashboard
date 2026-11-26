@@ -83,7 +83,7 @@ Endpoints so far:
                     for them together, each species with its GBIF search
                     inside the shapes (see area.py). Bad area text, both
                     area= and the edges, a shape too small (under
-                    MIN_AREA_HEXAGONS average hexagons) or an area over
+                    MIN_AREA_KM2, the same at every res) or an area over
                     MAX_AREA_HEXAGONS hexagons, a bad res, filter, status,
                     sort or year range, or species=, gives 400; a rank no
                     species has, 404.

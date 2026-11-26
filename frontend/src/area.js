@@ -8,11 +8,16 @@ import {
   POLYGON_TO_CELLS_FLAGS, cellToChildrenSize, cellToParent, getHexagonAreaAvg, getResolution, polygonToCellsExperimental,
 } from 'h3-js'
 
-// The smallest box, in average hexagons of the resolution it is drawn at:
-// the same as MIN_AREA_HEXAGONS in backend/api/area.py. Kept above 1 so a
-// box cannot be drawn around one small place (such as a First Nations
-// reserve) to get only that place's records.
+// The smallest shape, in average hexagons of the smallest size the maps use
+// (SMALLEST_HEXAGONS_RES, about 3 km): the same as MIN_AREA_HEXAGONS in
+// backend/api/area.py. Kept above 1 so a shape cannot be drawn around one
+// small place (such as a First Nations reserve) to get only that place's
+// records.
 export const MIN_AREA_HEXAGONS = 4
+
+// The resolution of the smallest hexagons the maps use (about 3 km), whose
+// average area sets the minimum (the largest of the API's RESOLUTIONS).
+export const SMALLEST_HEXAGONS_RES = 7
 
 // The most hexagons a box may touch: the same as MAX_AREA_HEXAGONS in
 // backend/api/area.py.
@@ -64,10 +69,12 @@ export function averageHexagonKm2(res) {
   return getHexagonAreaAvg(res, 'km2')
 }
 
-// The smallest box allowed at a resolution, in km².
-export function minimumAreaKm2(res) {
-  return MIN_AREA_HEXAGONS * averageHexagonKm2(res)
-}
+// The smallest shape allowed, in km², the same at every hexagon size:
+// MIN_AREA_HEXAGONS average hexagons of about 3 km (about 20.6 km²; the
+// same as MIN_AREA_KM2 in backend/api/area.py). Whole hexagons are always
+// counted, so with larger hexagons the area counted is never smaller than
+// at about 3 km, and one minimum is enough.
+export const MIN_AREA_KM2 = MIN_AREA_HEXAGONS * averageHexagonKm2(SMALLEST_HEXAGONS_RES)
 
 // Every hexagon at resolution res that overlaps the box, even by a corner,
 // sorted: polygonToCellsExperimental with containmentOverlapping, the

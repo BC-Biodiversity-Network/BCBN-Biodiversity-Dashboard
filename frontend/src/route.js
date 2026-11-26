@@ -168,8 +168,18 @@ function withoutCell(search) {
 //   areaBefore  the address of the entry just before that first one, when
 //               the area was drawn in this visit; left out when the area
 //               came with the page (a shared link), as the entry before it
-//               then belongs to another page or site.
-const AREA_HISTORY_KEYS = ['areaDepth', 'areaBefore']
+//               then belongs to another page or site;
+//   areaSince   how many entries this one comes after the entry where the
+//               area last changed from another area (not empty) in this
+//               visit (0 for that entry: a shape drawn or pasted in place of
+//               the area, a shape removed, a new hexagon size), so the area
+//               panel's "Previous area" can go back to the entry just before
+//               it, which holds that earlier area (see areaBackSteps); left
+//               out when there is no earlier area to go back to: the area
+//               came with the page (a shared link) and has not changed, or
+//               it is the first area after none (going back would only show
+//               no area, which "Clear area" already does).
+const AREA_HISTORY_KEYS = ['areaDepth', 'areaBefore', 'areaSince']
 
 // A history state without the area's place in it: null when nothing else is
 // left.
@@ -184,6 +194,17 @@ function withoutAreaHistory(state) {
   return Object.keys(rest).length > 0 ? rest : null
 }
 
+/**
+ * The area of a query string as one text, its hexagon size and its shapes
+ * ("auto:b:..." or "6:b:...;p:..."), so two addresses can be told to hold
+ * the same area or not (an old w,s,e,n link and the same box written anew
+ * give the same text); null for no area.
+ */
+export function areaKey(search) {
+  const area = readArea(search)
+  return area ? `${area.res ?? 'auto'}:${areaText(area.shapes)}` : null
+}
+
 // The history state to give a new or replaced address entry (target), from
 // the state asked for (state) and the current entry (currentSearch and
 // currentState): the state asked for, with the area's place in the history
@@ -194,6 +215,12 @@ function withoutAreaHistory(state) {
 //     one further along.
 //   - An entry holding an area with no place recorded came with the page:
 //     depth 0, with nothing before it to go back to.
+//   - areaSince: 0 for a new entry with another area than the current one,
+//     which holds an area (the area changed from one to another); one
+//     further along for a new entry with the same area, kept for a replaced
+//     one; left out for the first area after none, when the current entry
+//     has none (the area came with the page), or when the area changed in
+//     place.
 export function withAreaHistory(state, { target, replace, currentSearch, currentState }) {
   const own = withoutAreaHistory(state)
   if (!readArea(target)) {
@@ -201,6 +228,8 @@ export function withAreaHistory(state, { target, replace, currentSearch, current
   }
   let place
   if (!readArea(currentSearch)) {
+    // The first area after none: no areaSince, as the entry before holds
+    // no area for "Previous area" to bring back.
     place = replace ? { areaDepth: 0 } : { areaDepth: 0, areaBefore: currentSearch }
   } else {
     const depth = currentState?.areaDepth ?? 0
@@ -208,8 +237,30 @@ export function withAreaHistory(state, { target, replace, currentSearch, current
     if (currentState?.areaBefore !== undefined) {
       place.areaBefore = currentState.areaBefore
     }
+    const since = currentState?.areaSince
+    if (areaKey(target) !== areaKey(currentSearch)) {
+      if (!replace) {
+        place.areaSince = 0
+      }
+    } else if (since !== undefined) {
+      place.areaSince = replace ? since : since + 1
+    }
   }
   return { ...own, ...place }
+}
+
+/**
+ * How many entries the area panel's "Previous area" goes back from the
+ * current one (currentState, its history state) to reach the earlier area,
+ * as it was before the last change: to the entry just before the one where
+ * the area changed (see areaSince in AREA_HISTORY_KEYS), which always holds
+ * an area that is not empty. null when there is no such area (no area yet,
+ * the first area after none, or an area from a shared link not changed
+ * since), so the button is greyed out.
+ */
+export function areaBackSteps(currentState) {
+  const since = currentState?.areaSince
+  return since === undefined ? null : since + 1
 }
 
 // How "Clear area" moves through the history, so that no entry is left

@@ -16,8 +16,7 @@ import h3
 import pytest
 
 import api.area
-from api.area import (EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, box_area_km2, box_cells,
-                      minimum_area_km2)
+from api.area import EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, MIN_AREA_KM2, box_area_km2, box_cells
 from api.export import export_date
 from api.gbif_links import box_wkt, gbif_box_search_url
 from frontend_node import FRONTEND, NODE_READY, front_end_module, run_node
@@ -72,7 +71,8 @@ def test_the_box_its_hexagons_and_the_totals(client):
     assert listed(answer) == [("AAAA", 5), ("BBBB", 3), ("CCCC", 1), ("DDDD", 1)]
     assert answer["years_counted"] is None
     assert answer["box_area_km2"] == round(box_area_km2(box_of(BOTH)), 1)
-    assert answer["minimum_area_km2"] == round(MIN_AREA_HEXAGONS * h3.average_hexagon_area(4, "km^2"), 1)
+    # The same minimum at resolution 4 as at every other: about 3 km's.
+    assert answer["minimum_area_km2"] == round(MIN_AREA_HEXAGONS * h3.average_hexagon_area(7, "km^2"), 1) == 20.6
     assert answer["rank"] is None and answer["sensitive_max_res"] is None
 
 
@@ -251,23 +251,24 @@ def box_with_area(area_km2, south=49.0, north=49.5, west=-125.0):
 
 
 @pytest.mark.parametrize("res", [4, 5, 6, 7])
-def test_the_smallest_box_at_each_resolution(client, res):
-    smallest = MIN_AREA_HEXAGONS * h3.average_hexagon_area(res, "km^2")
-    assert minimum_area_km2(res) == pytest.approx(smallest)
+def test_the_smallest_box_is_the_same_at_each_resolution(client, res):
+    smallest = MIN_AREA_HEXAGONS * h3.average_hexagon_area(7, "km^2")
+    assert MIN_AREA_KM2 == smallest
     under = client.get("/api/area", params={**box_with_area(smallest * 0.99), "res": res})
     assert under.status_code == 400
     detail = under.json()["detail"]
-    assert f"The box is about {smallest * 0.99:,.1f} km², smaller than the minimum of {smallest:,.1f} km²" in detail
-    assert (f"for hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km² ({MIN_AREA_HEXAGONS} times "
-            "their average area)") in detail
+    assert detail == (f"The box is about {smallest * 0.99:,.1f} km², smaller than the minimum of 20.6 km². "
+                      "Draw a larger box.")
     assert "resolution" not in detail
     over = client.get("/api/area", params={**box_with_area(smallest * 1.01), "res": res})
     assert over.status_code == 200, over.text
     assert over.json()["box_area_km2"] == round(smallest * 1.01, 1)
+    assert over.json()["minimum_area_km2"] == 20.6
 
 
-def test_the_minimum_is_four_hexagons():
+def test_the_minimum_is_four_hexagons_of_the_smallest_size():
     assert MIN_AREA_HEXAGONS == 4
+    assert MIN_AREA_KM2 == 4 * h3.average_hexagon_area(7, "km^2")
 
 
 def test_the_box_area_is_on_h3s_sphere():
@@ -351,23 +352,23 @@ def test_the_front_ends_area_rules_match_the_apis(tmp_path):
     hexagons it outlines and its GBIF link for the box are the API's."""
     boxes = [((-120.6, 50.55, -120.1, 50.8), 6), ((-120.6, 50.55, -120.1, 50.8), 7), (box_of(BOTH), 4),
              ((-123.3, 48.3, -122.9, 48.7), 5), ((-129.1234, 52.5, -127.0001, 54.25), 6)]
-    script = (f"import {{ MIN_AREA_HEXAGONS, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM, boxAreaKm2, minimumAreaKm2, boxCells }}"
+    script = (f"import {{ MIN_AREA_HEXAGONS, MIN_AREA_KM2, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM, boxAreaKm2, boxCells }}"
               f" from {front_end_module('area.js')!r}\n"
               f"import {{ gbifBoxSearchUrl }} from {front_end_module('gbifLinks.js')!r}\n"
               f"const boxes = {json.dumps([[list(box), res] for box, res in boxes])}\n"
-              "console.log(JSON.stringify({ MIN_AREA_HEXAGONS, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM }))\n"
+              "console.log(JSON.stringify({ MIN_AREA_HEXAGONS, MIN_AREA_KM2, MAX_AREA_HEXAGONS, EARTH_RADIUS_KM }))\n"
               "for (const [[west, south, east, north], res] of boxes) {\n"
               "  const box = { west, south, east, north }\n"
-              "  console.log(JSON.stringify({ area: boxAreaKm2(box), minimum: minimumAreaKm2(res),\n"
+              "  console.log(JSON.stringify({ area: boxAreaKm2(box),\n"
               "    cells: boxCells(box, res), link: gbifBoxSearchUrl({ box, years: [2000, 2020] }),\n"
               "    linkWithKeys: gbifBoxSearchUrl({ keys: ['BBBB', 'OLD1'], box }) }))\n"
               "}\n")
     lines = [json.loads(line) for line in run_node(tmp_path, script).splitlines()]
-    assert lines[0] == {"MIN_AREA_HEXAGONS": MIN_AREA_HEXAGONS, "MAX_AREA_HEXAGONS": MAX_AREA_HEXAGONS,
-                        "EARTH_RADIUS_KM": EARTH_RADIUS_KM}
+    # The minimum is the very same number on both sides.
+    assert lines[0] == {"MIN_AREA_HEXAGONS": MIN_AREA_HEXAGONS, "MIN_AREA_KM2": MIN_AREA_KM2,
+                        "MAX_AREA_HEXAGONS": MAX_AREA_HEXAGONS, "EARTH_RADIUS_KM": EARTH_RADIUS_KM}
     for (box, res), found in zip(boxes, lines[1:]):
         assert found["area"] == pytest.approx(box_area_km2(box), rel=1e-12)
-        assert found["minimum"] == pytest.approx(minimum_area_km2(res), rel=1e-12)
         assert found["cells"] == box_cells(box, res)
         assert found["link"] == gbif_box_search_url([], box, (2000, 2020))
         assert found["linkWithKeys"] == gbif_box_search_url(["BBBB", "OLD1"], box)

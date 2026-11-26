@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   CLOSE_PIXELS, CROSSING_CLOSE, CROSSING_POINT, NO_POINTS_LEFT, POINTS_LEFT_WARNING, TOO_FEW_POINTS, addPoint,
-  areaPointCount, closeProblem, drawingFeatures, nearFirstPoint, pointsLeftText, useAreaPolygon,
+  closeProblem, drawingFeatures, nearFirstPoint, pointsLeftText, useAreaPolygon,
 } from './areaPolygon'
-import { MAX_AREA_POINTS, boxShapeOf, pointWouldCross, readAreaText } from './areaShapes'
+import { MAX_AREA_POINTS, pointWouldCross } from './areaShapes'
 
 // A pretend map: 100 pixels to a degree, north up.
 const project = ([lng, lat]) => ({ x: lng * 100, y: -lat * 100 })
@@ -32,7 +32,7 @@ describe('drawing a polygon, point by point', () => {
   it('refuses a point that would make two edges cross, and one past the limit', () => {
     expect(addPoint([A, B, C], ACROSS, 247)).toEqual({ message: CROSSING_POINT })
     expect(addPoint([A, B], C, 0)).toEqual({ message: NO_POINTS_LEFT })
-    expect(NO_POINTS_LEFT).toBe('The area can have at most 250 points (a box counts as 4), so no more can be added. '
+    expect(NO_POINTS_LEFT).toBe('A polygon can have at most 250 points, so no more can be added. '
       + 'Finish the polygon or remove a point.')
   })
 
@@ -53,9 +53,7 @@ describe('drawing a polygon, point by point', () => {
     expect(pointWouldCross([A, B, C], A)).toBe(true)
   })
 
-  it('counts the area\'s points as the API does, and says how many are left when few are', () => {
-    const shapes = [boxShapeOf({ west: -121, south: 50, east: -120, north: 51 }), ...readAreaText('p:-122,50,-121.5,50,-121.7,50.4')]
-    expect(areaPointCount(shapes)).toBe(7)
+  it('says how many points are left when few are', () => {
     expect(POINTS_LEFT_WARNING).toBe(20)
     expect(pointsLeftText(21)).toBeNull()
     expect(pointsLeftText(20)).toBe("20 points left before the area's limit of 250.")
@@ -73,9 +71,9 @@ describe('drawing a polygon, point by point', () => {
 
 describe('the polygon being drawn', () => {
   // Draws with the hook: onFinish answers with the given problem (or null).
-  function draw({ shapes = [], problem = null } = {}) {
+  function draw({ problem = null } = {}) {
     const onFinish = vi.fn(() => problem)
-    const hook = renderHook(() => useAreaPolygon({ shapes, onFinish, project }))
+    const hook = renderHook(() => useAreaPolygon({ onFinish, project }))
     act(() => hook.result.current.start())
     return { hook, onFinish, polygon: () => hook.result.current }
   }
@@ -168,22 +166,28 @@ describe('the polygon being drawn', () => {
     expect(polygon().message).toBe('The polygon is about 9.9 km², smaller than the minimum.')
   })
 
-  it('counts the points left before the area\'s limit, and stops at it', () => {
-    // 61 boxes: 244 points, so 6 are left.
-    const boxes = Array.from({ length: 61 }, (_, i) => boxShapeOf({ west: -125 + i * 0.01, south: 50, east: -124.995 + i * 0.01, north: 50.005 }))
-    const { polygon } = draw({ shapes: boxes })
-    expect(polygon().left).toBe(MAX_AREA_POINTS - 244)
-    const ring = [[-120, 50], [-119, 50], [-118.5, 50.5], [-118.6, 51], [-119.2, 51.4], [-120, 51]]
-    for (const point of ring) click(polygon, point)
+  it('counts the points left before the area\'s limit, all of it for the polygon, and stops at it', () => {
+    const { polygon } = draw()
+    expect(polygon().left).toBe(MAX_AREA_POINTS)
+    // Points around most of a circle 10 degrees across (none crossing, each
+    // more than CLOSE_PIXELS from the first): 250 of them, then one more.
+    const circle = Array.from({ length: 251 }, (_, i) => {
+      const angle = (i / 260) * 2 * Math.PI
+      return [-120 + 5 * Math.cos(angle), 50 + 5 * Math.sin(angle)]
+    })
+    for (const point of circle.slice(0, 244)) click(polygon, point)
+    expect(polygon().left).toBe(6)
+    for (const point of circle.slice(244, 250)) click(polygon, point)
     expect(polygon().left).toBe(0)
-    click(polygon, [-120.3, 50.6])
+    expect(polygon().message).toBeNull()
+    click(polygon, circle[250])
     expect(polygon().message).toBe(NO_POINTS_LEFT)
-    expect(polygon().points).toHaveLength(6)
+    expect(polygon().points).toHaveLength(250)
   })
 
   it('does nothing until started, and ignores keys after', () => {
     const onFinish = vi.fn(() => null)
-    const hook = renderHook(() => useAreaPolygon({ shapes: [], onFinish, project }))
+    const hook = renderHook(() => useAreaPolygon({ onFinish, project }))
     act(() => hook.result.current.click(A, pixel(...A)))
     expect(hook.result.current.points).toEqual([])
     press('Enter')

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   NO_FILTERS, activeFilterCount, datasetsSearch, readDatasetsState, readSpeciesKey, readView, shownSort,
-  CELL_LIST, NO_LIST, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey, readCell,
+  CELL_LIST, NO_LIST, PANEL_FROM_CLICK, areaBackSteps, areaKey, clearAreaMove, isPlainMap, keptListChoices, mapSearch, rankKey, readCell,
   readList, readMapYears, readRank, sameAddress, speciesDatasetsSearch, speciesMapSearch, withAreaHistory,
   withYears,
 } from './route'
@@ -210,6 +210,43 @@ describe("an area's place in the history", () => {
       .toEqual(PANEL_FROM_CLICK)
     expect(withAreaHistory({ areaDepth: 2 }, { target: '?', replace: true, currentSearch: AREA, currentState: null }))
       .toBeNull()
+  })
+
+  it('counts the entries since the area last changed, for the panel\'s Previous area', () => {
+    const OTHER = '?area=b:-123,53.8,-122.5,54&area_res=6'
+    // 1. No area yet: nothing to go back to.
+    expect(areaBackSteps(null)).toBeNull()
+    expect(withAreaHistory(null, { target: '?', replace: false, currentSearch: '', currentState: null })).toBeNull()
+    // 2. The first area after none: going back would only show no area.
+    const drawn = withAreaHistory(null, { target: AREA, replace: false, currentSearch: '', currentState: null })
+    expect(areaBackSteps(drawn)).toBeNull()
+    // Nor after a hexagon clicked over it (the same area).
+    expect(areaBackSteps(withAreaHistory(PANEL_FROM_CLICK,
+      { target: `?cell=${CELL}&${AREA.slice(1)}`, replace: false, currentSearch: AREA, currentState: drawn }))).toBeNull()
+    // 4. A new area in place of the first: one step back, to it.
+    const replaced = withAreaHistory(null, { target: OTHER, replace: false, currentSearch: AREA, currentState: drawn })
+    expect(replaced).toEqual({ areaDepth: 1, areaBefore: '', areaSince: 0 })
+    expect(areaBackSteps(replaced)).toBe(1)
+    // Back at the first area its own state is drawn's again: greyed out.
+    expect(areaBackSteps(drawn)).toBeNull()
+    // A hexagon clicked over it: the same area, one entry further on.
+    const clicked = withAreaHistory(PANEL_FROM_CLICK,
+      { target: `?cell=${CELL}&${OTHER.slice(1)}`, replace: false, currentSearch: OTHER, currentState: replaced })
+    expect(areaBackSteps(clicked)).toBe(2)
+    // A size picked is a change too.
+    const resized = withAreaHistory(null,
+      { target: '?area=b:-123,53.8,-122.5,54&area_res=5', replace: false, currentSearch: OTHER, currentState: replaced })
+    expect(resized.areaSince).toBe(0)
+    // An old link's w,s,e,n box and the same box written anew are the same area.
+    expect(areaKey(AREA)).toBe(areaKey('?area=b:-120.6,50.55,-120.1,50.8&area_res=6'))
+    expect(areaKey(AREA)).not.toBe(areaKey(OTHER))
+    expect(areaKey('?')).toBeNull()
+    // 3. An area that came with the page: no earlier area to go back to,
+    // until it changes.
+    const shared = withAreaHistory(null, { target: AREA, replace: false, currentSearch: AREA, currentState: null })
+    expect(areaBackSteps(shared)).toBeNull()
+    expect(areaBackSteps(withAreaHistory(null,
+      { target: OTHER, replace: false, currentSearch: AREA, currentState: shared }))).toBe(1)
   })
 
   it('clears an area by going back past every entry that holds it', () => {

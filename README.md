@@ -1440,8 +1440,8 @@ shapes counts once.
   one box, and an old request's `west=&south=&east=&north=` is read
   exactly as before (same answers, same CSV, same messages). A request
   giving both `area=` and any of the four edges gets 400.
-- **The limits.** Each shape must cover at least `MIN_AREA_HEXAGONS` (4)
-  average hexagons; the whole area may touch at most `MAX_AREA_HEXAGONS`
+- **The limits.** Each shape must cover at least `MIN_AREA_KM2` (about
+  20.6 km², the same at every resolution); the whole area may touch at most `MAX_AREA_HEXAGONS`
   (200,000) hexagons; and it may have at most `MAX_AREA_POINTS` (250)
   points in all, a box counting as 4. The point limit is there because the
   area goes into the page's address and into the GBIF link: 250 points
@@ -1477,7 +1477,8 @@ shapes counts once.
   species' map is not covered yet.
 - **Which hexagons.** The h3 package's polygon to cells search in its
   "overlap" mode. The answer gives their number (`hexagon_count`), the box,
-  its area (`box_area_km2`) and the smallest allowed (`minimum_area_km2`),
+  its area (`box_area_km2`) and the smallest allowed (`minimum_area_km2`,
+  20.6 at every resolution),
   not the hexagon ids, which for a large box would be megabytes (9.4 MB of
   ids for all of BC at resolution 7). The front end can find the same
   hexagons with h3-js (`polygonToCellsExperimental` with
@@ -1486,13 +1487,22 @@ shapes counts once.
   2026-11-09 the two gave the same hexagons for 400 random boxes in BC
   (31,482 hexagons), and `backend/tests/test_area.py` runs h3-js with node
   to check a few boxes every time.
-- **The smallest shape** (each shape, box or polygon) is
-  `MIN_AREA_HEXAGONS` (4) average hexagons of the resolution (about 7,081 km² at 4, 1,012 at 5, 145 at 6 and 21 at 7), so
-  nobody can draw a box tightly around one small place, such as a First
-  Nations reserve, and pull out that place's records alone. The box's area
-  is worked out on H3's sphere, so it compares with H3's average hexagon
-  area like for like. A smaller box gives 400 saying its area and the
-  minimum.
+- **The smallest shape** (each shape, box or polygon, drawn or pasted) is
+  `MIN_AREA_KM2`: `MIN_AREA_HEXAGONS` (4) average hexagons of the smallest
+  size the maps use (about 3 km, resolution 7), about 20.6 km², the same
+  whatever the resolution asked for (since 2026-11-26; before, it was 4
+  average hexagons of the resolution asked for: about 7,081 km² at 4, 1,012
+  at 5, 145 at 6 and 21 at 7). It is there so nobody can draw a shape
+  tightly around one small place, such as a First Nations reserve, and pull
+  out that place's records alone; one minimum is enough because whole
+  hexagons are always counted, so with larger hexagons the area counted is
+  never smaller than at about 3 km. The shape's area is worked out on H3's
+  sphere, so it compares with H3's average hexagon area like for like. A
+  smaller shape gives 400 saying its area and the minimum ("The box is
+  about 9.9 km², smaller than the minimum of 20.6 km². Draw a larger
+  box."). The front end uses the same constant (`MIN_AREA_KM2` in
+  `frontend/src/area.js`), and `backend/tests/test_area.py` checks with
+  node that the two are the same number.
 - **The largest area** touches at most `MAX_AREA_HEXAGONS` (200,000)
   hexagons; a larger one gives 400 suggesting a coarser resolution. Each
   shape is first checked from its area, before any hexagon is found; then
@@ -1747,26 +1757,50 @@ interest" button sits with the map's controls at the top left, on the
 overview and on a rank map; on a single species' map it is greyed out,
 saying on hover that it is not available there yet. It opens a small panel
 (`frontend/src/AreaOfInterest.jsx`, as in the mockup Lucia approved on
-2026-11-17): "No shapes yet", "1 shape" or "N shapes" at the top, the list
-of shapes ("Shape 1: box", "Shape 2: polygon (6 points)", ...) each with an
-x that removes it, the "Draw" tab with "Box" and "Polygon" buttons and the
+2026-11-17; heading changed 2026-11-26): "No area yet", "Your area" or
+"Your area: N shapes" at the top; for one shape, only what it is ("Box",
+"Polygon (6 points)") with no x (Clear area removes it); for several (a
+pasted MULTIPOLYGON or an old link), the list of shapes ("Shape 1: box",
+"Shape 2: polygon (6 points)", ...) each with an x that removes it; the "Draw" tab with "Box" and "Polygon" buttons and the
 "Paste" tab, then
-"Back" (removes the last shape) and "Clear area" (removes them all), and
-"Close". Every shape drawn or pasted joins the same area.
+"Previous area" (goes back to the area before its last change) and "Clear area"
+(removes it all), and "Close". Since 2026-11-26 the area is one shape at a
+time, as Evan asked on 2026-11-18: a new box, a finished polygon or a paste
+replaces the current area (a cancelled polygon leaves it as it was), and
+the panel says "A new shape replaces the current area." One paste may still
+give several polygons (a `MULTIPOLYGON` or a `FeatureCollection`), and an
+old link of several shapes (`area=b:...;b:...`) still opens with all of
+them. "Previous area" goes back in the history to the entry just before the area's
+last change (a shape drawn, pasted or removed, or a size picked;
+`areaSince` in the history state, `areaBackSteps` in
+`frontend/src/route.js`), so Forward redoes it. It is offered only when
+that step brings back an earlier area that is not empty; otherwise it is
+greyed out, with the tooltip "No previous area": with no area yet, after
+the first shape drawn or pasted when there was no area (going back would
+only show no area, as "Clear area" does), on a shared link's area not
+changed yet, back at the first area, and after "Clear area" (which takes
+the area out of the history, so nothing earlier is left). After a paste, and when a
+shared link with an area opens, the map moves so that every shape is in
+view, however far apart (`fitMapToShapes` in `frontend/src/HexMap.jsx`, from
+`shapesBounds` in `areaLayers.js`), leaving room for the controls and panel
+at the top left and the panel at the right, as measured on the page
+(`panelsCover`, `areaFitPadding`; on a screen too narrow for both, the usual
+small margins). It does not move after a box or polygon is drawn (already
+in view), nor on Back or Forward.
 
 The "Paste" tab (`frontend/src/areaPaste.js`) takes polygons as WKT
 (`POLYGON`, `MULTIPOLYGON`, optionally `SRID=4326;` and a Z or M number,
 which is left out) or GeoJSON (`Polygon`, `MultiPolygon`, a `Feature` with
 one, or a `FeatureCollection` of them), longitude then latitude in degrees
 (WGS 84), each ring closed or not. "Fill in an example" puts a polygon of
-about 14,000 km² around Kamloops in the box. "Add" adds every polygon as a
-polygon shape (`p:...` in the area text, a pasted rectangle staying a
+about 14,000 km² around Kamloops in the box. "Use this shape" puts every polygon in
+place of the area as a polygon shape (`p:...` in the area text, a pasted rectangle staying a
 polygon), its corners rounded to 4 decimals as drawn ones are, all in one
-address entry, so the back button takes the whole paste away; the area's
-hexagon size follows the same rule as for a box drawn (below). It is all
-or nothing: if any part is refused nothing is added, the text stays in the
+address entry, so the back button takes the whole paste away; like a box
+or polygon drawn, it is at Auto (below). It is all
+or nothing: if any part is refused nothing changes, the text stays in the
 box and the reason shows under it, naming the shape by its place in the
-area ("Shape 3 (a polygon) has a hole; holes are not supported yet."). It
+paste ("Shape 2 (a polygon) has a hole; holes are not supported yet."). It
 refuses empty or unreadable text, other geometry types, holes, a GeoJSON
 `crs` or WKT `SRID` other than WGS 84, points outside -180 to 180 and -90 to
 90 (which also catches metres and latitude first), and then, with the API's
@@ -1810,10 +1844,10 @@ closing edge would cross ("Closing the polygon here would make two edges
 cross. Remove the last point (Backspace) or add another."), and a polygon
 needs at least 3 different points ("A polygon needs at least 3 different
 points."). When 20 points or fewer are left before the area's 250-point
-limit (a box counts as 4), the hint adds "N points left before the area's
-limit of 250."; at the limit a point is not added ("The area can have at
-most 250 points (a box counts as 4), so no more can be added. Finish the
-polygon or remove a point."). Backspace or "Undo point" removes the last
+limit (all of it for the polygon, which replaces the area's shapes), the
+hint adds "N points left before the area's limit of 250."; at the limit a
+point is not added ("A polygon can have at most 250 points, so no more can
+be added. Finish the polygon or remove a point."). Backspace or "Undo point" removes the last
 point and Esc or "Cancel" drops the polygon, neither changing the area or
 the history; the keys are left alone while typing in a field. A finished
 polygon goes through the same checks and messages as every other shape
@@ -1833,10 +1867,16 @@ that overlap any shape even by a corner, each once (`shapesCells` in
 `containmentOverlapping`, the corners as `[lat, lng]`, exactly as the API
 finds them), all at one size, which does not depend on the map's zoom
 (`frontend/src/areaSize.js`). "Auto", the default, prefers hexagons of
-about 7 km (`AUTO_PREFERRED`; `autoSizes`): about 3 km only when a shape is
-too small for about 7 km (under `MIN_AREA_HEXAGONS` average hexagons of it,
-144.5 km²), and the larger sizes (about 20, then 52 km) only when the area
-is too big for about 7 km (over `MAX_AREA_HEXAGONS` hexagons). About 7 km
+about 7 km (`AUTO_PREFERRED`; `autoSizes`): it starts at about 3 km only
+when a shape is small (under `AUTO_SMALL_SHAPE_KM2`, 4 average hexagons of
+about 7 km, 144.5 km², so it would show as only a hexagon or two), and
+moves to the larger sizes (about 20, then 52 km) only when the area is too
+big for the size it started at (over `MAX_AREA_HEXAGONS` hexagons). The
+line at 144.5 km² is the old minimum at about 7 km: since the minimum
+became the same at every size (2026-11-26) it is kept only as Auto's
+choice, so Auto chooses as before; the one change is that a small shape in
+an area too big at about 3 km now moves up to the larger sizes instead of
+being refused. About 7 km
 reads well on the whole map at most zooms, where about 3 km becomes specks
 seen from far out, and the map shows the area's size everywhere (below).
 For example: a box around Kamloops (about 979 km², 45 hexagons) gets about
@@ -1844,16 +1884,18 @@ For example: a box around Kamloops (about 979 km², 45 hexagons) gets about
 3 km, and so does any area holding one; two boxes over North America
 (over 200,000 hexagons together at about 7 km) get about 20 km. (Before
 2026-11-17 Auto took the smallest size that passed, so most areas got
-about 3 km.) It chooses again whenever a shape is added or removed, the
+about 3 km.) It chooses again whenever a shape is removed, the
 whole area recounted at the new size; if no size works (a shape too small
 even at about 3 km, or the area too big even at about 52 km) the shape is
 refused with that size's message. The panel's "Hexagon size" choice shows
 "Auto (about 7 km)" (the size it chose) and the four sizes ("About 52 km", ...); a size picked is kept until
-it is changed or the area cleared, and a shape (or a size) that does not
-pass at it is refused with the API's message, the page adding "Or choose
-smaller hexagons." when a shape is too small (the API's message for an area
-too big already says to use larger hexagons). Changing the size is one
-history step.
+it is changed, the area cleared, or a new box, polygon or paste replaces
+the area, which then goes back to Auto (Back brings the old area back with
+its own size; a new shape is checked at Auto). A size that does not pass is refused with the API's message
+alone: with one minimum for every size only an area too big can fail at
+one size and pass at another, and that message already says to use larger
+hexagons (the page's old hint "Or choose smaller hexagons." is gone).
+Changing the size is one history step.
 
 **The map is locked to the area's size.** While an area has at least one
 shape (and the map is not a single species' map), the whole map shows
@@ -1917,11 +1959,11 @@ gone:
 
 Panning and zooming stayed at 60 frames a second.
 
-A shape the API would refuse is not added: smaller than `MIN_AREA_HEXAGONS` (4) average
-hexagons, an area touching more than `MAX_AREA_HEXAGONS` (200,000)
+A shape the API would refuse is not added: smaller than `MIN_AREA_KM2`
+(about 20.6 km²), an area touching more than `MAX_AREA_HEXAGONS` (200,000)
 hexagons, more than `MAX_AREA_POINTS` (250) points, and so on. The panel
 shows why, in the API's own words ("Shape 2 (a box) is about 9.9 km²,
-smaller than the minimum of ..."; `areaTextProblem` and `shapesProblem` in
+smaller than the minimum of 20.6 km². Draw a larger box."; `areaTextProblem` and `shapesProblem` in
 `areaShapes.js`, copies of `backend/api/area.py` that a back end test runs
 with node, message for message). The old wording of `area.js` ("This box is
 about ..., zoom in first for smaller hexagons") is gone, so the page, the
@@ -1971,8 +2013,10 @@ at Auto, opens with no area.
 **The area stays until it is cleared.** Once drawn, the area (its shapes'
 outline, its hexagons and the faded map around them) stays on the map and in the
 address until the panel's "Clear area" removes it; a new box drawn anywhere
-on the map is added to it (a box refused keeps the area as it was and says
-why), and a shape's x or "Back" removes one. Every other move
+on the map, a finished polygon or a paste replaces it, at Auto (one refused
+keeps the area as it was and says why), a shape's x removes one of an area
+of several, and "Previous area" goes back to the area before the last
+change. Every other move
 keeps it: clicking a hexagon opens that hexagon's panel on top of the area
 panel, which stays loaded under it; opening a species (from the area's
 list, a hexagon's list or the search box) keeps the area in the address,
@@ -1987,8 +2031,9 @@ opens that hexagon's panel. What Back does (`frontend/src/App.jsx`):
 | After | The address entry | Back then |
 | --- | --- | --- |
 | Drawing the first box | added (closes an open hexagon panel) | returns to before the box (an open hexagon panel comes back) |
-| Drawing another box (anywhere on the map) | added, with the box joined to the area (closes an open hexagon panel) | returns to the area without that box |
-| A shape's x, or the panel's "Back" | added, without that shape (no area at all when it was the only one) | returns to the area with the shape |
+| Drawing another box (anywhere on the map), a polygon or a paste | added, the new shapes in place of the area, at Auto (closes an open hexagon panel) | returns to the area before, with its size |
+| A shape's x (an area of several shapes) | added, without that shape | returns to the area with the shape |
+| The panel's "Previous area" | none: goes back in the history to the entry before the area's last change | Forward redoes the change |
 | Changing the area's list | replaced | the same |
 | Clicking a hexagon over the area | added (marked `PANEL_FROM_CLICK`); another hexagon replaces it | returns to the area panel; so does the hexagon panel's x |
 | The area panel's x, or "Show area" | replaced | returns to before the box (the panel being closed is not a step of its own) |

@@ -11,7 +11,9 @@
 // and shapesProblem in areaShapes.js: crossing edges, at least 3 points, the
 // 180th meridian, 250 points in all, each shape's size and the joined
 // hexagons), with the API's own messages. Shapes are numbered as they will
-// be in the area: after the shapes already in it.
+// be in the area: after the shapes already in it. The page gives it no
+// shapes already in the area, as a paste replaces the whole area (one
+// paste at a time; App.jsx), so they are numbered from 1.
 
 import { areaText, areaTextProblem, readAreaText, roundCorner, shapeName, shapesProblem } from './areaShapes.js'
 
@@ -25,9 +27,10 @@ export const PASTE_MAX_CHARACTERS = 200000
 // (about 14,000 km², big enough at every hexagon size the map shows).
 export const PASTE_EXAMPLE = 'POLYGON((-121 50, -119.2 50, -119 51, -120.4 51.2, -121 50))'
 
-// The line under the text box saying what it takes.
+// The line under the text box saying what it takes, and that a paste
+// replaces the area.
 export const PASTE_HELP = 'Polygons as WKT or GeoJSON, longitude then latitude (WGS 84). Several at once are '
-  + 'fine (MULTIPOLYGON, FeatureCollection); holes are not supported yet.'
+  + 'fine (MULTIPOLYGON, FeatureCollection); holes are not supported yet. A paste replaces the current area.'
 
 // The GeoJSON coordinate systems that mean longitude and latitude on WGS 84.
 const WGS84_NAMES = new Set([

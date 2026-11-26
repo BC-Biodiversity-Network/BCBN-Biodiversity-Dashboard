@@ -22,7 +22,7 @@ const TURDUS = { rank: 'genus', name: 'Turdus', path: [
 // A pretend answer from /api/area, with fields changed as given.
 function answer(fields = {}) {
   return {
-    box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 144.5, hexagon_count: 45,
+    box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 20.6, hexagon_count: 45,
     year_from: null, year_to: null, years_counted: null, records: 312234, species: 2,
     records_no_year_left_out: 0, records_outside_years: 0, q: null, status: [], sort: 'most_records',
     matching: 2, status_counts: { red: 0, blue: 0, yellow: 1, exotic: 0, none: 1 }, offset: 0, limit: 50,
@@ -180,9 +180,9 @@ describe('the area panel', () => {
   })
 
   it('shows the API\'s own message for a box it refused', async () => {
-    stubArea(() => ({ status: 400, body: { detail: 'The box is about 9.9 km², smaller than the minimum of 144.5 km².' } }))
+    stubArea(() => ({ status: 400, body: { detail: 'The box is about 9.9 km², smaller than the minimum of 20.6 km². Draw a larger box.' } }))
     show()
-    await screen.findByText('The box is about 9.9 km², smaller than the minimum of 144.5 km².')
+    await screen.findByText('The box is about 9.9 km², smaller than the minimum of 20.6 km². Draw a larger box.')
     expect(screen.queryByRole('link', { name: /CSV/ })).toBeNull()
   })
 

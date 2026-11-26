@@ -82,7 +82,9 @@ import { DRAW_HELP, DRAW_HINT, DRAW_UNAVAILABLE, polygonHint } from './AreaOfInt
 import { CROSSING_POINT, POLYGON_HINT } from './areaPolygon'
 import { boxShapeOf, readAreaText } from './areaShapes'
 import { COLOUR_SCHEMES, hexagonColour, outlineOpacity } from './colours'
-import HexMap, { FADED_SHARE, overviewLayerId } from './HexMap'
+import HexMap, {
+  AREA_FIT_MIN_MAP_PX, FADED_SHARE, areaFitPadding, fitPadding, overviewLayerId, panelsCover,
+} from './HexMap'
 import { hexagonWidthPixels, pickResolution, zoomShowingResolution } from './zoomTiers'
 
 // One overview hexagon per resolution, real H3 cells in BC.
@@ -631,9 +633,9 @@ describe('an area of interest', () => {
     expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
     openPanel()
     const panel = screen.getByRole('region', { name: 'Area of interest' })
-    expect(panel.querySelector('strong').textContent).toBe('No shapes yet')
+    expect(panel.querySelector('strong').textContent).toBe('No area yet')
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Draw', 'Paste'])
-    expect(screen.getByRole('button', { name: 'Back' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Previous area' }).disabled).toBe(true)
     expect(screen.getByRole('button', { name: 'Clear area' }).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('region', { name: 'Area of interest' })).toBeNull()
@@ -840,7 +842,83 @@ describe('an area of interest', () => {
     const [[bounds, options]] = mapState.fitBounds.mock.calls
     expect(bounds).toEqual([[-121, 50], [-119, 51.2]])
     expect(bounds).toEqual(shapesBounds(shapes))
-    expect(options).toMatchObject({ duration: 0 })
+    // The test page cannot measure the panels, so the usual margins.
+    expect(options).toEqual({ padding: fitPadding(1280, 800), duration: 0 })
+  })
+
+  describe('fitting the map to a paste', () => {
+    // A polygon around Kamloops and one around Kelowna, about 90 km apart,
+    // as one paste gives them, and the box around both.
+    const PASTED = readAreaText('p:-120.6,50.55,-120.1,50.55,-120.1,50.8,-120.6,50.8;'
+      + 'p:-119.6,49.8,-119.3,49.8,-119.3,50,-119.6,50')
+    const BOTH = [[-120.6, 49.8], [-119.3, 50.8]]
+    const PASTED_AREA = { shapes: PASTED, res: 6, cells: [] }
+    // Another area, as Back or Forward, or a box drawn, would give.
+    const OTHER_AREA = { ...AREA, cells: [] }
+
+    it('moves the map so every pasted shape is in view, however far apart, once per paste', () => {
+      const { rerender } = render(<HexMap overview={OVERVIEW} species={null} selectedArea={OTHER_AREA} />)
+      act(() => mapState.onLoad())
+      mapState.fitBounds = vi.fn()
+      const fit = { shapes: PASTED, id: 1 }
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={PASTED_AREA} fitArea={fit} />)
+      expect(mapState.fitBounds).toHaveBeenCalledTimes(1)
+      const [bounds, options] = mapState.fitBounds.mock.calls[0]
+      expect(bounds).toEqual(BOTH)
+      expect(options).toEqual({ padding: fitPadding(1280, 800), duration: 900 })
+      // Back to the area before (the same paste still the last): no move.
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={OTHER_AREA} fitArea={fit} />)
+      // Forward again, or a box drawn: no move either.
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={PASTED_AREA} fitArea={fit} />)
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} fitArea={fit} />)
+      expect(mapState.fitBounds).toHaveBeenCalledTimes(1)
+      // A new paste, even of the same shapes, moves it again.
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={PASTED_AREA} fitArea={{ shapes: PASTED, id: 2 }} />)
+      expect(mapState.fitBounds).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not move the map for a box drawn, with no paste', () => {
+      const { rerender } = render(<HexMap overview={OVERVIEW} species={null} />)
+      act(() => mapState.onLoad())
+      mapState.fitBounds = vi.fn()
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={OTHER_AREA} />)
+      rerender(<HexMap overview={OVERVIEW} species={null} selectedArea={PASTED_AREA} />)
+      expect(mapState.fitBounds).not.toHaveBeenCalled()
+    })
+
+    it('leaves room for the panels on the left and the right, unless the window is too narrow', () => {
+      // A wide window, the "Create an area of interest" panel reaching 344
+      // pixels in from the left, the area's panel 404 from the right.
+      expect(areaFitPadding(1280, 800, 344, 404)).toEqual({ top: 24, left: 368, right: 428, bottom: 150 })
+      // Nothing measured: the usual margins.
+      expect(areaFitPadding(1280, 800, 0, 0)).toEqual(fitPadding(1280, 800))
+      // A phone: no room left between the panels, so the usual margins.
+      expect(areaFitPadding(390, 700, 344, 378)).toEqual(fitPadding(390, 700))
+      expect(AREA_FIT_MIN_MAP_PX).toBe(200)
+    })
+
+    it('measures how far the panels reach over the map', () => {
+      // A page 1280 pixels wide with the map filling it.
+      const page = document.createElement('div')
+      page.className = 'map-area'
+      const container = document.createElement('div')
+      const left = document.createElement('div')
+      left.className = 'top-left-controls'
+      const right = document.createElement('div')
+      right.className = 'top-right-controls'
+      page.append(container, left, right)
+      document.body.append(page)
+      const rect = (from, to) => () => ({ left: from, right: to, width: to - from })
+      container.getBoundingClientRect = rect(0, 1280)
+      left.getBoundingClientRect = rect(12, 332)
+      right.getBoundingClientRect = rect(888, 1268)
+      expect(panelsCover(container)).toEqual({ left: 332, right: 392 })
+      // Nothing on screen at the right (no width): nothing covered there.
+      right.getBoundingClientRect = rect(0, 0)
+      expect(panelsCover(container)).toEqual({ left: 332, right: 0 })
+      page.remove()
+      expect(panelsCover({ clientWidth: 1280 })).toEqual({ left: 0, right: 0 })
+    })
   })
 
   it('fades nothing with no area selected', () => {
@@ -853,19 +931,19 @@ describe('an area of interest', () => {
 
   it("lists the area's shapes, each with an x, and hands on x, Back and Clear area", () => {
     const onRemoveShape = vi.fn()
-    const onRemoveLastShape = vi.fn()
+    const onAreaBack = vi.fn()
     const onClearArea = vi.fn()
     render(<HexMap overview={OVERVIEW} species={null} selectedArea={TWO} onRemoveShape={onRemoveShape}
-      onRemoveLastShape={onRemoveLastShape} onClearArea={onClearArea} />)
+      onAreaBack={onAreaBack} onClearArea={onClearArea} />)
     openPanel()
     const panel = screen.getByRole('region', { name: 'Area of interest' })
-    expect(panel.querySelector('strong').textContent).toBe('2 shapes')
+    expect(panel.querySelector('strong').textContent).toBe('Your area: 2 shapes')
     expect([...panel.querySelectorAll('.aoi-shapes li span')].map((item) => item.textContent))
       .toEqual(['Shape 1: box', 'Shape 2: box'])
     fireEvent.click(screen.getByRole('button', { name: 'Remove shape 2' }))
     expect(onRemoveShape).toHaveBeenCalledWith(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-    expect(onRemoveLastShape).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Previous area' }))
+    expect(onAreaBack).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Clear area' }))
     expect(onClearArea).toHaveBeenCalledTimes(1)
   })
@@ -897,7 +975,7 @@ describe('an area of interest', () => {
     openPanel()
     fireEvent.click(screen.getByRole('tab', { name: 'Paste' }))
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'POLYGON((0 0, 1 0, 1 1, 0 0))' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Use this shape' }))
     expect(onAreaPasted).toHaveBeenCalledWith('POLYGON((0 0, 1 0, 1 1, 0 0))')
     expect(screen.getByRole('alert').textContent).toBe('The polygon has a hole; holes are not supported yet.')
   })
@@ -1215,9 +1293,26 @@ describe('drawing a polygon', () => {
     expect(onAreaPolygon).not.toHaveBeenCalled()
   })
 
+  it('leaves the area as it was when a polygon is cancelled with its Cancel button', () => {
+    const onAreaPolygon = vi.fn(() => null)
+    render(<HexMap overview={OVERVIEW} species={null} selectedArea={AREA} onAreaPolygon={onAreaPolygon} />)
+    const outline = mapState.sources['area-box']
+    expect(outline).toBeDefined()
+    startPolygon()
+    clickAt(A)
+    clickAt(B)
+    clickAt(C)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onAreaPolygon).not.toHaveBeenCalled()
+    expect(mapState.sources['area-polygon']).toBeUndefined()
+    // The area's outline and its one shape are still there.
+    expect(mapState.sources['area-box']).toEqual(outline)
+    expect(screen.getByText('Your area')).toBeTruthy()
+    expect(screen.getByRole('list', { name: 'Shapes in this area' }).textContent).toBe('Box')
+  })
+
   it('keeps drawing with the API\'s words when the shape is refused', () => {
-    const refusal = 'The polygon is about 9.9 km², smaller than the minimum of 144.5 km² for hexagons of about 36.1 km² '
-      + '(4 times their average area). Draw a larger polygon.'
+    const refusal = 'The polygon is about 9.9 km², smaller than the minimum of 20.6 km². Draw a larger polygon.'
     render(<HexMap overview={OVERVIEW} species={null} onAreaPolygon={() => refusal} />)
     startPolygon()
     clickAt(A)
@@ -1261,14 +1356,15 @@ describe('drawing a polygon', () => {
     expect(drawnPoints()).toEqual([])
   })
 
-  it('says how many points are left when few are', () => {
-    // 60 boxes: 240 points, so 10 are left.
+  it("gives a new polygon all the area's points, whatever shapes the area has now", () => {
+    // 60 boxes (240 points): the polygon replaces them, so all 250 are left
+    // and the hint says nothing about the limit.
     const boxes = Array.from({ length: 60 }, (_, i) => boxShapeOf({ west: -125 + i * 0.01, south: 50, east: -124.995 + i * 0.01, north: 50.005 }))
     render(<HexMap overview={OVERVIEW} species={null} selectedArea={{ ...AREA, shapes: boxes }} />)
     startPolygon()
-    expect(screen.getByRole('status').textContent).toBe(polygonHint(10))
+    expect(screen.getByRole('status').textContent).toBe(polygonHint(250))
+    expect(polygonHint(250)).toBe(POLYGON_HINT)
     clickAt(A)
-    expect(screen.getByRole('status').textContent)
-      .toBe(`${POLYGON_HINT} 9 points left before the area's limit of 250.`)
+    expect(screen.getByRole('status').textContent).toBe(POLYGON_HINT)
   })
 })

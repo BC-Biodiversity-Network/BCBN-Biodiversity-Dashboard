@@ -298,6 +298,72 @@ export function fitPadding(width, height) {
   return { top: 24, left: 24, right, bottom }
 }
 
+// The least width of map, in pixels, to keep free between the panels when
+// the map is fitted to an area; below it the panels' widths are not left
+// free (they cover most of the map anyway, as on a phone).
+export const AREA_FIT_MIN_MAP_PX = 200
+
+// The margin left between an area's shapes and the panel beside them.
+const AREA_FIT_MARGIN_PX = 24
+
+/**
+ * The space to leave around an area's shapes when the map is fitted to
+ * them (a map width by height in pixels): fitPadding, widened so that
+ * neither the controls and panel at the top left (leftCovered, how far in
+ * from the map's left edge they reach) nor the panel at the top right
+ * (rightCovered, from the right edge) cover the shapes, with a margin. When
+ * that would leave less than AREA_FIT_MIN_MAP_PX of map between them,
+ * fitPadding alone is used, so the map can still fit the shapes.
+ */
+export function areaFitPadding(width, height, leftCovered, rightCovered) {
+  const base = fitPadding(width, height)
+  const left = Math.max(base.left, leftCovered > 0 ? leftCovered + AREA_FIT_MARGIN_PX : 0)
+  const right = Math.max(base.right, rightCovered > 0 ? rightCovered + AREA_FIT_MARGIN_PX : 0)
+  if (width - left - right < AREA_FIT_MIN_MAP_PX) {
+    return base
+  }
+  return { ...base, left, right }
+}
+
+/**
+ * How far in from the map's left and right edges the panels over it reach,
+ * in pixels ({ left, right }), measured on the page: the map's controls at
+ * the top left (with the "Create an area of interest" panel when it is
+ * open) and the panels at the top right (the area's panel, or the search
+ * box alone). container is the map's element; 0 for a side with nothing
+ * on screen, or where the page cannot be measured.
+ */
+export function panelsCover(container) {
+  const page = container?.closest?.('.map-area')
+  const map = container?.getBoundingClientRect?.()
+  if (!page || !map) {
+    return { left: 0, right: 0 }
+  }
+  // The part of the map one element covers, from the edge it sits on.
+  const reach = (selector, fromLeft) => {
+    const box = page.querySelector(selector)?.getBoundingClientRect()
+    if (!box || box.width === 0) {
+      return 0
+    }
+    return Math.max(0, fromLeft ? box.right - map.left : map.right - box.left)
+  }
+  return { left: reach('.top-left-controls', true), right: reach('.top-right-controls', false) }
+}
+
+/**
+ * Moves the map so that every shape of an area (shapes, see areaShapes.js)
+ * is in view, however far apart they are, clear of the panels on either
+ * side (see areaFitPadding), over duration milliseconds (0 to jump).
+ */
+export function fitMapToShapes(map, shapes, duration) {
+  const container = map.getContainer()
+  const cover = panelsCover(container)
+  map.fitBounds(shapesBounds(shapes), {
+    padding: areaFitPadding(container.clientWidth, container.clientHeight, cover.left, cover.right),
+    duration,
+  })
+}
+
 // No hover box over a hexagon (while drawing).
 function noTooltip() {
   return null
@@ -461,23 +527,27 @@ function apiStatus(hexes, what) {
 // zooming by drag, the cursor is a crosshair, a hint shows, and dragging
 // (mouse or one finger) draws the box; Esc or "Box" again cancels. Letting
 // go calls onAreaDrawn(box, res) with the box (see boxFromCorners in
-// area.js), which adds it to the area (res, the level the map shows then,
+// area.js), which puts it in place of the area (res, the level the map shows then,
 // plays no part any more: the area's hexagon size is its own, Auto or
 // picked in the panel, onAreaSizeChange(res or null)). Its "Polygon" button
 // starts a polygon (see areaPolygon.js): each click adds a point, dragging
 // still pans, the points and edges show with a line to the mouse, and a
 // click on the first point, Enter, a double-click or "Finish" calls
-// onAreaPolygon(ring), which adds it to the area and returns null, or why
+// onAreaPolygon(ring), which puts it in place of the area and returns null, or why
 // it was refused (drawing then goes on). selectedArea is the area ({ shapes, res, cells }, or null):
 // while there is one, the whole map shows hexagons of the area's size at
 // every zoom (see areaLayers.js), every hexagon outside it is faded, and
 // each shape is outlined (SHAPE_OUTLINE). areaMessage (or
 // null) is shown in the panel, for a shape refused, with an x that calls
-// onDismissAreaMessage. onAreaPasted(text) adds the shapes of a text pasted
-// in the panel's Paste tab and returns null, or why nothing was added.
-// onRemoveShape(index), onRemoveLastShape (the panel's "Back") and
+// onDismissAreaMessage. onAreaPasted(text) puts the shapes of a text pasted
+// in the panel's Paste tab in place of the area and returns null, or why
+// nothing was changed. onRemoveShape(index), onAreaBack (the panel's "Previous area",
+// or null when there is no earlier area to go back to) and
 // onClearArea (or null when there is no area) change the area; onShowArea (or null when the area panel is open or covered) is
-// the "Show area" button that opens the area panel again.
+// the "Show area" button that opens the area panel again. fitArea (or
+// null) is the shapes of the last paste, { shapes, id }: each new one moves
+// the map so they are all in view (fitMapToShapes); a shared link's area is
+// fitted the same way when the map loads.
 //
 // Reserves: reserves is the /api/reserves answer (null while it loads or if
 // it failed). When it is available, the outlines are drawn above the
@@ -489,7 +559,7 @@ export default function HexMap({
   overview, species, years = null, yearBounds = null, onYearsChange = () => {}, selectedCell = null,
   onCellClick = () => {}, rank = null, rankId = null, onCloseRank = () => {},
   selectedArea = null, onAreaDrawn = () => {}, areaMessage = null, onDismissAreaMessage = () => {},
-  onClearArea = null, onShowArea = null, onRemoveShape = () => {}, onRemoveLastShape = () => {},
+  onClearArea = null, onShowArea = null, onRemoveShape = () => {}, onAreaBack = null, fitArea = null,
   onAreaPasted = () => null, onAreaSizeChange = () => {}, onAreaPolygon = () => null, reserves = null,
   reservesShown = true, onReservesShownChange = () => {},
 }) {
@@ -525,7 +595,7 @@ export default function HexMap({
   const lastDrawn = useRef(0)
   // The polygon being drawn (see areaPolygon.js).
   const polygon = useAreaPolygon({
-    shapes: selectedArea?.shapes ?? [], onFinish: finishPolygon,
+    onFinish: finishPolygon,
     project: (lngLat) => mapRef.current.project(lngLat),
   })
   const drawingAny = drawing || polygon.active
@@ -669,17 +739,28 @@ export default function HexMap({
     }
   }, [selectedCell, species?.id])
 
+  // Moves the map to the shapes of a paste (fitArea, { shapes, id }, a new
+  // id for each paste; see App.jsx) once they are the area, so all of them
+  // are in view even when far apart, clear of the panels. Nothing else sets
+  // fitArea: a box or polygon drawn is on screen already, and Back or
+  // Forward leave the map where it is. Before the map has loaded,
+  // handleLoad fits the area instead.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!fitArea || !map || !mapReady.current) {
+      return
+    }
+    fitMapToShapes(map, fitArea.shapes, 900)
+  }, [fitArea])
+
   // When the page opens with a hexagon in the address (a shared link), moves
   // the map to it, at a zoom where hexagons of its size are shown; with an
-  // area, fits its shapes in view beside the panel.
+  // area, fits all its shapes in view, clear of the panels (fitMapToShapes).
   function handleLoad() {
     mapReady.current = true
     const map = mapRef.current
     if (map && selectedArea) {
-      const container = map.getContainer()
-      map.fitBounds(shapesBounds(selectedArea.shapes), {
-        padding: fitPadding(container.clientWidth, container.clientHeight), duration: 0,
-      })
+      fitMapToShapes(map, selectedArea.shapes, 0)
       return
     }
     if (!selectedCell || !map) {
@@ -728,8 +809,9 @@ export default function HexMap({
   }
 
   /**
-   * Hands a finished polygon (ring, [lng, lat] points) on to be added to
-   * the area; returns null, or why it was refused (see onAreaPolygon).
+   * Hands a finished polygon (ring, [lng, lat] points) on to be put in
+   * place of the area; returns null, or why it was refused (see
+   * onAreaPolygon).
    */
   function finishPolygon(ring) {
     const problem = onAreaPolygon(ring)
@@ -886,7 +968,7 @@ export default function HexMap({
             onPaste={onAreaPasted}
             size={selectedArea ? { res: selectedArea.res, picked: selectedArea.picked } : null}
             onSizeChange={onAreaSizeChange}
-            onRemoveShape={onRemoveShape} onBack={onRemoveLastShape} onClear={onClearArea ?? (() => {})}
+            onRemoveShape={onRemoveShape} onBack={onAreaBack} onClear={onClearArea ?? (() => {})}
             unavailable={Boolean(species)} message={areaMessage} onDismissMessage={onDismissAreaMessage}
             onShow={species ? null : onShowArea} />
           {reserves?.available && <ReservesSwitch shown={reservesShown} onChange={onReservesShownChange} />}

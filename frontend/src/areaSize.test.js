@@ -3,15 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { boxCells } from './area'
 import { addPastedShapes } from './areaPaste'
 import { boxShapeOf, readAreaText, shapesCells, shapesProblem } from './areaShapes'
-import { minimumAreaKm2 } from './area'
 import {
-  AREA_SIZES, AUTO_PREFERRED, autoSize, autoSizes, pickedSizeProblem, sizeHint, sizeKm, sizeLabel, sizedArea,
+  AREA_SIZES, AUTO_PREFERRED, AUTO_SMALL_SHAPE_KM2, autoSize, autoSizes, pickedSizeProblem, sizeKm, sizeLabel,
+  sizedArea,
 } from './areaSize'
 
 // Boxes around Kamloops (about 979 km²), most of BC, one of about 75 km²
-// (too small for about 7 km, enough for about 3 km), one just over (about
-// 155 km²) and one just under (about 141 km²) the minimum for about 7 km
-// (144.5 km²), and one far too small.
+// (small: Auto starts at about 3 km), one just over (about 155 km²) and one
+// just under (about 141 km²) Auto's line for a small shape (144.5 km²), and
+// one far too small (under the minimum of 20.6 km²).
 const KAMLOOPS = boxShapeOf({ west: -120.6, south: 50.55, east: -120.1, north: 50.8 })
 const BC = boxShapeOf({ west: -139.1, south: 48.2, east: -114, north: 60 })
 const SMALL = boxShapeOf({ west: -120.3, south: 50.6, east: -120.18, north: 50.68 })
@@ -31,11 +31,13 @@ describe('Auto', () => {
     expect(both.cells).toEqual(shapesCells([KAMLOOPS, BC], 6).cells)
   })
 
-  it('uses about 3 km only for a shape too small for about 7 km, for the whole area', () => {
-    expect(minimumAreaKm2(6)).toBeCloseTo(144.5, 1)
+  it('starts at about 3 km for a small shape, for the whole area, as before the fixed minimum', () => {
+    expect(AUTO_SMALL_SHAPE_KM2).toBeCloseTo(144.5, 1)
     expect(autoSizes([JUST_OVER])).toEqual([6, 5, 4])
     expect(autoSize([JUST_OVER]).res).toBe(6)
-    expect(autoSizes([JUST_UNDER])).toEqual([7])
+    expect(autoSizes([JUST_UNDER])).toEqual([7, 6, 5, 4])
+    // A small shape now passes at about 7 km too; Auto still prefers 3 km.
+    expect(shapesProblem([JUST_UNDER], 6)).toBeNull()
     expect(autoSize([JUST_UNDER]).res).toBe(7)
     expect(autoSize([SMALL]).res).toBe(7)
     const both = autoSize([KAMLOOPS, SMALL])
@@ -51,9 +53,20 @@ describe('Auto', () => {
     expect(autoSize(shapes).res).toBe(5)
   })
 
-  it("refuses with about 3 km's message when a shape is too small even there", () => {
-    expect(autoSize([KAMLOOPS, TINY])).toEqual({ problem: shapesProblem([KAMLOOPS, TINY], 7) })
-    expect(autoSize([TINY]).problem).toMatch(/^The box is about .* minimum of 20\.6 km²/)
+  it('moves up from about 3 km for a small shape when the area is too big there', () => {
+    // A small box beside most of BC: over 200,000 hexagons at about 3 km.
+    expect(shapesProblem([SMALL, BC], 7)).toMatch(/touches about|together touch/)
+    const both = autoSize([SMALL, BC])
+    expect(both.res).toBe(6)
+    expect(both.cells).toEqual(shapesCells([SMALL, BC], 6).cells)
+  })
+
+  it('refuses with the same message at every size when a shape is under the minimum', () => {
+    for (const res of AREA_SIZES) {
+      expect(shapesProblem([KAMLOOPS, TINY], res)).toBe(shapesProblem([KAMLOOPS, TINY], 7))
+    }
+    expect(autoSize([KAMLOOPS, TINY])).toEqual({ problem: shapesProblem([KAMLOOPS, TINY], 4) })
+    expect(autoSize([TINY]).problem).toMatch(/^The box is about .* km², smaller than the minimum of 20\.6 km²\. Draw a larger box\.$/)
   })
 
   it("refuses with the largest size's message when the area is too big even there", () => {
@@ -65,12 +78,15 @@ describe('Auto', () => {
 })
 
 describe('a size picked', () => {
-  it("refuses with the API's message and, for a shape too small, a hint", () => {
-    expect(pickedSizeProblem([KAMLOOPS], 6)).toBeNull()
-    expect(pickedSizeProblem([KAMLOOPS], 4)).toBe(`${shapesProblem([KAMLOOPS], 4)} Or choose smaller hexagons.`)
+  it("refuses with the API's message alone, and only for an area too big", () => {
+    // Kamloops passes at every size now, even with hexagons of about 1,770 km².
+    for (const res of AREA_SIZES) {
+      expect(pickedSizeProblem([KAMLOOPS], res)).toBeNull()
+    }
     // Too big: the API's message already says to use larger hexagons.
     expect(pickedSizeProblem([BC], 7)).toBe(shapesProblem([BC], 7))
-    expect(sizeHint([TINY], 7)).toBe('')
+    expect(pickedSizeProblem([TINY], 6)).toBe(shapesProblem([TINY], 6))
+    expect(pickedSizeProblem([TINY], 6)).not.toContain('Or choose')
   })
 
   it('is worked out at that size, or by Auto with none', () => {

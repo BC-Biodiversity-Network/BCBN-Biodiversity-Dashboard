@@ -5,12 +5,13 @@
 // Each click on the map adds a point (rounded as a box's corners are, see
 // roundCorner); dragging still pans the map, as MapLibre gives no click for
 // a drag. Clicking on or near the first point (CLOSE_PIXELS), Enter, a
-// double-click or the panel's "Finish" closes the polygon, which then joins
-// the area with the same checks as every other shape (App.jsx). A point
-// that would make two edges cross is not added, and closing is refused when
-// the closing edge would cross. Backspace (or "Undo point") removes the
-// last point, Esc (or "Cancel") drops the polygon; neither changes the area
-// or the history.
+// double-click or the panel's "Finish" closes the polygon, which then takes
+// the place of the whole area (one shape at a time), with the same checks
+// as every other shape (App.jsx). A point that would make two edges cross
+// is not added, and closing is refused when the closing edge would cross.
+// Backspace (or "Undo point") removes the last point, Esc (or "Cancel")
+// drops the polygon; neither changes the area or the history, so the area
+// drawn before stays until the polygon is finished.
 
 import { useEffect, useRef, useState } from 'react'
 
@@ -23,8 +24,9 @@ export const POLYGON_HINT = 'Click to add points. Click the first point, press E
 // How near the first point (in screen pixels) a click closes the polygon.
 export const CLOSE_PIXELS = 10
 
-// How many points may be left before the area's limit (MAX_AREA_POINTS)
-// when the hint starts saying how many are left.
+// How many points may be left before the area's limit (MAX_AREA_POINTS,
+// all for the polygon, as it is the area's only shape) when the hint starts
+// saying how many are left.
 export const POINTS_LEFT_WARNING = 20
 
 // The short messages while drawing.
@@ -32,20 +34,12 @@ export const CROSSING_POINT = 'That point would make two edges cross, so it was 
 export const CROSSING_CLOSE = 'Closing the polygon here would make two edges cross. Remove the last point '
   + '(Backspace) or add another.'
 export const TOO_FEW_POINTS = 'A polygon needs at least 3 different points.'
-export const NO_POINTS_LEFT = `The area can have at most ${MAX_AREA_POINTS} points (a box counts as 4), so no more `
-  + 'can be added. Finish the polygon or remove a point.'
-
-/**
- * How many points the area's shapes have, as the API counts them: 4 for a
- * box, a polygon's own points.
- */
-export function areaPointCount(shapes) {
-  return shapes.reduce((sum, shape) => sum + (shape.isBox ? 4 : shape.ring.length), 0)
-}
+export const NO_POINTS_LEFT = `A polygon can have at most ${MAX_AREA_POINTS} points, so no more can be added. `
+  + 'Finish the polygon or remove a point.'
 
 /**
  * The hint's note on how many points are left before the area's limit
- * (left, after the area's shapes and the points drawn so far), or null
+ * (left, after the points drawn so far), or null
  * while more than POINTS_LEFT_WARNING are left.
  */
 export function pointsLeftText(left) {
@@ -133,9 +127,8 @@ function keyForAField(event) {
 }
 
 /**
- * The polygon being drawn. shapes is the area's shapes (for the point
- * limit); onFinish(ring) adds a closed ring ([lng, lat] points) to the area
- * and returns null, or why it was refused (the API's message, as for every
+ * The polygon being drawn. onFinish(ring) puts a closed ring ([lng, lat]
+ * points) in place of the area and returns null, or why it was refused (the API's message, as for every
  * shape), in which case drawing goes on so it can be fixed; project([lng,
  * lat]) gives a point's pixel on the map. Returns:
  *   active, points, mouse   whether drawing, the points so far, the mouse
@@ -147,12 +140,13 @@ function keyForAField(event) {
  * While drawing, Enter finishes, Backspace removes the last point and Esc
  * cancels (not while typing in a field).
  */
-export function useAreaPolygon({ shapes, onFinish, project }) {
+export function useAreaPolygon({ onFinish, project }) {
   const [active, setActive] = useState(false)
   const [points, setPoints] = useState([])
   const [mouse, setMouse] = useState(null)
   const [message, setMessage] = useState(null)
-  const left = MAX_AREA_POINTS - areaPointCount(shapes) - points.length
+  // The area's shapes play no part: the polygon replaces them all.
+  const left = MAX_AREA_POINTS - points.length
 
   /** Drops the polygon being drawn and stops drawing. */
   function cancel() {
@@ -168,7 +162,7 @@ export function useAreaPolygon({ shapes, onFinish, project }) {
     setActive(true)
   }
 
-  /** Closes the polygon and adds it to the area, or says why not. */
+  /** Closes the polygon and puts it in place of the area, or says why not. */
   function finish() {
     if (!active) {
       return

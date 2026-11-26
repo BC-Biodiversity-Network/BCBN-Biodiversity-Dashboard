@@ -145,7 +145,7 @@ describe('checking each pasted polygon', () => {
     const tiny = 'POLYGON((-121 50, -120.99 50, -120.99 50.01, -121 50))'
     const tinyShape = readAreaText('p:-121,50,-120.99,50,-120.99,50.01')
     expect(refused(tiny)).toBe(shapesProblem(tinyShape, 6))
-    expect(refused(tiny)).toMatch(/^The polygon is about .* smaller than the minimum of 144\.5 km²/)
+    expect(refused(tiny)).toMatch(/^The polygon is about .* km², smaller than the minimum of 20\.6 km²\. Draw a larger polygon\.$/)
     // Two big polygons at the finest hexagons: each under the maximum on its
     // own, over it together.
     const halves = 'MULTIPOLYGON(((-130 50, -120 50, -120 59, -130 59)), ((-120 50, -110 50, -110 59, -120 59)))'

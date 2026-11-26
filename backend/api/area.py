@@ -24,8 +24,8 @@ MAX_AREA_POINTS points. Each shape comes back as an AreaShape: its ring of
 An area of several shapes (area_species takes a list of AreaShape): a
 hexagon counts if it overlaps
 any of the shapes, and counts once even when it is in two (area_cells).
-Each shape must cover at least MIN_AREA_HEXAGONS average hexagons, and the
-whole area may touch at most MAX_AREA_HEXAGONS hexagons (check_shape_sizes,
+Each shape must cover at least MIN_AREA_KM2 (the same at every hexagon
+size), and the whole area may touch at most MAX_AREA_HEXAGONS hexagons (check_shape_sizes,
 then area_cells). A box's area uses the box formula below, unchanged; a
 polygon's uses the spherical polygon formula turf uses
 (polygon_area_km2).
@@ -41,11 +41,17 @@ outline the hexagons the API counted without the API listing them. The
 answer gives how many there are (hexagon_count), not their ids, which for a
 large box would be megabytes.
 
-The smallest box (MIN_AREA_HEXAGONS): a box must cover at least that many
-average hexagons of its resolution, so nobody can draw a box tightly around
-one small place, such as a First Nations reserve, and pull out that place's
-records alone. The area is the box's true area on the sphere H3 uses, so it
-is compared like for like with H3's average hexagon area.
+The smallest shape (MIN_AREA_KM2): every shape, box or polygon, drawn or
+pasted, must cover at least MIN_AREA_HEXAGONS average hexagons of the
+smallest size the maps use (about 3 km, resolution 7), about 20.6 km²,
+whatever the hexagon size asked for, so nobody can draw a shape tightly
+around one small place, such as a First Nations reserve, and pull out that
+place's records alone. One minimum is enough for every size: whole
+hexagons are always counted, so with larger hexagons the area counted is
+never smaller than at about 3 km. (Until 2026-11-26 the minimum was
+MIN_AREA_HEXAGONS average hexagons of the size asked for, larger for
+larger hexagons.) The area is the shape's true area on the sphere H3 uses,
+so it is compared like for like with H3's average hexagon area.
 
 The largest box (MAX_AREA_HEXAGONS): a box may touch at most that many
 hexagons. Measured on a laptop in November 2026, finding the hexagons and
@@ -87,10 +93,17 @@ from api.sensitive import hidden_species
 from api.settings import RESOLUTIONS
 from api.species_list import check_list_options
 
-# The smallest box, in average hexagons of the resolution asked for. Kept
-# above 1 so a box cannot be drawn around one small place (such as a First
-# Nations reserve) to get only that place's records. Change it here only.
+# The smallest shape, in average hexagons of the smallest size the maps use
+# (about 3 km, resolution 7). Kept above 1 so a shape cannot be drawn
+# around one small place (such as a First Nations reserve) to get only that
+# place's records. Change it here only.
 MIN_AREA_HEXAGONS = 4
+
+# The smallest shape allowed, in km², the same at every hexagon size:
+# MIN_AREA_HEXAGONS average hexagons of the smallest size (about 20.6 km²).
+# Whole hexagons are always counted, so with larger hexagons the area
+# counted is never smaller than at about 3 km, and one minimum is enough.
+MIN_AREA_KM2 = MIN_AREA_HEXAGONS * h3.average_hexagon_area(max(RESOLUTIONS), "km^2")
 
 # The most hexagons a box may touch (see the top of this file for the
 # measurements behind it).
@@ -513,26 +526,23 @@ def shape_area_km2(shape):
     return box_area_km2(shape.box) if shape.is_box else polygon_area_km2(shape.ring)
 
 
-def minimum_area_km2(res):
-    """Return the smallest box allowed at a resolution, in km²:
-    MIN_AREA_HEXAGONS average hexagons."""
-    return MIN_AREA_HEXAGONS * h3.average_hexagon_area(res, "km^2")
+def too_small(name, area, kind):
+    """The error for a shape (name, as shape_name gives it; kind, "box" or
+    "polygon") whose area (km²) is under MIN_AREA_KM2, giving the minimum
+    in km², the same whatever the hexagon size."""
+    return AreaRequestError(
+        f"{name} is about {area:,.1f} km², smaller than the minimum of {MIN_AREA_KM2:,.1f} km². "
+        f"Draw a larger {kind}.")
 
 
 def check_box_size(box, res):
-    """Stop with a clear message when the box is smaller than the minimum
-    at this resolution, or would touch more than MAX_AREA_HEXAGONS
-    hexagons judging by its area (checked before the hexagons are found, so
-    a huge box costs nothing). Returns the box's area in km²."""
+    """Stop with a clear message when the box is smaller than
+    MIN_AREA_KM2, or would touch more than MAX_AREA_HEXAGONS hexagons at
+    this resolution judging by its area (checked before the hexagons are
+    found, so a huge box costs nothing). Returns the box's area in km²."""
     area = box_area_km2(box)
-    smallest = minimum_area_km2(res)
-    if area < smallest:
-        # The message gives the hexagons' size, never the resolution number,
-        # as it may be shown to visitors as it is.
-        raise AreaRequestError(
-            f"The box is about {area:,.1f} km², smaller than the minimum of {smallest:,.1f} km² for "
-            f"hexagons of about {h3.average_hexagon_area(res, 'km^2'):,.1f} km² ({MIN_AREA_HEXAGONS} times "
-            "their average area). Draw a larger box.")
+    if area < MIN_AREA_KM2:
+        raise too_small("The box", area, "box")
     estimate = area / h3.average_hexagon_area(res, "km^2")
     if estimate > MAX_AREA_HEXAGONS:
         raise too_many_hexagons(estimate, res)
@@ -562,8 +572,8 @@ def too_many_joined(count, res):
 
 
 def check_shape_sizes(shapes, res):
-    """Stop with a clear message when a shape covers fewer than
-    MIN_AREA_HEXAGONS average hexagons, or would touch more than
+    """Stop with a clear message when a shape is smaller than
+    MIN_AREA_KM2 (whatever the resolution), or would touch more than
     MAX_AREA_HEXAGONS hexagons on its own judging by its area (both checked
     before any hexagon is found, so a huge shape costs nothing), each shape
     named as shape_name names it. Returns each shape's area in km², in
@@ -571,17 +581,13 @@ def check_shape_sizes(shapes, res):
     if len(shapes) == 1 and shapes[0].is_box:
         return [check_box_size(shapes[0].box, res)]
     average = h3.average_hexagon_area(res, "km^2")
-    smallest = minimum_area_km2(res)
     areas = []
     for number, shape in enumerate(shapes, start=1):
         name = shape_name(number, len(shapes), shape.is_box)
         kind = "box" if shape.is_box else "polygon"
         area = shape_area_km2(shape)
-        if area < smallest:
-            raise AreaRequestError(
-                f"{name} is about {area:,.1f} km², smaller than the minimum of {smallest:,.1f} km² for "
-                f"hexagons of about {average:,.1f} km² ({MIN_AREA_HEXAGONS} times their average area). Draw a "
-                f"larger {kind}.")
+        if area < MIN_AREA_KM2:
+            raise too_small(name, area, kind)
         if area / average > MAX_AREA_HEXAGONS:
             raise too_many_hexagons(area / average, res, name, kind)
         areas.append(area)
@@ -726,7 +732,8 @@ def area_species(data, shapes, res, year_from=None, year_to=None, q=None, offset
         "box": dict(zip(("west", "south", "east", "north"), box)) if box else None,
         "res": res,
         "box_area_km2": round(area, 1),
-        "minimum_area_km2": round(minimum_area_km2(res), 1),
+        # The smallest shape allowed, the same at every resolution.
+        "minimum_area_km2": round(MIN_AREA_KM2, 1),
         # How many hexagons at this resolution overlap the area: the front
         # end finds the same ones with h3-js to outline them.
         "hexagon_count": len(cells),

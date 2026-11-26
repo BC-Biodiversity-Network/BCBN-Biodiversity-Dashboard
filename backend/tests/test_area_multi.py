@@ -183,13 +183,26 @@ def test_a_polygon_that_is_too_small(client):
     tiny = "p:-125.20,39.80,-125.19,39.80,-125.195,39.81"
     area = polygon_area_km2(read_area_shapes(tiny)[0].ring)
     average = h3.average_hexagon_area(7, "km^2")
-    expected = (f"is about {area:,.1f} km², smaller than the minimum of {4 * average:,.1f} km² for hexagons of "
-                f"about {average:,.1f} km² (4 times their average area). Draw a larger polygon.")
+    expected = f"is about {area:,.1f} km², smaller than the minimum of {4 * average:,.1f} km². Draw a larger polygon."
     assert refused(client, tiny) == "The polygon " + expected
     assert refused(client, f"{A_BOX};{tiny}") == "Shape 2 (a polygon) " + expected
     # A small box among other shapes is named the same way.
     assert refused(client, f"{B_TRIANGLE};b:-125.2,39.8,-125.19,39.81").startswith("Shape 2 (a box) is about ")
     assert "Draw a larger box." in refused(client, f"{B_TRIANGLE};b:-125.2,39.8,-125.19,39.81")
+
+
+@pytest.mark.parametrize("res", [4, 5, 6, 7])
+def test_one_minimum_for_every_shape_at_every_size(client, res):
+    # A box and a triangle of about 65 km² each: over the minimum of about
+    # 20.6 km², so taken at every size (until 2026-11-26 they were refused
+    # with hexagons of about 7 km and larger, whose minimum was bigger).
+    assert answer(client, f"{A_BOX};{B_TRIANGLE}", res)["shape_count"] == 2
+    # A shape under it is refused with the same words at every size.
+    tiny = "p:-125.20,39.80,-125.19,39.80,-125.195,39.81"
+    assert refused(client, tiny, res) == refused(client, tiny, 7)
+    assert refused(client, tiny, res).endswith("smaller than the minimum of 20.6 km². Draw a larger polygon.")
+    assert refused(client, "b:-125.2,39.8,-125.19,39.81", res).endswith(
+        "smaller than the minimum of 20.6 km². Draw a larger box.")
 
 
 def test_a_shape_that_is_too_big(client, monkeypatch):

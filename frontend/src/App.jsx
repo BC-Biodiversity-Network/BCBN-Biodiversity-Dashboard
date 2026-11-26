@@ -11,8 +11,8 @@ import { loadHexData } from './loadHexData'
 import RankCard from './RankCard'
 import RankName from './RankName'
 import {
-  AREA_LIST, CELL_LIST, INDIGENOUS_PAGE_SEARCH, PANEL_FROM_CLICK, clearAreaMove, isPlainMap, keptListChoices,
-  mapSearch, rankKey, readArea, readAreaPanelOpen, readCell, readList, readMapYears, readRank,
+  AREA_LIST, CELL_LIST, INDIGENOUS_PAGE_SEARCH, PANEL_FROM_CLICK, areaBackSteps, clearAreaMove, isPlainMap,
+  keptListChoices, mapSearch, rankKey, readArea, readAreaPanelOpen, readCell, readList, readMapYears, readRank,
   readReservesShown, readSpeciesKey, speciesDatasetsSearch, withAreaHistory, withReserves, withYears,
 } from './route'
 import SearchBox from './SearchBox'
@@ -90,22 +90,30 @@ const HEX_DATA_URLS = {
 // of interest" panel; it selects every hexagon any shape touches, all at one
 // hexagon size whatever the map's zoom: "Auto" (the default, no area_res in
 // the address) prefers about 7 km (about 3 km only for a shape too small for
-// it, larger only for an area too big), again whenever a shape is added or
-// removed, and the visitor can pick a size in
-// the panel instead (area_res), kept until changed or cleared (see
-// areaSize.js). It opens the area panel listing their species. The area
+// it, larger only for an area too big), again whenever a shape is removed,
+// and the visitor can pick a size in the panel instead (area_res), kept
+// until changed, cleared, or a new shape replaces the area, which is at
+// Auto again (see areaSize.js). It opens the area panel listing their species. The area
 // stays, on the map and in the address (area=<area text>, area_res,
 // area_q, ...; see readArea in route.js), until "Clear area" removes it; every other move (a hexagon, a
 // species, a rank, the years) keeps it. On a single species' map it stays in
 // the address but is not shown, and it is back when the card closes.
 // History:
-//   - each shape drawn is added to the area as a new entry (the first one
-//     after an entry without an area), and closes an open hexagon panel; a
-//     paste adds all its shapes as one entry;
-//     removing a shape with its x, or the last one with "Back", is a new
-//     entry too, so the browser's back button undoes each of them (removing
-//     the only shape leaves no area, which Back also undoes); so is
-//     changing the hexagon size;
+//   - the area is one shape at a time (Evan, 2026-11-18): each box or
+//     polygon drawn, and each paste, replaces the whole area as a new entry
+//     (the first one after an entry without an area), and closes an open
+//     hexagon panel; a paste of several polygons (a MULTIPOLYGON, a
+//     FeatureCollection) gives all its shapes as one entry, and an old link
+//     of several shapes still shows them all;
+//     removing a shape with its x is a new entry too, so the browser's back
+//     button undoes each of them (removing the only shape leaves no area,
+//     which Back also undoes); so is changing the hexagon size;
+//   - the area panel's "Previous area" goes back to the entry just before the
+//     area's last change (areaBackSteps in route.js), so it shows the area
+//     as it was before the last shape drawn, pasted or removed or the last
+//     size picked; it is greyed out when that would bring back no earlier
+//     area that is not empty (no area yet, the first area after none, a
+//     shared link's area not changed since);
 //   - clicking a hexagon opens its panel on top of the area panel, by the
 //     hexagon rules above (a new entry for the first click), so its x or
 //     Back returns to the area panel;
@@ -192,6 +200,11 @@ export default function App({
   const mapArea = useMemo(() => (shownArea ? { ...shownArea, cells: areaCells } : null), [areaText])
   // What was wrong with the last shape drawn (the API's words), or null.
   const [areaMessage, setAreaMessage] = useState(null)
+  // The shapes of the last paste taken as the area, for the map to fit them
+  // in view ({ shapes, id }, id new for each paste; see fitArea in
+  // HexMap.jsx), or null. Only a paste sets it: a box or polygon drawn is in
+  // view already, and Back or Forward leave the map where it is.
+  const [areaFit, setAreaFit] = useState(null)
   // Whether the area panel is open and on screen (a hexagon's panel covers
   // it), and whether either panel takes the side panel (covering the cards).
   const areaPanelShown = Boolean(shownArea && areaPanelOpen && !addressCell)
@@ -377,55 +390,64 @@ export default function App({
     return res === null ? sizedArea(shapes, null).problem ?? null : pickedSizeProblem(shapes, res)
   }
 
-  // Adds a box drawn on the map to the area, or starts the area with it, at
-  // the area's size (Auto unless one was picked). A box the API would refuse
-  // (too small, too big, too many points, the area too big once joined) is
-  // not added, and the panel says why in the API's words.
-  function drawArea(box) {
-    const shapes = [...(keptArea?.shapes ?? []), boxShapeOf(box)]
-    const res = keptArea?.res ?? null
-    const problem = areaTextProblem(writeAreaText(shapes)) ?? sizeProblem(shapes, res)
-    setAreaMessage(problem)
-    if (!problem) {
-      moveToShapes(shapes, res)
-    }
-  }
-
   /**
-   * Adds a polygon drawn on the map (ring, its [lng, lat] points, already
-   * rounded) to the area as one shape and one new entry, or starts the area
-   * with it, with the same checks and messages as every other shape (the
-   * API's, then the area's size: Auto or a size picked). Returns null, or
-   * why it was refused, which the panel shows while the polygon is still
-   * being drawn, so it can be fixed.
+   * Puts new shapes (a box or a polygon drawn, or every polygon of one
+   * paste) in place of the whole area, as one new entry the back button
+   * undoes, at Auto: a size picked for the old area is not kept, and Back
+   * brings the old area back with its own size. Shapes the API would
+   * refuse (too small, too big, too many points) leave the area as it was,
+   * and the reason is returned in the API's words; null when they took the
+   * area's place. The same area again, at Auto, adds no entry.
    */
-  function addPolygon(ring) {
-    const shapes = [...(keptArea?.shapes ?? []), { ring, isBox: false, box: null }]
-    const res = keptArea?.res ?? null
+  function replaceArea(shapes) {
+    const res = null
     const problem = areaTextProblem(writeAreaText(shapes)) ?? sizeProblem(shapes, res)
     if (problem) {
       return problem
     }
     setAreaMessage(null)
-    moveToShapes(shapes, res)
+    // Drawing the area that is already there changes nothing, so no entry
+    // is added for it.
+    if (!keptArea || keptArea.res !== res || writeAreaText(keptArea.shapes) !== writeAreaText(shapes)) {
+      moveToShapes(shapes, res)
+    }
     return null
   }
 
-  // Adds the shapes of a text pasted in the panel's Paste tab (WKT or
-  // GeoJSON, see areaPaste.js) to the area, all at once as one new entry, so
-  // the back button takes the whole paste away; or adds none and returns
-  // why (shown under the text box). The area's size follows the same rule as
-  // for a box drawn.
+  // Puts a box drawn on the map in place of the area (see replaceArea); a
+  // box refused leaves the area as it was, and the panel says why.
+  function drawArea(box) {
+    setAreaMessage(replaceArea([boxShapeOf(box)]))
+  }
+
+  /**
+   * Puts a finished polygon drawn on the map (ring, its [lng, lat] points,
+   * already rounded) in place of the area as one shape (see replaceArea).
+   * Only a closed polygon gets here: one cancelled while drawn never does,
+   * so the area stays as it was. Returns null, or why it was refused, which
+   * the panel shows while the polygon is still being drawn, so it can be
+   * fixed (the area stays as it was meanwhile).
+   */
+  function addPolygon(ring) {
+    return replaceArea([{ ring, isBox: false, box: null }])
+  }
+
+  /**
+   * Puts the shapes of a text pasted in the panel's Paste tab (WKT or
+   * GeoJSON, see areaPaste.js) in place of the area, all at once as one new
+   * entry, so the back button brings the area before the paste back; a
+   * MULTIPOLYGON or a FeatureCollection gives several shapes. The map then
+   * moves so that all of them are in view (areaFit). Returns null,
+   * or why nothing was put in its place (shown under the text box).
+   */
   function pasteArea(text) {
-    const res = keptArea?.res ?? null
-    const { shapes, problem } = addPastedShapes(text, keptArea?.shapes ?? [], null)
-    const refused = problem ?? sizeProblem(shapes, res)
-    if (refused) {
-      return refused
+    const { shapes, problem } = addPastedShapes(text, [], null)
+    const refused = problem ?? replaceArea(shapes)
+    if (!refused) {
+      // The map moves to the pasted shapes, which may be anywhere.
+      setAreaFit((last) => ({ shapes, id: (last?.id ?? 0) + 1 }))
     }
-    setAreaMessage(null)
-    moveToShapes(shapes, res)
-    return null
+    return refused
   }
 
   // Changes the area's hexagon size (the panel's "Hexagon size"): res a size
@@ -442,8 +464,8 @@ export default function App({
     }
   }
 
-  // Removes one shape (its place in the list, from the panel's x), or the
-  // last one (the panel's "Back"), as a new entry the back button undoes.
+  // Removes one shape (its place in the list, from the panel's x) as a new
+  // entry the back button undoes.
   // Removing a shape never makes an area the API would refuse at a size
   // picked; at Auto the size is chosen again.
   function removeShape(index) {
@@ -452,6 +474,24 @@ export default function App({
     }
     setAreaMessage(null)
     moveToShapes(keptArea.shapes.filter((_, place) => place !== index), keptArea.res)
+  }
+
+  // How many entries the area panel's "Previous area" goes back (see
+  // areaBackSteps in route.js), or null when there is no earlier area that
+  // is not empty to go back to, which greys the button out.
+  const areaBack = shownArea ? areaBackSteps(historyState()) : null
+
+  /**
+   * The area panel's "Previous area": goes back in the history to the
+   * earlier area as it was before the last change (the shape drawn, pasted
+   * or removed, or the size picked), as the browser's back button would, so
+   * Forward brings the change back. That entry keeps its own view settings
+   * (reserves=off, the years) as they were. Only offered when there is
+   * such an area (areaBack is not null).
+   */
+  function goBackArea() {
+    setAreaMessage(null)
+    navigateTo(null, { back: areaBack })
   }
 
   // Removes the area ("Clear area") from the address and from the history
@@ -582,7 +622,8 @@ export default function App({
           onAreaPolygon={addPolygon}
           onAreaSizeChange={changeAreaSize}
           onRemoveShape={removeShape}
-          onRemoveLastShape={() => removeShape((keptArea?.shapes.length ?? 0) - 1)}
+          onAreaBack={areaBack === null ? null : goBackArea}
+          fitArea={areaFit}
           areaMessage={areaMessage}
           onDismissAreaMessage={() => setAreaMessage(null)}
           onClearArea={shownArea ? clearArea : null}

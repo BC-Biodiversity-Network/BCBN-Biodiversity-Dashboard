@@ -160,8 +160,7 @@ describe('sizes and hexagons', () => {
   it('refuses a shape too small or too big, naming it as the API does', () => {
     const tiny = 'p:-125.20,39.80,-125.19,39.80,-125.195,39.81'
     const area = polygonAreaKm2(readAreaText(tiny)[0].ring)
-    const expected = `is about ${pyFixed(area, 1)} km², smaller than the minimum of ${pyFixed(4 * average, 1)} km² `
-      + `for hexagons of about ${pyFixed(average, 1)} km² (4 times their average area). Draw a larger polygon.`
+    const expected = `is about ${pyFixed(area, 1)} km², smaller than the minimum of 20.6 km². Draw a larger polygon.`
     expect(shapeSizeProblem(readAreaText(tiny), 7)).toBe(`The polygon ${expected}`)
     expect(shapeSizeProblem(readAreaText(`b:-125.25,39.78,-125.15,39.85;${tiny}`), 7))
       .toBe(`Shape 2 (a polygon) ${expected}`)

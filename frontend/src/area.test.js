@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { areaExportUrl, fetchArea } from './api'
 import {
-  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, boxAreaKm2, boxCells, boxFromCorners,
-  minimumAreaKm2, selectionTest,
+  EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, MIN_AREA_KM2, SMALLEST_HEXAGONS_RES, boxAreaKm2, boxCells,
+  boxFromCorners, selectionTest,
 } from './area'
 import { boxShapeOf, pyFixed, readAreaText, shapesProblem } from './areaShapes'
 import { AREA_GBIF_NOTE, GBIF_CHECKLIST_KEY, boxWkt, gbifBoxSearchUrl } from './gbifLinks'
@@ -45,7 +45,10 @@ describe('a box drawn on the map', () => {
   it('is measured on H3\'s sphere, as the API measures it', () => {
     expect(boxAreaKm2({ west: -180, south: -90, east: 180, north: 90 })).toBeCloseTo(4 * Math.PI * EARTH_RADIUS_KM ** 2, 3)
     expect(boxAreaKm2(KAMLOOPS)).toBeCloseTo(979.4, 1)
-    expect(minimumAreaKm2(6)).toBe(MIN_AREA_HEXAGONS * getHexagonAreaAvg(6, 'km2'))
+    // One minimum for every size: 4 average hexagons of about 3 km.
+    expect(SMALLEST_HEXAGONS_RES).toBe(7)
+    expect(MIN_AREA_KM2).toBe(MIN_AREA_HEXAGONS * getHexagonAreaAvg(7, 'km2'))
+    expect(pyFixed(MIN_AREA_KM2, 1)).toBe('20.6')
     expect([MIN_AREA_HEXAGONS, MAX_AREA_HEXAGONS]).toEqual([4, 200000])
   })
 })
@@ -53,14 +56,13 @@ describe('a box drawn on the map', () => {
 describe('a box too small or too big', () => {
   // The checks are the API's, with its words (shapesProblem in
   // areaShapes.js); the old ones of this file are gone.
-  it.each([4, 5, 6, 7])('is too small under 4 hexagons (resolution %i), saying its size and the minimum', (res) => {
-    const smallest = minimumAreaKm2(res)
-    const problem = shapesProblem([boxShapeOf(boxWithArea(smallest * 0.99))], res)
-    expect(problem).toBe(`The box is about ${pyFixed(smallest * 0.99, 1)} km², smaller than the minimum of `
-      + `${pyFixed(smallest, 1)} km² for hexagons of about ${pyFixed(getHexagonAreaAvg(res, 'km2'), 1)} km² (4 times `
-      + 'their average area). Draw a larger box.')
+  it.each([4, 5, 6, 7])('is too small under the same minimum at every size (resolution %i), saying its size and '
+    + 'the minimum', (res) => {
+    const problem = shapesProblem([boxShapeOf(boxWithArea(MIN_AREA_KM2 * 0.99))], res)
+    expect(problem).toBe(`The box is about ${pyFixed(MIN_AREA_KM2 * 0.99, 1)} km², smaller than the minimum of `
+      + '20.6 km². Draw a larger box.')
     expect(problem).not.toMatch(/resolution/i)
-    expect(shapesProblem([boxShapeOf(boxWithArea(smallest * 1.01))], res)).toBeNull()
+    expect(shapesProblem([boxShapeOf(boxWithArea(MIN_AREA_KM2 * 1.01))], res)).toBeNull()
   })
 
   it('is too big over 200,000 hexagons, saying about how many, before any hexagon is found', () => {

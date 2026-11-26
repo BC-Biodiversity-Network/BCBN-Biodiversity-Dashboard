@@ -5,13 +5,14 @@
 // area is shown the whole map uses that size at every zoom (HexMap.jsx).
 //
 // The checks are the API's own (shapesProblem in areaShapes.js): each shape
-// at least MIN_AREA_HEXAGONS average hexagons, the whole area at most
+// at least MIN_AREA_KM2 (the same at every size), the whole area at most
 // MAX_AREA_HEXAGONS hexagons. About 7 km reads well on the whole map at
 // most zooms, where about 3 km becomes specks when seen from far out, so
-// Auto uses about 3 km only for a shape too small for about 7 km, and larger
-// sizes only for an area too big for it.
+// Auto uses about 3 km first only for a small shape (AUTO_SMALL_SHAPE_KM2),
+// which would show as only a hexagon or two of about 7 km, and larger sizes
+// only for an area too big for the first size tried.
 
-import { minimumAreaKm2 } from './area.js'
+import { MIN_AREA_HEXAGONS, averageHexagonKm2 } from './area.js'
 import { shapeAreaKm2, shapeSizeProblem, shapesCells, shapesProblem } from './areaShapes.js'
 import { hexagonWidthMetres } from './zoomTiers.js'
 
@@ -32,23 +33,27 @@ export function sizeLabel(res) {
 // The size Auto prefers: about 7 km (resolution 6).
 export const AUTO_PREFERRED = 6
 
+// A shape smaller than this (km²) makes Auto start at about 3 km: under
+// MIN_AREA_HEXAGONS average hexagons of about 7 km (about 145 km²), the
+// same line as before 2026-11-26, when it was the minimum at about 7 km.
+export const AUTO_SMALL_SHAPE_KM2 = MIN_AREA_HEXAGONS * averageHexagonKm2(AUTO_PREFERRED)
+
 /**
- * The sizes Auto tries for these shapes, in order: only about 3 km when a
- * shape is smaller than the minimum for about 7 km (MIN_AREA_HEXAGONS
- * average hexagons of it, about 145 km²), else about 7 km and then the
- * larger sizes, for an area too big for it.
+ * The sizes Auto tries for these shapes, in order: about 3 km first when a
+ * shape is small (under AUTO_SMALL_SHAPE_KM2), then the larger sizes, for
+ * an area too big for it; else about 7 km first and then the larger sizes.
  */
 export function autoSizes(shapes) {
-  const tooSmall = shapes.some((shape) => shapeAreaKm2(shape) < minimumAreaKm2(AUTO_PREFERRED))
-  return tooSmall ? [AREA_SIZES[0]] : AREA_SIZES.filter((res) => res <= AUTO_PREFERRED)
+  const small = shapes.some((shape) => shapeAreaKm2(shape) < AUTO_SMALL_SHAPE_KM2)
+  return small ? AREA_SIZES : AREA_SIZES.filter((res) => res <= AUTO_PREFERRED)
 }
 
 /**
  * Chooses the size for Auto: the first size of autoSizes(shapes) at which
  * the shapes pass every check. Returns { res, cells } with the area's
  * hexagons at that size (sorted, each once), or { problem } with the API's
- * message when no size works, at the last size tried (about 3 km for a
- * small shape, else about 52 km).
+ * message when no size works, at the last size tried (about 52 km; a shape
+ * too small is too small at every size, with the same message).
  */
 export function autoSize(shapes) {
   const sizes = autoSizes(shapes)
@@ -64,20 +69,16 @@ export function autoSize(shapes) {
   return { problem: shapesProblem(shapes, sizes[sizes.length - 1]) }
 }
 
-// The hint the page adds to a size refusal (shapesProblem) at a size the
-// visitor picked: " Or choose smaller hexagons." for a shape too small,
-// unless the size is already the smallest. An area too big needs none: the
-// API's message already says to use larger hexagons.
-export function sizeHint(shapes, res) {
-  const tooSmall = shapes.some((shape) => shapeAreaKm2(shape) < minimumAreaKm2(res))
-  return tooSmall && res !== AREA_SIZES[0] ? ' Or choose smaller hexagons.' : ''
-}
-
-// Checks shapes at a size the visitor picked: null when they pass, else the
-// API's message with the page's hint about another size (sizeHint).
+/**
+ * Checks shapes at a size the visitor picked: null when they pass, else the
+ * API's message. Since the minimum is the same at every size (2026-11-26),
+ * only an area too big can fail at one size and pass at another, and the
+ * API's message for it already says to use larger hexagons, so no hint is
+ * added (it used to add " Or choose smaller hexagons." for a shape too
+ * small for the size picked).
+ */
 export function pickedSizeProblem(shapes, res) {
-  const problem = shapesProblem(shapes, res)
-  return problem ? problem + sizeHint(shapes, res) : null
+  return shapesProblem(shapes, res)
 }
 
 // The area's size and hexagons: at the size picked (res, a number), or chosen

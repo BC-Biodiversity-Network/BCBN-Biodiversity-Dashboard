@@ -7,21 +7,28 @@ import { AREA_SIZES, sizeKm, sizeLabel } from './areaSize'
 // The "Create an area of interest" button and its small panel, with the
 // map's other controls at the top left (as in Lucia's approved mockup,
 // Results/Claude outputs/area_of_interest_mockup.html). The panel lists the
-// area's shapes, each with an x that removes it, and has tabs for the ways
-// to add a shape: "Draw" with "Box" and "Polygon" (see areaPolygon.js) and
-// "Paste" (WKT or GeoJSON, see areaPaste.js), then "Back" (removes the last shape)
-// and "Clear area" (removes them all). Every shape added joins the same area.
+// area's shapes (one shape on its own, several each with an x that
+// removes it), and has tabs for the ways
+// to make the area: "Draw" with "Box" and "Polygon" (see areaPolygon.js) and
+// "Paste" (WKT or GeoJSON, see areaPaste.js), then "Previous area" (back to the
+// area before the last change) and "Clear area" (removes it all). The area is one
+// shape at a time (Evan, 2026-11-18): a new box, polygon or paste replaces
+// the current area; one paste may still give several polygons at once.
 
 // What the button says on a single species' map, where an area is not
 // available yet.
 export const DRAW_UNAVAILABLE = "Creating an area of interest is not available on a single species' map yet."
+
+// The tooltip of "Previous area" while it is greyed out: going back would
+// bring back no earlier area that is not empty.
+export const NO_PREVIOUS_AREA = 'No previous area'
 
 // The hint shown while a box is being drawn.
 export const DRAW_HINT = 'Press and drag on the map to draw a box. Esc to cancel.'
 
 // The line under the tabs when nothing is being drawn (as in the mockup).
 export const DRAW_HELP = 'Box: press and drag on the map. Polygon: click to add points, then click the first point '
-  + 'or press Finish. Each shape you add joins the same area.'
+  + 'or press Finish. A new shape replaces the current area.'
 
 /**
  * The hint while a polygon is being drawn: POLYGON_HINT, and how many
@@ -38,16 +45,31 @@ export function autoLabel(res) {
   return res ? `Auto (about ${sizeKm(res)} km)` : 'Auto'
 }
 
-// The line at the top of the panel: "No shapes yet", "1 shape" or "3 shapes".
+/**
+ * The heading at the top of the panel, from how many shapes the area has:
+ * "No area yet", "Your area" for one shape (the usual case, as a new shape
+ * replaces the area), or "Your area: 3 shapes" for several (a pasted
+ * MULTIPOLYGON or FeatureCollection, or an old link).
+ */
 export function shapeCountText(count) {
   if (count === 0) {
-    return 'No shapes yet'
+    return 'No area yet'
   }
-  return count === 1 ? '1 shape' : `${count.toLocaleString('en-US')} shapes`
+  return count === 1 ? 'Your area' : `Your area: ${count.toLocaleString('en-US')} shapes`
 }
 
-// How the panel's list names a shape: "Shape 1: box", "Shape 2: polygon
-// (6 points)".
+/**
+ * What a shape is, on its own: "Box", or "Polygon (6 points)". The panel
+ * shows it alone when the area has only this shape.
+ */
+export function shapeKind(shape) {
+  return shape.isBox ? 'Box' : `Polygon (${shape.ring.length.toLocaleString('en-US')} points)`
+}
+
+/**
+ * How the panel's list names a shape of an area of several (its place in
+ * the list, index, from 0): "Shape 1: box", "Shape 2: polygon (6 points)".
+ */
 export function shapeLabel(shape, index) {
   return `Shape ${index + 1}: ${shape.isBox ? 'box' : `polygon (${shape.ring.length.toLocaleString('en-US')} points)`}`
 }
@@ -64,7 +86,10 @@ export function shapeLabel(shape, index) {
 // null. onPaste(text) adds the shapes of a pasted text and
 // returns null, or returns why nothing was added (shown under the text box,
 // which keeps the text so it can be fixed). onRemoveShape(index), onBack
-// and onClear change the area. unavailable greys the button out (a single species' map). message
+// (or null, which greys "Previous area" out with the tooltip
+// NO_PREVIOUS_AREA: going back would bring no earlier area that is not
+// empty) and
+// onClear change the area. unavailable greys the button out (a single species' map). message
 // (or null) is what was wrong with the last shape drawn, with an x that
 // calls onDismissMessage. onShow (or null) is the "Show area" button beside
 // the main one, which opens the area panel again when it was closed.
@@ -116,8 +141,9 @@ export default function AreaOfInterest({
     onClear()
   }
 
-  // Adds the pasted shapes ("Add"): the text box empties when they are
-  // added, and keeps the text with the reason when they are not.
+  // Uses the pasted shapes ("Use this shape") in place of the area: the text box
+  // empties when they are taken, and keeps the text with the reason when
+  // they are not.
   function addPasted() {
     const problem = onPaste(pasted)
     setPasteProblem(problem)
@@ -147,7 +173,13 @@ export default function AreaOfInterest({
             <strong>{shapeCountText(shapes.length)}</strong>
             <button type="button" className="aoi-close" onClick={() => onOpenChange(false)}>Close</button>
           </div>
-          {hasShapes && (
+          {shapes.length === 1 && (
+            // One shape: only what it is, with no x (Clear area removes it).
+            <ul className="aoi-shapes" aria-label="Shapes in this area">
+              <li><span>{shapeKind(shapes[0])}</span></li>
+            </ul>
+          )}
+          {shapes.length > 1 && (
             <ul className="aoi-shapes" aria-label="Shapes in this area">
               {shapes.map((shape, index) => (
                 // The shapes have no id of their own; their place in the list is
@@ -222,7 +254,9 @@ export default function AreaOfInterest({
                 aria-label="Shapes to paste, as WKT or GeoJSON" placeholder="WKT or GeoJSON, in longitude and latitude"
                 onChange={(event) => setPasted(event.target.value)} />
               <div className="aoi-row aoi-paste-row">
-                <button type="button" className="aoi-button aoi-add" onClick={addPasted}>Add</button>
+                <button type="button" className="aoi-button aoi-add" onClick={addPasted}>
+                  Use this shape
+                </button>
                 <button type="button" className="aoi-link" onClick={() => {
                   setPasted(PASTE_EXAMPLE)
                   setPasteProblem(null)
@@ -244,7 +278,15 @@ export default function AreaOfInterest({
             </p>
           )}
           <div className="aoi-row">
-            <button type="button" className="aoi-button" disabled={!hasShapes} onClick={onBack}>Back</button>
+            {/* The tooltip sits on a wrapper, as a greyed-out button itself
+                gets no mouse events in some browsers. */}
+            <span className="draw-box-wrap" title={onBack ? undefined : NO_PREVIOUS_AREA}>
+              <button type="button" className="aoi-button" disabled={!onBack} onClick={onBack ?? undefined}
+                aria-describedby={onBack ? undefined : 'aoi-no-previous'}>
+                Previous area
+              </button>
+            </span>
+            {!onBack && <span id="aoi-no-previous" className="visually-hidden">{NO_PREVIOUS_AREA}</span>}
             <button type="button" className="aoi-button" disabled={!hasShapes} onClick={clearArea}>Clear area</button>
           </div>
         </section>

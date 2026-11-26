@@ -19,7 +19,7 @@
 
 import { POLYGON_TO_CELLS_FLAGS, getHexagonAreaAvg, polygonToCellsExperimental } from 'h3-js'
 
-import { EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_HEXAGONS, boxAreaKm2 } from './area.js'
+import { EARTH_RADIUS_KM, MAX_AREA_HEXAGONS, MIN_AREA_KM2, boxAreaKm2 } from './area.js'
 
 // The most points a whole area may have, every shape together (a box counts
 // as its 4 corners): the same as MAX_AREA_POINTS in backend/api/area.py.
@@ -580,19 +580,18 @@ function tooManyText(count, res, name, kind) {
 }
 
 // What is wrong with the shapes' sizes at a resolution, or null: each shape
-// must cover at least MIN_AREA_HEXAGONS average hexagons and, judging by its
+// must cover at least MIN_AREA_KM2 (the same at every resolution) and, judging by its
 // area, touch at most MAX_AREA_HEXAGONS hexagons on its own (check_shape_sizes
 // in area.py, the same checks, order and messages). No hexagon is found.
 export function shapeSizeProblem(shapes, res) {
-  const smallest = MIN_AREA_HEXAGONS * average(res)
   for (let index = 0; index < shapes.length; index += 1) {
     const shape = shapes[index]
     const name = shapeName(index + 1, shapes.length, shape.isBox)
     const kind = shape.isBox ? 'box' : 'polygon'
     const area = shapeAreaKm2(shape)
-    if (area < smallest) {
-      return `${name} is about ${pyFixed(area, 1)} km², smaller than the minimum of ${pyFixed(smallest, 1)} km² `
-        + `for hexagons of about ${pyFixed(average(res), 1)} km² (${MIN_AREA_HEXAGONS} times their average area). `
+    if (area < MIN_AREA_KM2) {
+      // As too_small in area.py writes it.
+      return `${name} is about ${pyFixed(area, 1)} km², smaller than the minimum of ${pyFixed(MIN_AREA_KM2, 1)} km². `
         + `Draw a larger ${kind}.`
     }
     if (area / average(res) > MAX_AREA_HEXAGONS) {

@@ -53,7 +53,7 @@ const ASKED = {
 // A pretend /api/area answer, with reserve_names.
 function areaAnswer(names) {
   return {
-    ...cellAnswer(names), box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 144.5,
+    ...cellAnswer(names), box: KAMLOOPS, res: 6, box_area_km2: 979.4, shape_count: 1, minimum_area_km2: 20.6,
     hexagon_count: 45,
     rank: null,
   }

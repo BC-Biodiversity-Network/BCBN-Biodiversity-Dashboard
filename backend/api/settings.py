@@ -4,13 +4,25 @@ settings.py
 The API's settings, read from environment variables when the API starts.
 
 BCBN_API_DATA_DIR
-    The folder holding the six files the API reads:
-        species_card_gbif.parquet
+    The folder holding the API's data files (about 45 MB in all). The
+    seven required ones, which db.py checks at start-up (the API refuses
+    to start, listing every problem, if any is missing or lacks a column
+    it reads):
         species_hex.parquet
-        bcsee_status_by_gbif_species.parquet
-        download_info.json
+        species_card_gbif.parquet
         lunaris_datasets.parquet
+        bcsee_status_by_gbif_species.parquet
         dataset_species_links.parquet
+        dataset_source_checks.parquet
+        download_info.json
+    And three optional reserve files, read by reserves.py, which go
+    together: if any is missing or wrong, the API still starts, with the
+    reserve layer and reminders off and one warning logged:
+        reserves_outlines.geojson
+        reserve_cells.parquet
+        reserves_info.json
+    Only this folder is needed to run the site, not the rest of
+    backend/data/, which is pipeline work.
     If it is not set, the API uses backend/data/api, found from where this
     file is, so it works on any machine without naming a home folder. That
     folder is covered by the data/ rule in .gitignore, so the files are
@@ -84,9 +96,10 @@ class SettingsError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
-    """The API's settings. data_dir is the folder with the six data
-    files; sensitive_max_res must be None until sensitive-species handling
-    exists (see refuse_sensitive_setting). reserve_reminder_rule is
+    """The API's settings. data_dir is the folder with the data files
+    (see BCBN_API_DATA_DIR at the top of this file); sensitive_max_res
+    must be None until sensitive-species handling exists (see
+    refuse_sensitive_setting). reserve_reminder_rule is
     RESERVE_REMINDER_RULE; it is a field only so the tests can try the
     other rule, and is not read from the environment. duckdb_memory_limit
     and duckdb_threads are DuckDB's limits (see duckdb_config)."""

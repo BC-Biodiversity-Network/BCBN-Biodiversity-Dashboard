@@ -32,32 +32,47 @@ cd BCBN-Dashboard
 
 ### 2. Add the data files
 
-The API reads five data files that are not in git (`data/` and `*.parquet`
-are ignored). Ask Lucia for a zip of them (about 43 MB). The folder they go
-in does not exist in a fresh clone, so create it first:
+The API reads seven data files, and three optional reserve files, that are
+not in git (`data/` and `*.parquet` are ignored). Ask Lucia for a zip of
+them (about 45 MB). The folder they go in does not exist in a fresh clone,
+so create it first:
 
 ```
 mkdir -p backend/data/api
 ```
 
-Then put the five files in `backend/data/api/`:
+Then put the files in `backend/data/api/`. The whole folder is about 45 MB,
+and it is the only part of `backend/data/` the site needs: the rest of
+`backend/data/` (several GB) is pipeline work and is not read by the API.
+
+The seven required files. The API checks at start-up that every one is
+there and has the columns it reads; if any is missing or wrong, it refuses
+to start and lists every problem.
 
 | File | Size | Where it comes from |
 | --- | --- | --- |
 | `species_hex.parquet` | 37 MB | `build_species_tables.py`, on the server in `~/bcbn/data/gbif_tables/species_merged/` |
 | `species_card_gbif.parquet` | 3.6 MB | `build_species_tables.py`, same folder |
+| `lunaris_datasets.parquet` | 3.4 MB | `backend/pipeline/lunaris/export_lunaris_datasets.py`, run on the Mac from the filter 3 union table (see "The Lunaris datasets API") |
 | `bcsee_status_by_gbif_species.parquet` | 1.2 MB | `build_bcsee_status_display.py --key-merge` (see "BCSEE statuses on the species cards") |
+| `dataset_species_links.parquet` | 260 KB | `backend/pipeline/lunaris/export_dataset_species_links.py`, run after `match_dataset_species.py`; the links between datasets and species |
+| `dataset_source_checks.parquet` | 110 KB | `backend/pipeline/lunaris/export_dataset_source_checks.py`; what the November 2026 source check found for each dataset (access and licences) |
 | `download_info.json` | 12 KB | `build_dwca_tables.py`, on the server in `~/bcbn/data/gbif_tables/`; the GBIF download DOI to cite |
-| `lunaris_datasets.parquet` | 3.1 MB | `backend/pipeline/lunaris/export_lunaris_datasets.py`, run on the Mac from the filter 3 union table (see "The Lunaris datasets API") |
+
+The three optional reserve files, from
+`backend/pipeline/reserves/build_reserves.py`, about 1.2 MB together. They
+go together: if any of them is missing or not what the API expects, the API
+still starts, but with the reserve layer and the reserve reminders off, and
+it logs one warning saying why (see "The reserve layer and reminder").
+
+| File | Size |
+| --- | --- |
+| `reserves_outlines.geojson` | 1.1 MB |
+| `reserve_cells.parquet` | 74 KB |
+| `reserves_info.json` | 1 KB |
 
 The map's hexagon files (`frontend/public/data/bc_hex_r4.csv.gz` to
 `bc_hex_r7.csv.gz`) are in git, so there is nothing to copy for them.
-
-Optional: the three reserve files (`reserves_outlines.geojson`,
-`reserve_cells.parquet`, `reserves_info.json`, about 1.2 MB together) from
-`backend/pipeline/reserves/build_reserves.py`, in the same folder. Without
-them the API still starts, with the reserve layer and reminders off (see
-"The reserve layer and reminder").
 
 ### 3. Start the API (terminal 1)
 
@@ -102,7 +117,8 @@ All are optional environment variables:
   (`frontend/vite.config.js`). The default is `http://127.0.0.1:8000`. If the
   API runs on another port, start the front end with, for example,
   `BCBN_API_DEV_URL=http://127.0.0.1:8001 npm run dev`.
-- `BCBN_API_DATA_DIR`: the folder with the five data files, if not
+- `BCBN_API_DATA_DIR`: the folder with the data files (the seven required
+  ones and the optional reserve files; see "2. Add the data files"), if not
   `backend/data/api/`. Set it when starting the API, for example
   `BCBN_API_DATA_DIR=~/bcbn-data ../.venv/bin/python -m uvicorn api.main:app --port 8000`.
 - `BCBN_SENSITIVE_MAX_RES`: leave it unset. It is reserved for coarsening
@@ -847,8 +863,8 @@ Python dependencies: `duckdb`, `geopandas`, `shapely`, `requests`, `pandas`, `op
 ## Running the species API
 
 Species search and the species cards come from a small API in `backend/api/`
-(FastAPI and DuckDB). How to install and start it, the five data files it
-reads and where they come from, and its settings are in "Running the website
+(FastAPI and DuckDB). How to install and start it, the seven data files it
+needs and the three optional reserve files, and where they come from, and its settings are in "Running the website
 locally" near the top. Its tests need pytest, which the server does not, so
 install `backend/requirements-dev.txt` (the API's list plus pytest and httpx) first,
 from the top of the repo: `.venv/bin/pip install -r backend/requirements-dev.txt`.

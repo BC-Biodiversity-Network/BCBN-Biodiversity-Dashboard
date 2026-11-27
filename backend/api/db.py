@@ -29,11 +29,19 @@ Only plain SQL is used, so this also runs on the cluster's DuckDB 0.10.3.
 """
 
 import json
+import logging
 
 import duckdb
 
 from api.reserves import ReserveData, load_reserves
-from api.settings import RESOLUTIONS, refuse_sensitive_setting, refuse_unknown_reserve_rule
+from api.settings import (RESOLUTIONS, duckdb_config, refuse_bad_duckdb_limits, refuse_sensitive_setting,
+                          refuse_unknown_reserve_rule)
+
+# uvicorn's own start-up logger, so the line saying which DuckDB limits are
+# in use appears with uvicorn's "INFO:" lines. A logger of this module's own
+# would print nothing under uvicorn, which only shows its own loggers' INFO
+# lines.
+startup_logger = logging.getLogger("uvicorn.error")
 
 # The columns the API reads from each parquet file, so a file from an older
 # build is caught when the API starts rather than halfway through a request.
@@ -525,15 +533,31 @@ class ApiData:
         self.connection.close()
 
 
+def log_duckdb_limits(con, settings):
+    """Log, once at start-up, the memory and thread limits the connection
+    con really has: the values asked for and DuckDB's own reading of them
+    (it shows "2GB" as "1.8 GiB", since a GB is 1000^3 bytes and a GiB
+    1024^3)."""
+    memory, threads = con.execute(
+        "SELECT current_setting('memory_limit'), current_setting('threads')").fetchone()
+    startup_logger.info(
+        "DuckDB limits: memory_limit %s (DuckDB shows %s), threads %s. Change them with "
+        "BCBN_DUCKDB_MEMORY_LIMIT and BCBN_DUCKDB_THREADS.",
+        settings.duckdb_memory_limit, memory, threads)
+
+
 def open_data(settings):
     """Check the data folder, open it and return an ApiData.
 
     Every check runs before anything is returned, and if any fails this
     raises DataFilesError listing all the problems, so the API refuses to
     start rather than serve wrong or partial answers. A value for the
-    sensitive-species setting stops it first, with SettingsError."""
+    sensitive-species setting, or DuckDB limits it does not accept, stop it
+    first, with SettingsError. The connection keeps to the DuckDB memory
+    and thread limits in settings, and they are logged once."""
     refuse_sensitive_setting(settings)
     refuse_unknown_reserve_rule(settings)
+    refuse_bad_duckdb_limits(settings)
 
     data_dir = settings.data_dir
     if not data_dir.is_dir():
@@ -541,8 +565,10 @@ def open_data(settings):
             f"The data folder {data_dir} does not exist. Copy the files into "
             "it or set BCBN_API_DATA_DIR to the folder that has them.")
 
-    con = duckdb.connect()
+    # Every cursor of this connection (one per request) shares its limits.
+    con = duckdb.connect(config=duckdb_config(settings))
     try:
+        log_duckdb_limits(con, settings)
         problems = check_parquet_files(con, data_dir)
         download_info, download_problems = read_download_info(data_dir)
         problems += download_problems
@@ -571,5 +597,5 @@ def open_data(settings):
 
     # The reserve files are optional: when they are missing the API still
     # starts, with the reserves off and one message logged (reserves.py).
-    reserves = load_reserves(data_dir)
+    reserves = load_reserves(data_dir, duckdb_config(settings))
     return ApiData(con, settings, meta, merged_keys, includes_without_status, reserves)

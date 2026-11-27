@@ -1,8 +1,7 @@
 """
 settings.py
 
-The API's two settings, read from environment variables when the API
-starts.
+The API's settings, read from environment variables when the API starts.
 
 BCBN_API_DATA_DIR
     The folder holding the six files the API reads:
@@ -24,14 +23,45 @@ BCBN_SENSITIVE_MAX_RES
     coarsened. It must be left empty: any value stops the API at start-up,
     so nobody can believe species are protected when they are not.
     /api/meta reports it (always null for now).
+
+BCBN_DUCKDB_MEMORY_LIMIT
+    The most memory DuckDB may use, as a number and a unit: "2GB" (the
+    default), "1.5GB", "500MB", "2GiB". KB, MB, GB and TB count in 1000s,
+    KiB, MiB, GiB and TiB in 1024s. Without a limit DuckDB would take up to
+    80% of the machine's memory. It must be at least MIN_DUCKDB_MEMORY
+    (100 MB), since the API cannot load its data with less; anything else,
+    such as "2", "-1GB" or "lots", stops the API at start-up.
+
+BCBN_DUCKDB_THREADS
+    How many threads DuckDB may use: a whole number, 1 or more (default 2).
+    Without it DuckDB would use one thread per CPU core.
 """
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 # backend/api/settings.py -> backend/data/api
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "api"
+
+# DuckDB's limits when the environment does not set them (see the top of
+# this file). 2 GB leaves most of an 8 GB server for everything else.
+DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
+DEFAULT_DUCKDB_THREADS = 2
+
+# The bytes in one of each memory unit DuckDB accepts, by unit in lower case.
+MEMORY_UNITS = {"kb": 1000, "mb": 1000 ** 2, "gb": 1000 ** 3, "tb": 1000 ** 4,
+                "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3, "tib": 1024 ** 4}
+
+# The smallest memory limit allowed, in bytes. Below about this the API
+# runs out of memory while it loads its data at start-up, with a message
+# from DuckDB that does not say which setting to change.
+MIN_DUCKDB_MEMORY = 100 * 1000 ** 2
+
+# A memory limit as written: a number (decimals allowed), optional spaces,
+# and a unit. A minus sign never matches, so "-1GB" is refused.
+MEMORY_LIMIT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*([a-z]+)", re.IGNORECASE)
 
 # The H3 resolutions the species tables hold (h3_r4 to h3_r7).
 RESOLUTIONS = (4, 5, 6, 7)
@@ -58,11 +88,14 @@ class Settings:
     files; sensitive_max_res must be None until sensitive-species handling
     exists (see refuse_sensitive_setting). reserve_reminder_rule is
     RESERVE_REMINDER_RULE; it is a field only so the tests can try the
-    other rule, and is not read from the environment."""
+    other rule, and is not read from the environment. duckdb_memory_limit
+    and duckdb_threads are DuckDB's limits (see duckdb_config)."""
 
     data_dir: Path = DEFAULT_DATA_DIR
     sensitive_max_res: int | None = None
     reserve_reminder_rule: str = RESERVE_REMINDER_RULE
+    duckdb_memory_limit: str = DEFAULT_DUCKDB_MEMORY_LIMIT
+    duckdb_threads: int = DEFAULT_DUCKDB_THREADS
 
 
 def not_implemented_message(value):
@@ -98,9 +131,68 @@ def refuse_unknown_reserve_rule(settings):
             + ", ".join(repr(rule) for rule in RESERVE_REMINDER_RESOLUTIONS) + ".")
 
 
+def parse_duckdb_memory_limit(text):
+    """Read the text of BCBN_DUCKDB_MEMORY_LIMIT and return the limit, with
+    the spaces taken out ("2 GB" gives "2GB"). Empty or missing gives the
+    default. Raises SettingsError if it is not a number and a unit DuckDB
+    knows, or is under MIN_DUCKDB_MEMORY. DuckDB is never asked to read a
+    value this has not checked: it takes "-1GB" to mean no limit at all."""
+    if text is None or text.strip() == "":
+        return DEFAULT_DUCKDB_MEMORY_LIMIT
+    written = text.strip()
+    found = MEMORY_LIMIT_PATTERN.fullmatch(written)
+    if not found or found.group(2).lower() not in MEMORY_UNITS:
+        raise SettingsError(
+            f"BCBN_DUCKDB_MEMORY_LIMIT is {written!r}; it must be a number and a unit, "
+            "such as 2GB, 1.5GB, 500MB or 2GiB (units: KB, MB, GB, TB, KiB, MiB, GiB, TiB).")
+    number, unit = found.groups()
+    if float(number) * MEMORY_UNITS[unit.lower()] < MIN_DUCKDB_MEMORY:
+        raise SettingsError(
+            f"BCBN_DUCKDB_MEMORY_LIMIT is {written!r}; it must be at least 100MB, "
+            "or the API runs out of memory while it loads its data.")
+    return f"{number}{unit}"
+
+
+def parse_duckdb_threads(text):
+    """Read the text of BCBN_DUCKDB_THREADS and return the number of
+    threads. Empty or missing gives the default. Raises SettingsError
+    unless it is a whole number of 1 or more."""
+    if text is None or text.strip() == "":
+        return DEFAULT_DUCKDB_THREADS
+    written = text.strip()
+    # Only the digits 0-9: isdigit() would also let through other scripts'
+    # digits and superscripts, which int() cannot always read.
+    if not re.fullmatch(r"[0-9]+", written) or int(written) < 1:
+        raise SettingsError(
+            f"BCBN_DUCKDB_THREADS is {written!r}; it must be a whole number, 1 or more, such as 2.")
+    return int(written)
+
+
+def refuse_bad_duckdb_limits(settings):
+    """Stop the API if DuckDB's limits are not ones it accepts. This also
+    covers Settings made in code, which do not go through the two parse
+    functions: they are checked by the same rules."""
+    if not isinstance(settings.duckdb_memory_limit, str):
+        raise SettingsError(
+            f"The DuckDB memory limit is {settings.duckdb_memory_limit!r}; it must be text such as '2GB'.")
+    parse_duckdb_memory_limit(settings.duckdb_memory_limit)
+    # bool is a kind of int in Python, so True would otherwise pass as 1.
+    if (not isinstance(settings.duckdb_threads, int) or isinstance(settings.duckdb_threads, bool)
+            or settings.duckdb_threads < 1):
+        raise SettingsError(
+            f"The DuckDB thread count is {settings.duckdb_threads!r}; it must be a whole number, 1 or more.")
+
+
+def duckdb_config(settings):
+    """Return the config to open every DuckDB connection with, so each one
+    keeps to the memory and thread limits in settings."""
+    return {"memory_limit": settings.duckdb_memory_limit, "threads": settings.duckdb_threads}
+
+
 def load_settings(environ=None):
     """Read the settings from the environment (os.environ unless another
-    mapping is given, which the tests use) and return a Settings."""
+    mapping is given, which the tests use) and return a Settings. A bad
+    value for any of them raises SettingsError, which stops the start-up."""
     if environ is None:
         environ = os.environ
 
@@ -111,4 +203,6 @@ def load_settings(environ=None):
     return Settings(
         data_dir=data_dir,
         sensitive_max_res=parse_sensitive_max_res(environ.get("BCBN_SENSITIVE_MAX_RES")),
+        duckdb_memory_limit=parse_duckdb_memory_limit(environ.get("BCBN_DUCKDB_MEMORY_LIMIT")),
+        duckdb_threads=parse_duckdb_threads(environ.get("BCBN_DUCKDB_THREADS")),
     )

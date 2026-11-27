@@ -1,6 +1,7 @@
 """Tests for the checks db.py runs when the API starts: a missing or wrong
 data file must stop the start-up with a message naming every problem."""
 
+import logging
 from dataclasses import replace
 
 import pytest
@@ -138,4 +139,66 @@ def test_sensitive_setting_stops_start_up(settings):
         open_data(asking)
     with pytest.raises(SettingsError, match="not implemented yet"):
         with TestClient(create_app(asking)):
+            pass
+
+
+def duckdb_limits(data):
+    """Return the memory limit and thread count DuckDB reports for the API's
+    connection."""
+    return data.connection.execute(
+        "SELECT current_setting('memory_limit'), current_setting('threads')").fetchone()
+
+
+def test_the_connection_keeps_to_the_default_duckdb_limits(settings):
+    """With the default settings DuckDB gets 2GB (which it shows as 1.8 GiB)
+    and 2 threads, not its own defaults of 80% of memory and every core."""
+    data = open_data(settings)
+    try:
+        assert duckdb_limits(data) == ("1.8 GiB", 2)
+        # A request's cursor shares the connection's limits.
+        assert data.cursor().execute("SELECT current_setting('threads')").fetchone()[0] == 2
+    finally:
+        data.close()
+
+
+def test_the_connection_keeps_to_duckdb_limits_from_the_settings(settings):
+    """Other limits in the settings reach DuckDB."""
+    data = open_data(replace(settings, duckdb_memory_limit="500MB", duckdb_threads=1))
+    try:
+        assert duckdb_limits(data) == ("476.8 MiB", 1)
+    finally:
+        data.close()
+
+
+def test_the_duckdb_limits_are_logged_once_at_start_up(settings, caplog):
+    """Start-up logs one line naming the limits asked for and DuckDB's own
+    reading of them, on uvicorn's logger so it shows under uvicorn."""
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        with TestClient(create_app(replace(settings, duckdb_memory_limit="1GB", duckdb_threads=3))):
+            pass
+    lines = [record for record in caplog.records if "DuckDB limits" in record.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].name == "uvicorn.error"
+    assert lines[0].getMessage().startswith(
+        "DuckDB limits: memory_limit 1GB (DuckDB shows 953.6 MiB), threads 3.")
+
+
+@pytest.mark.parametrize("changes", [{"duckdb_memory_limit": "-1GB"}, {"duckdb_threads": 0}])
+def test_bad_duckdb_limits_stop_start_up(settings, changes):
+    """Bad DuckDB limits made in code stop both open_data and the API's own
+    start-up, before any connection is opened."""
+    with pytest.raises(SettingsError):
+        open_data(replace(settings, **changes))
+    with pytest.raises(SettingsError):
+        with TestClient(create_app(replace(settings, **changes))):
+            pass
+
+
+def test_bad_duckdb_limits_from_the_environment_stop_start_up(data_dir, monkeypatch):
+    """A bad environment variable stops the API's start-up with its message,
+    as uvicorn would show it."""
+    monkeypatch.setenv("BCBN_API_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("BCBN_DUCKDB_THREADS", "zero")
+    with pytest.raises(SettingsError, match="BCBN_DUCKDB_THREADS is 'zero'"):
+        with TestClient(create_app()):
             pass

@@ -108,13 +108,15 @@ def read_outlines(path):
     return names, features
 
 
-def read_cells(path, names):
+def read_cells(path, names, duckdb_config=None):
     """Read reserve_cells.parquet into {(res, h3_cell): (alcode, ...)} on a
     DuckDB connection of its own, closed before returning, so the file is
-    never a table the API's queries could join. Raises ReserveFilesError if
-    the columns are wrong or an alcode has no outline (it would have no
-    name to show)."""
-    con = duckdb.connect()
+    never a table the API's queries could join. duckdb_config is the
+    memory and thread limits to open it with (settings.duckdb_config), so
+    this connection keeps to the same limits as the API's own; None gives
+    DuckDB's defaults. Raises ReserveFilesError if the columns are wrong or
+    an alcode has no outline (it would have no name to show)."""
+    con = duckdb.connect(config=duckdb_config or {})
     try:
         # A quote in the folder name is doubled, so it cannot break the query.
         quoted_path = str(path).replace("'", "''")
@@ -144,16 +146,18 @@ def read_info(path):
     return info
 
 
-def load_reserves(data_dir):
+def load_reserves(data_dir, duckdb_config=None):
     """Read the three reserve files from data_dir and return a ReserveData.
-    If any is missing or wrong, log one message saying why and return a
-    ReserveData with the reserves off, so the rest of the API still works."""
+    duckdb_config is the DuckDB memory and thread limits for reading the
+    cells file (see read_cells). If any file is missing or wrong, log one
+    message saying why and return a ReserveData with the reserves off, so
+    the rest of the API still works."""
     missing = [name for name in (OUTLINES_FILE, CELLS_FILE, INFO_FILE) if not (data_dir / name).is_file()]
     try:
         if missing:
             raise ReserveFilesError(f"{', '.join(missing)} not found in {data_dir}")
         names, features = read_outlines(data_dir / OUTLINES_FILE)
-        cells = read_cells(data_dir / CELLS_FILE, names)
+        cells = read_cells(data_dir / CELLS_FILE, names, duckdb_config)
         info = read_info(data_dir / INFO_FILE)
     except (OSError, ValueError, duckdb.Error) as error:
         # ReserveFilesError and json's errors are both ValueErrors.

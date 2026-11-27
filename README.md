@@ -111,6 +111,21 @@ All are optional environment variables:
   decided yet. Any value stops the API at start-up with a message saying so,
   so nobody thinks species are protected when they are not. `/api/meta`
   reports it (always null for now).
+- `BCBN_DUCKDB_MEMORY_LIMIT`: the most memory DuckDB may use, as a number and
+  a unit, for example `4GB`, `1.5GB`, `500MB` or `2GiB` (KB, MB, GB, TB count
+  in 1000s; KiB, MiB, GiB, TiB in 1024s). The default is `2GB`; without a
+  limit DuckDB would take up to 80% of the machine's memory. It must be at
+  least `100MB`, below which the API cannot load its data. Anything else
+  (`2`, `-1GB`, `lots`) stops the API at start-up with a message saying so.
+- `BCBN_DUCKDB_THREADS`: how many threads DuckDB may use, a whole number of 1
+  or more. The default is `2`; without it DuckDB would use one per CPU core.
+  More threads make the big requests faster (on the Mac, a large area search
+  took about 1.1 s with 2 threads, 0.8 s with 4 and 0.6 s with 8) and use
+  more memory. Anything else stops the API at start-up.
+
+The API logs the two DuckDB limits once when it starts, for example
+`DuckDB limits: memory_limit 2GB (DuckDB shows 1.8 GiB), threads 2`. DuckDB
+shows 2GB as 1.8 GiB because a GB is 1000³ bytes and a GiB 1024³.
 
 ### Common problems
 

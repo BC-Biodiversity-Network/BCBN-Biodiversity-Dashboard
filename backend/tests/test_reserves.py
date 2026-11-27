@@ -363,3 +363,23 @@ def test_reserve_cells_is_never_a_table_the_api_can_query(rclient):
         "SELECT table_name FROM information_schema.tables").fetchall()]
     assert names and not any("reserve" in name.lower() or "alcode" in name.lower() for name in names)
     assert rclient.app.state.data.reserves.available
+
+
+def test_the_reserve_connection_keeps_to_the_same_duckdb_limits(reserve_dir, monkeypatch):
+    """The short-lived connection that reads reserve_cells.parquet is opened
+    with the API's memory and thread limits, not DuckDB's defaults."""
+    import api.reserves
+    configs = []
+    real_connect = api.reserves.duckdb.connect
+
+    def recording_connect(*args, config=None, **kwargs):
+        """Note the config each connection is opened with, then open it."""
+        configs.append(config)
+        return real_connect(*args, config=config, **kwargs)
+
+    monkeypatch.setattr(api.reserves.duckdb, "connect", recording_connect)
+    data = open_data(Settings(data_dir=reserve_dir, duckdb_memory_limit="300MB", duckdb_threads=1))
+    data.close()
+    assert data.reserves.available
+    # The API's own connection and the reserve one, both with the limits.
+    assert configs == [{"memory_limit": "300MB", "threads": 1}] * 2
